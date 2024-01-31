@@ -114,16 +114,16 @@ class InstanceCrop(object):
             Y = O + np.array([0, crop_size[1] - 1, 0])
             X = O + np.array([0, 0, crop_size[2] - 1])
             matrix = np.array([O, X, Y, Z])
-            if self.rand_rot is not None:
-                matrix = rand_rot_coord(matrix, [-self.rand_rot[0], self.rand_rot[0]],
-                                        [-self.rand_rot[1], self.rand_rot[1]],
-                                        [-self.rand_rot[2], self.rand_rot[2]], rot_center=C, p=0.8)
+            # if self.rand_rot is not None:
+            #     matrix = rand_rot_coord(matrix, [-self.rand_rot[0], self.rand_rot[0]],
+            #                             [-self.rand_rot[1], self.rand_rot[1]],
+            #                             [-self.rand_rot[2], self.rand_rot[2]], rot_center=C, p=0.8)
 
-            if (self.rand_space is not None) and (random.random() < 0.8):
-                space = np.random.uniform(self.rand_space[0], self.rand_space[1], size=3) * re_spacing
-            else:
-                space = re_spacing
-
+            # if (self.rand_space is not None) and (random.random() < 0.8):
+            #     space = np.random.uniform(self.rand_space[0], self.rand_space[1], size=3) * re_spacing
+            # else:
+            #     space = re_spacing
+            space = re_spacing
             matrix = matrix[:, ::-1]  # in itk axis
             image_itk_crop = reorient(shadow_itk, matrix, spacing=list(space), interp1=sitk.sitkNearestNeighbor)
 
@@ -174,7 +174,7 @@ class InstanceCrop(object):
         p[neg_idx] = (1. - p.sum()) / neg_idx.sum() if neg_idx.sum() > 0 else 0
         p = p * 1 / p.sum()
 
-        index = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=p)
+        index = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=p, replace=False)
 
         all_loc_crops = [all_loc_crops[i] for i in index]
         all_rad_crops = [all_rad_crops[i] for i in index]

@@ -7,3 +7,8 @@ data/
 __pycache__
 *.logs
 .vscode
+logs
+bbox01_aneurysm
+*.txt
+*.csv
+*.ipynb

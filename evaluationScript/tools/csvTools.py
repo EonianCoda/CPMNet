@@ -1,13 +1,14 @@
 import csv
+from typing import List
 
 def writeCSV(filename, lines):
     with open(filename, "wb") as f:
         csvwriter = csv.writer(f)
         csvwriter.writerows(lines)
 
-def readCSV(filename):
+def readCSV(path: str) -> List[List[str]]:
     lines = []
-    csvreader = csv.reader(open(filename))
+    csvreader = csv.reader(open(path))
     for line in csvreader:
         lines.append(line)
     return lines

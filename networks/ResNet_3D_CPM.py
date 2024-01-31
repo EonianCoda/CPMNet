@@ -226,7 +226,6 @@ class ASPP(nn.Module):
         out = self.transition(out)
         return out
 
-
 class SELayer(nn.Module):
     def __init__(self, channel, reduction=4):
         super(SELayer, self).__init__()
@@ -331,7 +330,7 @@ class resnet18(nn.Module):
         "input encode"
         x = self.in_conv(x)
         x = self.in_dw(x)
-
+        
         x1 = self.block1(x)
         x = self.block1_dw(x1)
 

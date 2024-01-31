@@ -1,26 +1,29 @@
 # coding:utf-8
 import os
 import math
+import logging
+from typing import Tuple, List, Any, Dict
 
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FixedFormatter
 import sklearn.metrics as skl_metrics
 import numpy as np
-
 from .NoduleFinding import NoduleFinding
 
 from .tools import csvTools
 
-# Evaluation settings
-bPerformBootstrapping = True
-bNumberOfBootstrapSamples = 1000
-bOtherNodulesAsIrrelevant = True
-bConfidence = 0.95
+logger = logging.getLogger(__name__)
 
-seriesuid_label = 'seriesuid'
-coordX_label = 'coordX'
-coordY_label = 'coordY'
-coordZ_label = 'coordZ'
+# Evaluation settings
+PERFORMBOOTSTRAPPING = True
+NUMBEROFBOOTSTRAPSAMPLES = 1000
+BOTHERNODULESASIRRELEVANT = True
+CONFIDENCE = 0.95
+
+SERIESUID = 'seriesuid'
+COORDX = 'coordX'
+COORDY = 'coordY'
+COORDZ = 'coordZ'
 WW = 'w'
 HH = 'h'
 DD = 'd'
@@ -31,7 +34,7 @@ FROC_minX = 0.125 # Mininum value of x-axis of FROC curve
 FROC_maxX = 8 # Maximum value of x-axis of FROC curve
 bLogPlot = True
 
-def box_iou_union_3d(boxes1: list, boxes2: list, eps: float = 0.001) -> float:
+def box_iou_union_3d(boxes1: List[float], boxes2: List[float], eps: float = 0.001) -> float:
     """
     Return intersection-over-union (Jaccard index) and  of boxes.
     Both sets of boxes are expected to be in (x1, y1, x2, y2, z1, z2) format.
@@ -59,8 +62,6 @@ def box_iou_union_3d(boxes1: list, boxes2: list, eps: float = 0.001) -> float:
     inter = (max((x2 - x1), 0) * max((y2 - y1), 0) * max((z2 - z1), 0)) + eps
     union = (vol1 + vol2 - inter)
     return inter / union
-
-
 
 def generateBootstrapSet(scanToCandidatesDict, FROCImList):
     '''
@@ -104,32 +105,34 @@ def compute_mean_ci(interp_sens, confidence = 0.95):
 
     return sens_mean,sens_lb,sens_up
 
-def computeFROC_bootstrap(FROCGTList,FROCProbList,FPDivisorList,FROCImList,excludeList,numberOfBootstrapSamples=1000, confidence = 0.95):
-
-    set1 = np.concatenate(([FROCGTList], [FROCProbList], [excludeList]), axis=0)
-    
+def computeFROC_bootstrap(FROC_gt_list: List[float],
+                          FROC_prob_list: List[float],
+                          FROC_series_uids: List[str],
+                          FROCImList,
+                          FROC_is_exclude_list: List[bool],
+                          numberOfBootstrapSamples: int = 1000, 
+                          confidence = 0.95):
+    set1 = np.concatenate(([FROC_gt_list], [FROC_prob_list], [FROC_is_exclude_list]), axis=0)
     fps_lists = []
     sens_lists = []
     thresholds_lists = []
     
-    FPDivisorList_np = np.asarray(FPDivisorList)
+    FROC_series_uids_np = np.asarray(FROC_series_uids)
     FROCImList_np = np.asarray(FROCImList)
-    
     # Make a dict with all candidates of all scans
-    scanToCandidatesDict = {}
-    for i in range(len(FPDivisorList_np)):
-        seriesuid = FPDivisorList_np[i]
-        candidate = set1[:,i:i+1]
+    scan_to_cands_dict = {}
+    for i in range(len(FROC_series_uids_np)):
+        series_uid = FROC_series_uids_np[i]
+        candidate = set1[:, i:i+1]
 
-        if seriesuid not in scanToCandidatesDict:
-            scanToCandidatesDict[seriesuid] = np.copy(candidate)
+        if series_uid not in scan_to_cands_dict:
+            scan_to_cands_dict[series_uid] = np.copy(candidate)
         else:
-            scanToCandidatesDict[seriesuid] = np.concatenate((scanToCandidatesDict[seriesuid],candidate),axis = 1)
-
+            scan_to_cands_dict[series_uid] = np.concatenate((scan_to_cands_dict[series_uid],candidate),axis = 1)
+    
     for i in range(numberOfBootstrapSamples):
-        print ('computing FROC: bootstrap %d/%d' % (i,numberOfBootstrapSamples))
         # Generate a bootstrapped set
-        btpsamp = generateBootstrapSet(scanToCandidatesDict,FROCImList_np)
+        btpsamp = generateBootstrapSet(scan_to_cands_dict,FROCImList_np)
         fps, sens, thresholds = computeFROC(btpsamp[0,:],btpsamp[1,:],len(FROCImList_np),btpsamp[2,:])
     
         fps_lists.append(fps)
@@ -149,29 +152,43 @@ def computeFROC_bootstrap(FROCGTList,FROCProbList,FPDivisorList,FROCImList,exclu
 
     return all_fps, sens_mean, sens_lb, sens_up
 
-def computeFROC(FROCGTList, FROCProbList, totalNumberOfImages, excludeList):
+def computeFROC(FROC_gt_list: List[float], 
+                FROC_prob_list: List[float], 
+                total_num_of_series: int,
+                excludeList: List[bool]):
     # Remove excluded candidates
-    FROCGTList_local = []
-    FROCProbList_local = []
+    FROC_gt_list_local = []
+    FROC_prob_list_local = []
     for i in range(len(excludeList)):
         if excludeList[i] == False:
-            FROCGTList_local.append(FROCGTList[i])
-            FROCProbList_local.append(FROCProbList[i])
+            FROC_gt_list_local.append(FROC_gt_list[i])
+            FROC_prob_list_local.append(FROC_prob_list[i])
     
-    numberOfDetectedLesions = sum(FROCGTList_local)
-    totalNumberOfLesions = sum(FROCGTList)
-    totalNumberOfCandidates = len(FROCProbList_local)
-    fpr, tpr, thresholds = skl_metrics.roc_curve(FROCGTList_local, FROCProbList_local)
-    if sum(FROCGTList) == len(FROCGTList): #  Handle border case when there are no false positives and ROC analysis give nan values.
-      print ("WARNING, this system has no false positives..")
+    numberOfDetectedLesions = sum(FROC_gt_list_local)
+    totalNumberOfLesions = sum(FROC_gt_list)
+    totalNumberOfCandidates = len(FROC_prob_list_local)
+    
+    if numberOfDetectedLesions == 0:
+        fpr = np.zeros((5,), dtype=np.float32)
+        tpr = np.zeros((5,), dtype=np.float32)
+        thresholds = np.array([np.inf, 0.8, 0.4, 0.2, 0.1])
+    else:
+        fpr, tpr, thresholds = skl_metrics.roc_curve(FROC_gt_list_local, FROC_prob_list_local)
+    if sum(FROC_gt_list) == len(FROC_gt_list): #  Handle border case when there are no false positives and ROC analysis give nan values.
+    #   print ("WARNING, this system has no false positives..")
       fps = np.zeros(len(fpr))
     else:
-      fps = fpr * (totalNumberOfCandidates - numberOfDetectedLesions) / totalNumberOfImages
+      fps = fpr * (totalNumberOfCandidates - numberOfDetectedLesions) / total_num_of_series
     sens = (tpr * numberOfDetectedLesions) / totalNumberOfLesions
     return fps, sens, thresholds
 
-def evaluateCAD(seriesUIDs, results_filename, outputDir, allNodules, CADSystemName, maxNumberOfCADMarks=-1,
-                performBootstrapping=False,numberOfBootstrapSamples=1000,confidence = 0.95, iou_threshold=0.1):
+def evaluateCAD(seriesUIDs: List[str], 
+                results_path: str,
+                output_dir: str,
+                all_gt_nodules: Dict[str, List[NoduleFinding]],
+                CADSystemName: str,
+                maxNumberOfCADMarks=-1,
+                iou_threshold = 0.1):
     '''
     function to evaluate a CAD algorithm
     @param seriesUIDs: list of the seriesUIDs of the cases to be processed
@@ -180,30 +197,27 @@ def evaluateCAD(seriesUIDs, results_filename, outputDir, allNodules, CADSystemNa
     @param allNodules: dictionary with all nodule annotations of all cases, keys of the dictionary are the seriesuids
     @param CADSystemName: name of the CAD system, to be used in filenames and on FROC curve
     '''
+    logger.info('IOU threshold: {}'.format(iou_threshold))
+    nodule_output_file = open(os.path.join(output_dir,'CADAnalysis_{}.txt'.format(iou_threshold)),'w')
+    nodule_output_file.write("\n")
+    nodule_output_file.write((60 * "*") + "\n")
+    nodule_output_file.write("CAD Analysis: %s\n" % CADSystemName)
+    nodule_output_file.write((60 * "*") + "\n")
+    nodule_output_file.write("\n")
 
-    print('iou threshold:', iou_threshold)
-    nodOutputfile = open(os.path.join(outputDir,'CADAnalysis_{}.txt'.format(iou_threshold)),'w')
-    nodOutputfile.write("\n")
-    nodOutputfile.write((60 * "*") + "\n")
-    nodOutputfile.write("CAD Analysis: %s\n" % CADSystemName)
-    nodOutputfile.write((60 * "*") + "\n")
-    nodOutputfile.write("\n")
-
-    results = csvTools.readCSV(results_filename)
-
-    allCandsCAD = {}
-    for seriesuid in seriesUIDs:
-        
-        # collect candidates from result file
+    pred_results = csvTools.readCSV(results_path)
+    all_pred_cands = {}
+    
+    # collect candidates from prediction result file
+    for series_uid in seriesUIDs:
         nodules = {}
-        header = results[0]
-        
+        header = pred_results[0]
         i = 0
-        for result in results[1:]:
-            nodule_seriesuid = result[header.index(seriesuid_label)]
+        for result in pred_results[1:]:
+            nodule_seriesuid = result[header.index(SERIESUID)]
             
-            if seriesuid == nodule_seriesuid:
-                nodule = getNodule(result, header)
+            if series_uid == nodule_seriesuid:
+                nodule = get_nodule(result, header)
                 nodule.candidateID = i
                 nodules[nodule.candidateID] = nodule
                 i += 1
@@ -218,194 +232,189 @@ def evaluateCAD(seriesUIDs, results_filename, outputDir, allNodules, CADSystemNa
                     probs.append(float(noduletemp.CADprobability))
                 probs.sort(reverse=True)  # sort from large to small
                 probThreshold = probs[maxNumberOfCADMarks]
-                nodules2 = {}
-                nrNodules2 = 0
+                
+                keep_nodules = {}
+                cur_num_of_keep_nodules = 0
                 for keytemp, noduletemp in nodules.items():
-                    if nrNodules2 >= maxNumberOfCADMarks:
+                    if cur_num_of_keep_nodules >= maxNumberOfCADMarks:
                         break
                     if float(noduletemp.CADprobability) > probThreshold:
-                        nodules2[keytemp] = noduletemp
-                        nrNodules2 += 1
+                        keep_nodules[keytemp] = noduletemp
+                        cur_num_of_keep_nodules += 1
 
-                nodules = nodules2  
+                nodules = keep_nodules  
         
-        print('adding candidates: ' + seriesuid)
-        allCandsCAD[seriesuid] = nodules  
-    
+        all_pred_cands[series_uid] = nodules  
+        
     # open output files
-    nodNoCandFile = open(os.path.join(outputDir, "nodulesWithoutCandidate_{}_{}.txt".format(CADSystemName, iou_threshold)), 'w')
-    
+    nodules_wo_candidate_file = open(os.path.join(output_dir, "nodulesWithoutCandidate_{}_{}.txt".format(CADSystemName, iou_threshold)), 'w')
+
     # --- iterate over all cases (seriesUIDs) and determine how
     # often a nodule annotation is not covered by a candidate
-
     # initialize some variables to be used in the loop
-    candTPs = 0
-    candFPs = 0
-    candFNs = 0
-    candTNs = 0
-    totalNumberOfCands = 0
-    totalNumberOfNodules = 0
-    doubleCandidatesIgnored = 0
-    irrelevantCandidates = 0
-    minProbValue = -1000000000.0  # minimum value of a float
-    FROCGTList = []
-    FROCProbList = []
-    FPDivisorList = []
-    excludeList = []
+    cand_TPs, cand_FPs, cand_FNs, cand_TNs = 0, 0, 0, 0
+    total_num_of_cands = 0
+    total_num_of_nodules = 0
+    double_candidates_ignored = 0
+    num_of_irrelevant_cands = 0
+    min_prob_value = -1000000000.0  # minimum value of a float
+    FROC_gt_list = []
+    FROC_prob_list = []
+    FROC_series_uids = []
+    FROC_is_exclude_list = []
     FROCtoNoduleMap = []
     ignoredCADMarksList = []
 
     # -- loop over the cases
     FN_diameter = []
     seriesuid_save = []
-    for seriesuid in seriesUIDs:
+    for series_uid in seriesUIDs:
         # get the candidates for this case
-        try:
-            candidates = allCandsCAD[seriesuid]  
-        except KeyError:
-            candidates = {}
+        pred_cands = all_pred_cands.get(series_uid, dict()) # A dict of candidates with key as candidateID and value as NoduleFinding
+        total_num_of_cands += len(pred_cands.keys())  
+        pred_cands_copy = pred_cands.copy() # make a copy in which items will be deleted
 
-        # add to the total number of candidates
-        totalNumberOfCands += len(candidates.keys())  
+        # get the nodule annotations for this case
+        gt_nodules = all_gt_nodules.get(series_uid, list()) # A list of NoduleFinding
 
-        # make a copy in which items will be deleted
-        candidates2 = candidates.copy()
+        # - loop over each nodule annotation and determine whether it is covered by a candidate
+        for gt_nodule in gt_nodules:
+            if gt_nodule.state == "Included":
+                total_num_of_nodules += 1 
 
-        # get the nodule annotations on this case
-        try:
-            noduleAnnots = allNodules[seriesuid]
-        except KeyError:
-            noduleAnnots = []
-
-        # - loop over the nodule annotations 
-        for noduleAnnot in noduleAnnots:
-            # increment the number of nodules
-            if noduleAnnot.state == "Included":
-                totalNumberOfNodules += 1 
-
-            x = float(noduleAnnot.coordX)
-            y = float(noduleAnnot.coordY)
-            z = float(noduleAnnot.coordZ)
-            w = float(noduleAnnot.w)
-            h = float(noduleAnnot.h)
-            d = float(noduleAnnot.d)
+            x, y, z = float(gt_nodule.coordX), float(gt_nodule.coordY), float(gt_nodule.coordZ)
+            w, h, d = float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d)
             half_w, half_h, half_d = w/2, h/2, d/2
 
-            found = False
-            noduleMatches = []
-            for key, candidate in candidates.items():  
-                x2 = float(candidate.coordX)
-                y2 = float(candidate.coordY)
-                z2 = float(candidate.coordZ)
-                w2 = float(candidate.w)
-                h2 = float(candidate.h)
-                d2 = float(candidate.d)
-                half_w2, half_h2, half_d2 = w2/2, h2/2, d2/2
-                pBox = [x2-half_w2, x2+half_w2, y2-half_h2, y2+half_h2, z2-half_d2, z2+half_d2]
-                gtBox = [x-half_w, x+half_w, y-half_h, y+half_h, z-half_d, z+half_d]
-                iou = box_iou_union_3d(pBox, gtBox)
+            is_found = False
+            nodule_matches = []
+            for cand_id, candidate in pred_cands.items():
+                cand_x, cand_y, cand_z = float(candidate.coordX), float(candidate.coordY), float(candidate.coordZ)
+                cand_w, cand_h, cand_d = float(candidate.w), float(candidate.h), float(candidate.d)
+                cand_half_w, cand_half_h, cand_half_d = cand_w/2, cand_h/2, cand_d/2
+                
+                # [x1, x2, y1, y2, z1, z2]
+                pred_box = [cand_x - cand_half_w, 
+                        cand_x + cand_half_w, 
+                        cand_y - cand_half_h, 
+                        cand_y + cand_half_h, 
+                        cand_z - cand_half_d, 
+                        cand_z + cand_half_d]
+                
+                gt_box = [x - half_w, 
+                          x + half_w, 
+                          y - half_h, 
+                          y + half_h, 
+                          z - half_d, 
+                          z + half_d]
+                
+                iou = box_iou_union_3d(pred_box, gt_box)
                 if iou >= iou_threshold:
-                    if (noduleAnnot.state == "Included"):
-                        found = True  
-                        noduleMatches.append(candidate)  
-                        if key not in candidates2.keys():  
-                            print("This is strange: CAD mark %s detected two nodules! Check for overlapping nodule annotations, SeriesUID: %s, nodule Annot ID: %s" % (str(candidate.id), seriesuid, str(noduleAnnot.id)))
+                    if (gt_nodule.state == "Included"):
+                        is_found = True  
+                        nodule_matches.append(candidate)  
+                        if cand_id not in pred_cands_copy.keys():  
+                            print("This is strange: CAD mark %s detected two nodules! Check for overlapping nodule annotations, SeriesUID: %s, nodule Annot ID: %s" % (str(candidate.id), series_uid, str(gt_nodule.id)))
                         else:
-                            del candidates2[key]
-                    elif (noduleAnnot.state == "Excluded"):  # an excluded nodule
-                        if bOtherNodulesAsIrrelevant: #    delete marks on excluded nodules so they don't count as false positives
-                            if key in candidates2.keys():
-                                irrelevantCandidates += 1  
-                                
-                                ignoredCADMarksList.append("%s,%s,%s,%s,%s,%s,%.9f" % (seriesuid, -1, candidate.coordX, candidate.coordY, candidate.coordZ, str(candidate.id), float(candidate.CADprobability)))
-                                del candidates2[key]
-            if len(noduleMatches) > 1:  # double detection
-                doubleCandidatesIgnored += (len(noduleMatches) - 1)  
-            if noduleAnnot.state == "Included":  
+                            del pred_cands_copy[cand_id]
+                    elif (gt_nodule.state == "Excluded"):  # an excluded nodule
+                        if BOTHERNODULESASIRRELEVANT: # delete marks on excluded nodules so they don't count as false positives
+                            if cand_id in pred_cands_copy.keys():
+                                num_of_irrelevant_cands += 1  
+                                ignoredCADMarksList.append("%s,%s,%s,%s,%s,%s,%.9f" % (series_uid, -1, candidate.coordX, candidate.coordY, candidate.coordZ, str(candidate.id), float(candidate.CADprobability)))
+                                del pred_cands_copy[cand_id]
+            if len(nodule_matches) > 1:  # double detection
+                double_candidates_ignored += (len(nodule_matches) - 1)  
+            
+            if gt_nodule.state == "Included":  
                 # only include it for FROC analysis if it is included
                 # otherwise, the candidate will not be counted as FP, but ignored in the
                 # analysis since it has been deleted from the nodules2 vector of candidates
-                if found == True:
+                if is_found == True:
                     # append the sample with the highest probability for the FROC analysis
                     maxProb = None
-                    for idx in range(len(noduleMatches)):
-                        candidate = noduleMatches[idx]
+                    for idx in range(len(nodule_matches)):
+                        candidate = nodule_matches[idx]
                         if (maxProb is None) or (float(candidate.CADprobability) > maxProb):
                             maxProb = float(candidate.CADprobability)
 
-                    FROCGTList.append(1.0)  
-                    FROCProbList.append(float(maxProb))  
-                    FPDivisorList.append(seriesuid) 
-                    excludeList.append(False)  
-                    FROCtoNoduleMap.append("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s,%.9f" % (seriesuid, noduleAnnot.id, noduleAnnot.coordX, noduleAnnot.coordY, noduleAnnot.coordZ, float(noduleAnnot.w), float(noduleAnnot.h), float(noduleAnnot.d), str(candidate.id), float(candidate.CADprobability)))
-                    candTPs += 1  
+                    FROC_gt_list.append(1.0)  
+                    FROC_prob_list.append(float(maxProb))  
+                    FROC_series_uids.append(series_uid)
+                    FROC_is_exclude_list.append(False)
+                    FROCtoNoduleMap.append("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s,%.9f" % (series_uid, gt_nodule.id, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d), str(candidate.id), float(candidate.CADprobability)))
+                    cand_TPs += 1  
                 else:
-                    candFNs += 1  
+                    cand_FNs += 1
                     FN_diameter.append([w, h, d])
-                    seriesuid_save.append(seriesuid)
+                    seriesuid_save.append(series_uid)
                     # append a positive sample with the lowest probability, such that this is added in the FROC analysis
-                    FROCGTList.append(1.0) 
-                    FROCProbList.append(minProbValue)  
-                    FPDivisorList.append(seriesuid)  
-                    excludeList.append(True)  
-                    FROCtoNoduleMap.append("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s,%s" % (seriesuid, noduleAnnot.id, noduleAnnot.coordX, noduleAnnot.coordY, noduleAnnot.coordZ, float(noduleAnnot.w), float(noduleAnnot.h), float(noduleAnnot.d), int(-1), "NA"))
-                    nodNoCandFile.write("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s\n" % (seriesuid, noduleAnnot.id, noduleAnnot.coordX, noduleAnnot.coordY, noduleAnnot.coordZ, float(noduleAnnot.w), float(noduleAnnot.h), float(noduleAnnot.d), str(-1)))
+                    FROC_gt_list.append(1.0) 
+                    FROC_prob_list.append(min_prob_value)  
+                    FROC_series_uids.append(series_uid)  
+                    FROC_is_exclude_list.append(True)  
+                    FROCtoNoduleMap.append("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s,%s" % (series_uid, gt_nodule.id, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d), int(-1), "NA"))
+                    nodules_wo_candidate_file.write("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s\n" % (series_uid, gt_nodule.id, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d), str(-1)))
                     
         # add all false positives to the vectors
-        for key, candidate3 in candidates2.items():  # candidates2此时剩下的是误报的，不在圆内
-            candFPs += 1
-            FROCGTList.append(0.0) 
-            FROCProbList.append(float(candidate3.CADprobability))
-            FPDivisorList.append(seriesuid)
-            excludeList.append(False)
-            FROCtoNoduleMap.append("%s,%s,%s,%s,%s,%s,%.9f" % (seriesuid, -1, candidate3.coordX, candidate3.coordY, candidate3.coordZ, str(candidate3.id), float(candidate3.CADprobability)))
+        for cand_id, candidate3 in pred_cands_copy.items():  # candidates2此时剩下的是误报的，不在圆内
+            cand_FPs += 1
+            FROC_gt_list.append(0.0) 
+            FROC_prob_list.append(float(candidate3.CADprobability))
+            FROC_series_uids.append(series_uid)
+            FROC_is_exclude_list.append(False)
+            FROCtoNoduleMap.append("%s,%s,%s,%s,%s,%s,%.9f" % (series_uid, -1, candidate3.coordX, candidate3.coordY, candidate3.coordZ, str(candidate3.id), float(candidate3.CADprobability)))
 
-    if not (len(FROCGTList) == len(FROCProbList) and len(FROCGTList) == len(FPDivisorList) and len(FROCGTList) == len(FROCtoNoduleMap) and len(FROCGTList) == len(excludeList)):
-        nodOutputfile.write("Length of FROC vectors not the same, this should never happen! Aborting..\n") 
-    # 统计信息
-    nodOutputfile.write("Candidate detection results:\n")
-    nodOutputfile.write("    True positives: %d\n" % candTPs)
-    nodOutputfile.write("    False positives: %d\n" % candFPs)
-    nodOutputfile.write("    False negatives: %d\n" % candFNs)
-    nodOutputfile.write("    True negatives: %d\n" % candTNs)
-    nodOutputfile.write("    Total number of candidates: %d\n" % totalNumberOfCands)
-    nodOutputfile.write("    Total number of nodules: %d\n" % totalNumberOfNodules)
+    if not (len(FROC_gt_list) == len(FROC_prob_list) and len(FROC_gt_list) == len(FROC_series_uids) and len(FROC_gt_list) == len(FROCtoNoduleMap) and len(FROC_gt_list) == len(FROC_is_exclude_list)):
+        nodule_output_file.write("Length of FROC vectors not the same, this should never happen! Aborting..\n") 
+    # Statistics that are computed
+    nodule_output_file.write("Candidate detection results:\n")
+    nodule_output_file.write("    True positives: %d\n" % cand_TPs)
+    nodule_output_file.write("    False positives: %d\n" % cand_FPs)
+    nodule_output_file.write("    False negatives: %d\n" % cand_FNs)
+    nodule_output_file.write("    True negatives: %d\n" % cand_TNs)
+    nodule_output_file.write("    Total number of candidates: %d\n" % total_num_of_cands)
+    nodule_output_file.write("    Total number of nodules: %d\n" % total_num_of_nodules)
 
-    nodOutputfile.write("    Ignored candidates on excluded nodules: %d\n" % irrelevantCandidates)
-    nodOutputfile.write("    Ignored candidates which were double detections on a nodule: %d\n" % doubleCandidatesIgnored)
-    if int(totalNumberOfNodules) == 0:
-        nodOutputfile.write("    Sensitivity: 0.0\n")
+    nodule_output_file.write("    Ignored candidates on excluded nodules: %d\n" % num_of_irrelevant_cands)
+    nodule_output_file.write("    Ignored candidates which were double detections on a nodule: %d\n" % double_candidates_ignored)
+    if int(total_num_of_nodules) == 0:
+        nodule_output_file.write("    Sensitivity: 0.0\n")
     else:
-        nodOutputfile.write("    Sensitivity: %.9f\n" % (float(candTPs) / float(totalNumberOfNodules)))
-    nodOutputfile.write("    Average number of candidates per scan: %.9f\n" % (float(totalNumberOfCands) / float(len(seriesUIDs))))
-    nodOutputfile.write(
+        nodule_output_file.write("    Sensitivity: %.9f\n" % (float(cand_TPs) / float(total_num_of_nodules)))
+    nodule_output_file.write("    Average number of candidates per scan: %.9f\n" % (float(total_num_of_cands) / float(len(seriesUIDs))))
+    nodule_output_file.write(
         "    FN_diammeter:\n")
     for idx, whd in enumerate(FN_diameter):
-        nodOutputfile.write("    FN_%d: w:%.9f, h:%.9f, d:%.9f sericeuid:%s\n" % (idx+1, whd[0], whd[1], whd[2], seriesuid_save[idx]))
+        nodule_output_file.write("    FN_%d: w:%.9f, h:%.9f, d:%.9f sericeuid:%s\n" % (idx+1, whd[0], whd[1], whd[2], seriesuid_save[idx]))
     # compute FROC
-    fps, sens, thresholds = computeFROC(FROCGTList,FROCProbList,len(seriesUIDs),excludeList)
+    fps, sens, thresholds = computeFROC(FROC_gt_list, FROC_prob_list, len(seriesUIDs), FROC_is_exclude_list)
     
-    if performBootstrapping:  # True
-        fps_bs_itp,sens_bs_mean,sens_bs_lb,sens_bs_up = computeFROC_bootstrap(FROCGTList,FROCProbList,FPDivisorList,seriesUIDs,excludeList,
-                                                                  numberOfBootstrapSamples=numberOfBootstrapSamples, confidence = confidence)
-        
+    if PERFORMBOOTSTRAPPING:  # True
+        fps_bs_itp,sens_bs_mean,sens_bs_lb,sens_bs_up = computeFROC_bootstrap(FROC_gt_list = FROC_gt_list,
+                                                                              FROC_prob_list = FROC_prob_list,
+                                                                              FROC_series_uids = FROC_series_uids,
+                                                                              FROCImList = seriesUIDs,
+                                                                              FROC_is_exclude_list = FROC_is_exclude_list,
+                                                                              numberOfBootstrapSamples = NUMBEROFBOOTSTRAPSAMPLES, 
+                                                                              confidence = CONFIDENCE)
     # Write FROC curve
-    with open(os.path.join(outputDir, "froc_{}_{}.txt".format(CADSystemName, iou_threshold)), 'w') as f:
+    with open(os.path.join(output_dir, "froc_{}_{}.txt".format(CADSystemName, iou_threshold)), 'w') as f:
         for i in range(len(sens)):
             f.write("%.9f,%.9f,%.9f\n" % (fps[i], sens[i], thresholds[i]))
     
     # Write FROC vectors to disk as well
-    with open(os.path.join(outputDir, "froc_gt_prob_vectors_{}_{}.csv".format(CADSystemName, iou_threshold)), 'w') as f:
-        for i in range(len(FROCGTList)):
-            f.write("%d,%.9f\n" % (FROCGTList[i], FROCProbList[i]))
+    with open(os.path.join(output_dir, "froc_gt_prob_vectors_{}_{}.csv".format(CADSystemName, iou_threshold)), 'w') as f:
+        for i in range(len(FROC_gt_list)):
+            f.write("%d,%.9f\n" % (FROC_gt_list[i], FROC_prob_list[i]))
 
     fps_itp = np.linspace(FROC_minX, FROC_maxX, num=10001)  # FROC横坐标范围
     
     sens_itp = np.interp(fps_itp, fps, sens)  # FROC纵坐标
     forcs = []
-    if performBootstrapping: # True
+    if PERFORMBOOTSTRAPPING: # True
         # Write mean, lower, and upper bound curves to disk
-        with open(os.path.join(outputDir, "froc_{}_bootstrapping_{}.csv".format(CADSystemName, iou_threshold)), 'w') as f:
+        with open(os.path.join(output_dir, "froc_{}_bootstrapping_{}.csv".format(CADSystemName, iou_threshold)), 'w') as f:
             f.write("FPrate,Sensivity[Mean],Sensivity[Lower bound],Sensivity[Upper bound]\n")
             for i in range(len(fps_bs_itp)):
                 f.write("%.9f,%.9f,%.9f,%.9f\n" % (fps_bs_itp[i], sens_bs_mean[i], sens_bs_lb[i], sens_bs_up[i]))
@@ -413,16 +422,15 @@ def evaluateCAD(seriesUIDs, results_filename, outputDir, allNodules, CADSystemNa
             Total_Sens = 0
             for fp_point in FPS:
                 index = np.argmin(abs(fps_bs_itp-fp_point))
-                nodOutputfile.write("\n")
-                nodOutputfile.write(str(index))
-                nodOutputfile.write(str(sens_bs_mean[index]))
-                print(index, sens_bs_mean[index])
+                nodule_output_file.write("\n")
+                nodule_output_file.write(str(index))
+                nodule_output_file.write(str(sens_bs_mean[index]))
                 forcs.append(sens_bs_mean[index])
                 Total_Sens += sens_bs_mean[index]
             print('Froc_mean:', Total_Sens / len(FPS))
-            nodOutputfile.write("\n")
-            nodOutputfile.write("Froc_mean")
-            nodOutputfile.write(str(Total_Sens / len(FPS)))
+            nodule_output_file.write("\n")
+            nodule_output_file.write("Froc_mean")
+            nodule_output_file.write(str(Total_Sens / len(FPS)))
     else:
         fps_bs_itp = None
         sens_bs_mean = None
@@ -430,13 +438,13 @@ def evaluateCAD(seriesUIDs, results_filename, outputDir, allNodules, CADSystemNa
         sens_bs_up = None
 
     # create FROC graphs
-    if int(totalNumberOfNodules) > 0:
+    if int(total_num_of_nodules) > 0:
         graphTitle = str("")
         fig1 = plt.figure()
         ax = plt.gca()
         clr = 'b'
         plt.plot(fps_itp, sens_itp, color=clr, label="%s" % CADSystemName, lw=2)
-        if performBootstrapping:
+        if PERFORMBOOTSTRAPPING:
             plt.plot(fps_bs_itp, sens_bs_mean, color=clr, ls='--')
             plt.plot(fps_bs_itp, sens_bs_lb, color=clr, ls=':') # , label = "lb")
             plt.plot(fps_bs_itp, sens_bs_up, color=clr, ls=':') # , label = "ub")
@@ -457,93 +465,110 @@ def evaluateCAD(seriesUIDs, results_filename, outputDir, allNodules, CADSystemNa
         # set your ticks manually
         ax.xaxis.set_ticks([0.125,0.25,0.5,1,2,4,8])
         ax.yaxis.set_ticks(np.arange(0, 1.1, 0.1))
-        plt.grid(b=True, which='both')
+        plt.grid(which='both')
         plt.tight_layout()
 
-        plt.savefig(os.path.join(outputDir, "froc_{}_{}.png".format(CADSystemName, iou_threshold)), bbox_inches=0, dpi=300)
+        plt.savefig(os.path.join(output_dir, "froc_{}_{}.png".format(CADSystemName, iou_threshold)), bbox_inches=0, dpi=300)
 
     return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, forcs)
     
-def getNodule(annotation, header, state = ""):
+def get_nodule(annot: List[Any], 
+               header: List[str],
+               state = '') -> NoduleFinding:
     nodule = NoduleFinding()
-    nodule.coordX = annotation[header.index(coordX_label)]
-    nodule.coordY = annotation[header.index(coordY_label)]
-    nodule.coordZ = annotation[header.index(coordZ_label)]
+    nodule.coordX = annot[header.index(COORDX)]
+    nodule.coordY = annot[header.index(COORDY)]
+    nodule.coordZ = annot[header.index(COORDZ)]
 
-    nodule.w = annotation[header.index(WW)]
-    nodule.h = annotation[header.index(HH)]
-    nodule.d = annotation[header.index(DD)]
-    
+    nodule.w = annot[header.index(WW)]
+    nodule.h = annot[header.index(HH)]
+    nodule.d = annot[header.index(DD)]
     
     if CADProbability_label in header:
-        nodule.CADprobability = annotation[header.index(CADProbability_label)]
+        nodule.CADprobability = annot[header.index(CADProbability_label)]
     
     if not state == "":
         nodule.state = state
 
     return nodule
 
-def collectNoduleAnnotations(annotations, annotations_excluded, seriesUIDs):
+def collect_nodule_annotations(annotations: List[List[Any]],
+                               annotations_excluded: List[List[Any]],
+                               seriesUIDs: List[str]) -> Dict[str, List[NoduleFinding]]:
+    """Collects all nodule annotations from the annotations file and returns them in a dictionary
+    
+    Args:
+        annotations: list of annotations
+        annotations_excluded: list of annotations that are excluded from analysis
+        seriesUIDs: list of CT images in seriesuids
+    Returns:
+        Dictionary with all nodule annotations of all cases, keys of the dictionary are the seriesuids
+    """
     allNodules = {}
     noduleCount = 0
     noduleCountTotal = 0
     
     for seriesuid in seriesUIDs:
-        print('adding nodule annotations: ' + seriesuid)
-        
         nodules = []
         numberOfIncludedNodules = 0
         
         # add included findings
         header = annotations[0]
         for annotation in annotations[1:]:
-            nodule_seriesuid = annotation[header.index(seriesuid_label)]
+            nodule_seriesuid = annotation[header.index(SERIESUID)]
             
             if seriesuid == nodule_seriesuid:
-                nodule = getNodule(annotation, header, state = "Included")
+                nodule = get_nodule(annotation, header, state = "Included")
                 nodules.append(nodule)
                 numberOfIncludedNodules += 1
         
         # add excluded findings
         header = annotations_excluded[0]
         for annotation in annotations_excluded[1:]:
-            nodule_seriesuid = annotation[header.index(seriesuid_label)]
+            nodule_seriesuid = annotation[header.index(SERIESUID)]
             
             if seriesuid == nodule_seriesuid:
-                nodule = getNodule(annotation, header, state = "Excluded")
+                nodule = get_nodule(annotation, header, state = "Excluded")
                 nodules.append(nodule)
             
         allNodules[seriesuid] = nodules
         noduleCount += numberOfIncludedNodules
         noduleCountTotal += len(nodules)
     
-    print ('Total number of included nodule annotations: ' + str(noduleCount))
-    print ('Total number of nodule annotations: ' + str(noduleCountTotal))
+    logger.info('Total number of included nodule annotations: {}'.format(noduleCount))
+    logger.info('Total number of nodule annotations: {}'.format(noduleCountTotal))
     return allNodules
     
-    
-def collect(annotations_filename,annotations_excluded_filename,seriesuids_filename):
-    '''
-    UID_list type:tuple
-    :param annotations_filename:
-    :param annotations_excluded_filename:
-    :param seriesuids_filename:
-    :return:
-    '''
-    annotations = csvTools.readCSV(annotations_filename) 
-    annotations_excluded = csvTools.readCSV(annotations_excluded_filename)
-    seriesUIDs_csv = csvTools.readCSV(seriesuids_filename)
+def collect(annot_path: str, 
+            annot_excluded_path: str, 
+            seriesuids_path: str) -> Tuple[Dict[str, List[NoduleFinding]], List[str]]:
+    """Collects all nodule annotations from the annotations file and returns them in a dictionary
+    Args:
+        annot_path: path to annotations file
+        annot_excluded_path: path to annotations_excluded file
+        seriesuids_path: path to seriesuids file
+    Returns:
+        A tuple of:
+        - Dictionary with all nodule annotations of all cases, keys of the dictionary are the seriesuids
+        - List of seriesuids
+    """
+    annotations = csvTools.readCSV(annot_path) 
+    annotations_excluded = csvTools.readCSV(annot_excluded_path)
+    seriesUIDs_csv = csvTools.readCSV(seriesuids_path)
     
     seriesUIDs = []
     for seriesUID in seriesUIDs_csv:
         seriesUIDs.append(seriesUID[0])
 
-    allNodules = collectNoduleAnnotations(annotations, annotations_excluded, seriesUIDs)  
+    allNodules = collect_nodule_annotations(annotations, annotations_excluded, seriesUIDs)  
+    return allNodules, seriesUIDs
     
-    return (allNodules, seriesUIDs)
-    
-    
-def noduleCADEvaluation(annotations_filename,annotations_excluded_filename,seriesuids_filename,results_filename,outputDir, iou_threshold):
+def noduleCADEvaluation(annot_path: str,
+                        annot_excluded_path: str,
+                        seriesuids_path: str,
+                        results_path: str,
+                        output_dir: str,
+                        iou_threshold: float):
     '''
     function to load annotations and evaluate a CAD algorithm
     @param annotations_filename: list of annotations
@@ -552,16 +577,16 @@ def noduleCADEvaluation(annotations_filename,annotations_excluded_filename,serie
     @param results_filename: list of CAD marks with probabilities
     @param outputDir: output directory
     '''
+    logger.info('Annotation path: {}'.format(annot_path))
+    all_gt_nodules, seriesUIDs = collect(annot_path, annot_excluded_path, seriesuids_path)
     
-    print(annotations_filename)
-    
-    (allNodules, seriesUIDs) = collect(annotations_filename, annotations_excluded_filename, seriesuids_filename)
-   
-    
-    out = evaluateCAD(seriesUIDs, results_filename, outputDir, allNodules,
-                os.path.splitext(os.path.basename(results_filename))[0],
-                maxNumberOfCADMarks=100, performBootstrapping=bPerformBootstrapping,
-                numberOfBootstrapSamples=bNumberOfBootstrapSamples, confidence=bConfidence, iou_threshold=iou_threshold)
+    out = evaluateCAD(seriesUIDs = seriesUIDs, 
+                      results_path = results_path, 
+                      output_dir = output_dir, 
+                      all_gt_nodules = all_gt_nodules,
+                      CADSystemName = os.path.splitext(os.path.basename(results_path))[0],
+                      maxNumberOfCADMarks = 100, 
+                      iou_threshold = iou_threshold)
     return out
 
 if __name__ == '__main__':
