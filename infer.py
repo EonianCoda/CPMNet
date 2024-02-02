@@ -9,7 +9,7 @@ import numpy as np
 from torch import nn
 import tqdm
 ###network###
-from networks.ResNet_3D_CPM import resnet18, Detection_Postprocess
+from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess
 ###data###
 from dataload.split_combine import SplitComb
 ###postprocessing###
@@ -64,10 +64,10 @@ logger.info('The batch size:{}'.format(args.batch_size))
 logger.info('norm type:{}, head norm:{}, act_type:{}, using se block:{}'
 .format(args.norm_type, args.head_norm, args.act_type, args.se))
 ###############  ###bulid model###################
-model = resnet18(n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,norm_type=args.norm_type, 
+model = Resnet18(n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,norm_type=args.norm_type, 
                 head_norm=args.head_norm, act_type=args.act_type, se=args.se, first_stride=(1, 2, 2))
 # set threshold 0.8 for 1.5 FPs
-detection_postprocess = Detection_Postprocess(topk=60, threshold=0.8, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
+detection_postprocess = DetectionPostprocess(topk=60, threshold=0.8, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
 
 # model = nn.DataParallel(model)
 model.to(device)

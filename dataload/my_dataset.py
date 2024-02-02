@@ -113,8 +113,6 @@ class DetDatasetCSVR(Dataset):
 
         return random_samples
 
-
-
 class DetDatasetCSVRTest(Dataset):
     """Dataset for loading numpy images with dimension order [D, H, W]
     """

@@ -1,3 +1,5 @@
+import os
+import yaml
 import datetime
 from tqdm import tqdm
 
@@ -27,3 +29,10 @@ def get_progress_bar(identifer: str, total_steps: int) -> tqdm:
                         desc = "{:10s}".format(identifer), 
                         bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
     return progress_bar
+
+def write_yaml(save_path: str,
+                config: dict,
+                default_flow_style: str = ''):
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    with open(save_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style = default_flow_style)

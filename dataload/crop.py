@@ -50,7 +50,7 @@ class InstanceCrop(object):
             self.rand_space = np.array(rand_space)
 
         self.sample_cls = sample_cls
-        self.base_spacing = spacing #[0.7, 0.3125, 0.3125]#z,y,x
+        self.base_spacing = spacing # z,y,x
         assert isinstance(self.crop_size, (list, tuple))
 
     def __call__(self, sample, image_spacing):

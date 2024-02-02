@@ -8,7 +8,7 @@ import logging
 import numpy as np
 from torch import nn
 ###network###
-from networks.ResNet_3D_CPM import resnet18, Detection_Postprocess, Detection_loss
+from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ###data###
 from dataload.dataset import DetDatasetCSVR, DetDatasetCSVRTest, collate_fn_dict
 from dataload.crop import InstanceCrop
@@ -87,10 +87,10 @@ logger.info('topk:{}, lambda_cls:{}, lambda_shape:{}, lambda_offset:{}, lambda_i
 logger.info('norm type:{}, head norm:{}, act_type:{}, using se block:{}'
 .format(args.norm_type, args.head_norm, args.act_type, args.se))
 ##################bulid model###################
-detection_loss = Detection_loss(crop_size=CROP_SIZE, topk=args.topk, spacing=SPACING)
-model = resnet18(n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,norm_type=args.norm_type, 
+detection_loss = DetectionLoss(crop_size=CROP_SIZE, pos_target_topk=args.topk, spacing=SPACING)
+model = Resnet18(n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,norm_type=args.norm_type, 
                 head_norm=args.head_norm, act_type=args.act_type, se=args.se, first_stride=(1, 2, 2), detection_loss=detection_loss, device=device)
-detection_postprocess = Detection_Postprocess(topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
+detection_postprocess = DetectionPostprocess(topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
 
 if not os.path.exists(args.save_model_dir):
     os.makedirs(args.save_model_dir)

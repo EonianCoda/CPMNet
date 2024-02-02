@@ -10,7 +10,7 @@ import pandas as pd
 from typing import List, Tuple, Any, Dict
 
 ###network###
-from networks.ResNet_3D_CPM import resnet18, Detection_Postprocess, Detection_loss
+from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ###data###
 from dataload.my_dataset import DetDatasetCSVR, DetDatasetCSVRTest, collate_fn_dict
 from dataload.crop import InstanceCrop
@@ -27,7 +27,7 @@ from evaluationScript.detectionCADEvalutionIOU import noduleCADEvaluation
 
 from utils.logs import setup_logging
 from utils.average_meter import AverageMeter
-from utils.utils import init_seed, get_local_time_in_taiwan, get_progress_bar
+from utils.utils import init_seed, get_local_time_in_taiwan, get_progress_bar, write_yaml
 from utils.generate_annot_csv_from_series_list import generate_annot_csv
 
 SAVE_ROOT = './save'
@@ -58,7 +58,7 @@ def get_args():
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
     parser.add_argument('--lr', type=float, default=0.01, help='the learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
-    parser.add_argument('--topk', type=int, default=5, metavar='N', help='topk grids assigned as positives')
+    parser.add_argument('--pos_target_topk', type=int, default=5, metavar='N', help='topk grids assigned as positives')
     parser.add_argument('--num_samples', type=int, default=6, metavar='N', help='sampling batch number in per sample')
     # network
     parser.add_argument('--norm_type', type=str, default='batchnorm', metavar='N', help='norm type of backbone')
@@ -66,15 +66,15 @@ def get_args():
     parser.add_argument('--act_type', type=str, default='ReLU', metavar='N', help='act type of network')
     parser.add_argument('--se', action='store_true', default=False, help='use se block')
     # other
-    parser.add_argument('--exp_name', type=str, default='anchorfree_3D_aneurysm_refine', metavar='str', help='experiment name')
+    parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, metavar='N', help='how many batches to wait before logging training status')
     args = parser.parse_args()
     return args
 
 def prepare_training(args):
     # build model
-    detection_loss = Detection_loss(crop_size=CROP_SIZE, topk=args.topk, spacing=SPACING)
-    model = resnet18(n_channels = 1, 
+    detection_loss = DetectionLoss(crop_size=CROP_SIZE, pos_target_topk=args.pos_target_topk, spacing=SPACING)
+    model = Resnet18(n_channels = 1, 
                      n_blocks = [2, 3, 3, 3], 
                      n_filters = [64, 96, 128, 160], 
                      stem_filters = 32,
@@ -85,11 +85,11 @@ def prepare_training(args):
                      first_stride = (1, 2, 2), 
                      detection_loss = detection_loss,
                      device = device)
-    detection_postprocess = Detection_Postprocess(topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
+    detection_postprocess = DetectionPostprocess(topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
     if args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         state_dict = torch.load(args.pretrained_model_path)
-        model.load_state_dict(state_dict)
+        model.load_state_dict(state_dict['state_dict'])
     model.to(device)
     
     # build optimizer
@@ -100,22 +100,23 @@ def prepare_training(args):
     return model, optimizer, scheduler_warm, detection_postprocess
 
 def train_one_step(args, model, sample, device):
-    data = sample['image'].to(device, non_blocking=True) # z, y, x
+    image = sample['image'].to(device, non_blocking=True) # z, y, x
     labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
     
     # Compute loss
-    cls_loss, shape_loss, offset_loss, iou_loss = model([data, labels])
+    cls_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
     cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
     loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
     return loss, (cls_loss, shape_loss, offset_loss, iou_loss)
 
 def train(args,
           model,
-          device,
-          scheduler_warm,
           optimizer,
+          train_loader,
+          scheduler_warm,
+          device,
           epoch: int,
-          train_loader):
+          exp_folder: str):
     model.train()
     scheduler_warm.step()
     
@@ -132,7 +133,6 @@ def train(args,
         
     # get_progress_bar
     progress_bar = get_progress_bar('Train', len(train_loader))
-    
     for batch_idx, sample in enumerate(train_loader):
         optimizer.zero_grad(set_to_none=True)
         if mixed_precision:
@@ -170,8 +170,10 @@ def train(args,
     logger.info('====> Epoch: {} train_iou_loss: {:.4f}'.format(epoch, avg_iou_loss.avg))
 
     # Remove the checkpoint of epoch % save_model_interval != 0
+    model_save_folder = os.path.join(exp_folder, 'model')
+    os.makedirs(model_save_folder, exist_ok=True)
     for i in range(epoch):
-        ckpt_path = os.path.join(args.save_model_dir, 'epoch_{}.pth'.format(i))
+        ckpt_path = os.path.join(model_save_folder, 'epoch_{}.pth'.format(i))
         if (i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path):
             os.remove(ckpt_path)
     
@@ -180,7 +182,7 @@ def train(args,
                  'state_dict': model.state_dict(),
                  'optimizer': optimizer.state_dict(),
                  'scheduler': scheduler_warm.state_dict()}
-    torch.save(ckpt_path, os.path.join(args.save_model_dir, 'epoch_{}.pth'.format(epoch)))    
+    torch.save(ckpt_path, os.path.join(model_save_folder, 'epoch_{}.pth'.format(epoch)))    
 
 def val(epoch: int,
         test_loader,
@@ -312,7 +314,6 @@ def convert_to_standard_csv(csv_path, save_dir, state, spacing):
 
 if __name__ == '__main__':
     args = get_args()
-    
     cur_time = get_local_time_in_taiwan()
     timestamp = "[%d-%02d-%02d-%02d%02d]" % (cur_time.year, 
                                             cur_time.month, 
@@ -326,10 +327,11 @@ if __name__ == '__main__':
     device = torch.device("cuda" if args.cuda else "cpu")
     kwargs = {'num_workers': args.num_workers, 'pin_memory': args.pin_memory} if args.cuda else {}
 
+    write_yaml(os.path.join(exp_folder, 'setting.yaml'), vars(args))
     logger.info('The learning rate: {}'.format(args.lr))
     logger.info('The batch size: {}'.format(args.batch_size))
     logger.info('The Crop Size: [{}, {}, {}]'.format(CROP_SIZE[0], CROP_SIZE[1], CROP_SIZE[2]))
-    logger.info('topk: {}, lambda_cls: {}, lambda_shape: {}, lambda_offset: {}, lambda_iou: {},, num_samples: {}'.format(args.topk, args.lambda_cls, args.lambda_shape, args.lambda_offset, args.lambda_iou, args.num_samples))
+    logger.info('positive_target_topk: {}, lambda_cls: {}, lambda_shape: {}, lambda_offset: {}, lambda_iou: {},, num_samples: {}'.format(args.pos_target_topk, args.lambda_cls, args.lambda_shape, args.lambda_offset, args.lambda_iou, args.num_samples))
     logger.info('norm type: {}, head norm: {}, act_type: {}, using se block: {}'.format(args.norm_type, args.head_norm, args.act_type, args.se))
     model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args)
 
@@ -354,13 +356,14 @@ if __name__ == '__main__':
 
     start_epoch = 20
     for epoch in range(1, args.epochs + 1):
-        train(args=args,
-              optimizer=optimizer,
-              scheduler_warm=scheduler_warm,
-              epoch = epoch, 
-              device=device,
+        train(args = args,
+              model = model,
+              optimizer = optimizer,
+              scheduler_warm = scheduler_warm,
               train_loader = train_loader, 
-              model = model)
+              device = device,
+              epoch = epoch, 
+              exp_folder = exp_folder)
         if epoch > start_epoch: 
             val(epoch = epoch,
                 test_loader = val_loader, 
