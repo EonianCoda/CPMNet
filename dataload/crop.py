@@ -114,17 +114,17 @@ class InstanceCrop(object):
             Y = O + np.array([0, crop_size[1] - 1, 0])
             X = O + np.array([0, 0, crop_size[2] - 1])
             matrix = np.array([O, X, Y, Z])
-            # if self.rand_rot is not None:
-            #     matrix = rand_rot_coord(matrix, [-self.rand_rot[0], self.rand_rot[0]],
-            #                             [-self.rand_rot[1], self.rand_rot[1]],
-            #                             [-self.rand_rot[2], self.rand_rot[2]], rot_center=C, p=0.8)
+            if self.rand_rot is not None:
+                matrix = rand_rot_coord(matrix, [-self.rand_rot[0], self.rand_rot[0]],
+                                        [-self.rand_rot[1], self.rand_rot[1]],
+                                        [-self.rand_rot[2], self.rand_rot[2]], rot_center=C, p=0.8)
 
             # if (self.rand_space is not None) and (random.random() < 0.8):
             #     space = np.random.uniform(self.rand_space[0], self.rand_space[1], size=3) * re_spacing
             # else:
             #     space = re_spacing
             space = re_spacing
-            matrix = matrix[:, ::-1]  # in itk axis
+            matrix = matrix[:, ::-1]  # in itk axis (z, y, x)
             image_itk_crop = reorient(shadow_itk, matrix, spacing=list(space), interp1=sitk.sitkNearestNeighbor)
 
             all_loc_crop = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in

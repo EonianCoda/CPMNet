@@ -12,7 +12,7 @@ from typing import List, Tuple, Any, Dict
 ###network###
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ###data###
-from dataload.my_dataset import DetDatasetCSVR, DetDatasetCSVRTest, collate_fn_dict
+from dataload.my_dataset_crop import DetDatasetCSVR, DetDatasetCSVRTest, collate_fn_dict
 from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
@@ -261,8 +261,9 @@ def val(epoch: int,
     #     pass
 
 def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
-    transform_list_train = [transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
-                            transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=False, trans_zy=False),
+    transform_list_train = [
+                            transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
+                            # transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=False, trans_zy=False),
                             transform.Pad(output_size=crop_size),
                             transform.RandomCrop(output_size=crop_size, pos_ratio=0.9),
                             transform.CoordToAnnot(blank_side=blank_side)]
