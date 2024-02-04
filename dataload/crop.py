@@ -8,8 +8,7 @@ class InstanceCrop(object):
     """Randomly crop the input image (shape [C, D, H, W]
     """
 
-    def __init__(self, crop_size, rand_trans=None, rand_rot=None, rand_space=None, instance_crop=True,
-                 spacing=[1., 1., 1.], overlap=[16, 32, 32], tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0]):
+    def __init__(self, crop_size, rand_trans=None, rand_rot=None, rand_space=None, instance_crop=True, overlap=[16, 32, 32], tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0]):
         """This is crop function with spatial augmentation for training Lesion Detection.
 
         Arguments:
@@ -32,7 +31,6 @@ class InstanceCrop(object):
         self.blank_side = blank_side
         self.instance_crop = instance_crop
         self.overlap = overlap
-        self.spacing = spacing
 
         if rand_trans == None:
             self.rand_trans = None
@@ -50,10 +48,9 @@ class InstanceCrop(object):
             self.rand_space = np.array(rand_space)
 
         self.sample_cls = sample_cls
-        self.base_spacing = spacing # z,y,x
         assert isinstance(self.crop_size, (list, tuple))
 
-    def __call__(self, sample, image_spacing):
+    def __call__(self, sample, image_spacing: np.ndarray):
         image = sample['image'].astype('float32')
         all_loc = sample['all_loc']
         all_rad = sample['all_rad']
@@ -65,9 +62,8 @@ class InstanceCrop(object):
         shadow_itk = sitk.GetImageFromArray(shadow)
         shape = image.shape
 
-        re_spacing = np.array(self.spacing) / np.array(self.base_spacing)
-        crop_size = np.array(self.crop_size) * re_spacing
-        overlap = self.overlap * re_spacing
+        crop_size = np.array(self.crop_size)
+        overlap = self.overlap
 
         z_stride = crop_size[0] - overlap[0]
         y_stride = crop_size[1] - overlap[1]
@@ -107,7 +103,7 @@ class InstanceCrop(object):
             C = crop_centers[i]
 
             if self.rand_trans is not None:
-                C = C + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=3) * re_spacing
+                C = C + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=3)
 
             O = C - np.array(crop_size) / 2
             Z = O + np.array([crop_size[0] - 1, 0, 0])
@@ -123,14 +119,14 @@ class InstanceCrop(object):
             #     space = np.random.uniform(self.rand_space[0], self.rand_space[1], size=3) * re_spacing
             # else:
             #     space = re_spacing
-            space = re_spacing
-            matrix = matrix[:, ::-1]  # in itk axis (z, y, x)
+            # space = image_spacing
+            space = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+            matrix = matrix[:, ::-1]  # in itk axis
             image_itk_crop = reorient(shadow_itk, matrix, spacing=list(space), interp1=sitk.sitkNearestNeighbor)
 
             all_loc_crop = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in
                             all_loc]
             all_loc_crop = np.array(all_loc_crop)
-
             in_idx = []
             for j in range(all_loc_crop.shape[0]):
                 if (all_loc_crop[j] <= np.array(image_itk_crop.GetSize()[::-1])).all() and (
@@ -194,17 +190,16 @@ class InstanceCrop(object):
             cls = all_cls_crops[i]  # lesion: 0
             shape = np.array(CT_crops[i].shape[1:])
             
-            scale_spacing = image_spacing_crops[i]
-            real_space = image_spacing * scale_spacing
+            # scale_spacing = image_spacing_crops[i]
+            # real_space = image_spacing * scale_spacing
             if len(rad) > 0:
-                rad = rad / real_space  # convert pixel coord
+                rad = rad / image_spacing  # convert pixel coord
             sample = {}
             sample['image'] = CT_crops[i]
             sample['ctr'] = ctr
             sample['rad'] = rad
             sample['cls'] = cls
             samples.append(sample)
-
         return samples
 
 

@@ -5,9 +5,8 @@ import os
 import torch
 import json
 import numpy as np
-import SimpleITK as sitk
+from typing import List
 from torch.utils.data import Dataset
-
 lesion_label_default = ['aneurysm']
 
 BBOXES = 'bboxes'
@@ -29,6 +28,23 @@ def load_series_list(series_list_path: str):
         series_list.append([series_folder, file_name])
     return series_list
 
+def normalize(image: np.ndarray) -> np.ndarray: 
+    HU_MIN, HU_MAX = -1000, 400
+    image = np.clip(image, HU_MIN, HU_MAX)
+    image = image - HU_MIN
+    image = image.astype(np.float32) / (HU_MAX - HU_MIN)
+    return image
+
+def load_image(dicom_path: str) -> np.ndarray:
+    """
+    Return:
+        A 3D numpy array with dimension order [D, H, W] (z, y, x)
+    """
+    image = np.load(dicom_path)
+    image = np.transpose(image, (2, 0, 1))
+    image = normalize(image)
+    return image
+
 class DetDatasetCSVR(Dataset):
     """Dataset for loading numpy images with dimension order [D, H, W]
 
@@ -39,16 +55,13 @@ class DetDatasetCSVR(Dataset):
         lesion_label (list): label names of lesion, such as ['Aneurysm']
 
     """
-    def __init__(self, series_list_path: str, transform_post=None, crop_fn=None):
+    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None):
         self.labels = []
         self.dicom_paths = []
-        spacing = np.array([[1.0, 0.8, 0.8]], dtype=np.float32) # (z, y, x)
-        self.spacing = spacing
+        self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         
         series_infos = load_series_list(series_list_path)
         for folder, series_name in series_infos:
-            dicom_path = os.path.join(folder, 'npy', f'{series_name}.npy')
-            self.dicom_paths.append(dicom_path)
             label_path = os.path.join(folder, 'mask', f'{series_name}_nodule_count.json')
             
             with open(label_path, 'r') as f:
@@ -59,13 +72,15 @@ class DetDatasetCSVR(Dataset):
 
             if len(bboxes) == 0:
                 continue
+            dicom_path = os.path.join(folder, 'npy', f'{series_name}.npy')
+            self.dicom_paths.append(dicom_path)
             # calculate center of bboxes
-            all_loc = ((bboxes[:, 0] + bboxes[:, 1]) / 2).astype(np.float32) # (y, x, z)
+            all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
             all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
 
-            all_loc = all_loc[:, [2, 0, 1]] # (z, x, y)
-            all_rad = all_rad[:, [2, 0, 1]] # (z, x, y)
-            all_rad = all_rad * spacing # (z, x, y)
+            all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
+            all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
+            all_rad = all_rad * self.image_spacing # (z, y, x)
             all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
             
             label = {'all_loc': all_loc, 
@@ -91,10 +106,9 @@ class DetDatasetCSVR(Dataset):
         dicom_path = self.dicom_paths[idx]
         label = self.labels[idx]
 
-        image_spacing = self.spacing.copy() # z, y, x
-        image = np.load(dicom_path).astype('float32') # z, y, x
-        image = self.__norm__(image) # normalized
-
+        image_spacing = self.image_spacing.copy() # z, y, x
+        image = load_image(dicom_path) # z, y, x
+        
         data = {}
         data['image'] = image
         data['all_loc'] = label['all_loc'] # z, y, x
@@ -117,42 +131,18 @@ class DetDatasetCSVRTest(Dataset):
     """Dataset for loading numpy images with dimension order [D, H, W]
     """
 
-    def __init__(self, series_list_path: str, SplitComb):
+    def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb):
         self.labels = []
         self.dicom_paths = []
-        spacing = np.array([1.0, 0.8, 0.8], dtype=np.float32) # (z, y, x)
-        self.spacing = spacing
+        self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         
         series_infos = load_series_list(series_list_path)
         for folder, series_name in series_infos:
             dicom_path = os.path.join(folder, 'npy', f'{series_name}.npy')
             self.dicom_paths.append(dicom_path)
-            label_path = os.path.join(folder, 'mask', f'{series_name}_nodule_count.json')
-            
-            with open(label_path, 'r') as f:
-                info = json.load(f)
-                
-            bboxes = info[BBOXES]
-            bboxes = np.array(bboxes)
-            
-            if len(bboxes) == 0:
-                continue
-            # calculate center of bboxes
-            all_loc = ((bboxes[:, 0] + bboxes[:, 1]) / 2).astype(np.float32) # (y, x, z)
-            all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
-
-            all_loc = all_loc[:, [2, 0, 1]] # (z, x, y)
-            all_rad = all_rad[:, [2, 0, 1]] # (z, x, y)
-            all_rad = all_rad * spacing # (z, x, y)
-            all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
-            
-            label = {'all_loc': all_loc, 
-                    'all_rad': all_rad,
-                    'all_cls': all_cls}
-            self.labels.append(label)
         self.splitcomb = SplitComb
     def __len__(self):
-        return len(self.labels)
+        return len(self.dicom_paths)
     
     def __norm__(self, data):
         max_value = np.percentile(data, 99)
@@ -164,11 +154,9 @@ class DetDatasetCSVRTest(Dataset):
 
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
-        label = self.labels[idx]
 
-        image_spacing = self.spacing.copy() # z, y, x
-        image = np.load(dicom_path).astype('float32') # z, y, x
-        image = self.__norm__(image) # normalized
+        image_spacing = self.image_spacing.copy() # z, y, x
+        image = load_image(dicom_path) # z, y, x
 
         data = {}
         # convert to -1 ~ 1  note ste pad_value to -1 for SplitComb

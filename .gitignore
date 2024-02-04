@@ -13,3 +13,5 @@ bbox01_aneurysm
 *.txt
 *.csv
 *.ipynb
+*.npy
+*.npz

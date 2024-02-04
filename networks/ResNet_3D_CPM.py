@@ -326,13 +326,19 @@ class DetectionLoss(nn.Module):
         self.spacing = np.array(spacing)
 
     @staticmethod  
-    def cls_loss(pred, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100):
+        """
+        Args:
+            pred: torch.Tensor
+                The predicted logits of shape (b, num_points, 1)
+        """
         classification_losses = []
         batch_size = pred.shape[0]
         for j in range(batch_size):
             pred_b = pred[j]
             target_b = target[j]
             mask_ignore_b = mask_ignore[j]
+            
             cls_prob = torch.sigmoid(pred_b.detach())
             cls_prob = torch.clamp(cls_prob, 1e-4, 1.0 - 1e-4)
             alpha_factor = torch.ones(pred_b.shape).to(pred_b.device) * alpha

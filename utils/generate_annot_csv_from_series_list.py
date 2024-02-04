@@ -3,9 +3,10 @@ import os
 import numpy as np
 from dataload.my_dataset import load_series_list
 import argparse
+from typing import List
 
 BBOXES = 'bboxes'
-SPACING = [1.0, 0.8, 0.8] # (z, x, y)
+# SPACING = [1.0, 0.8, 0.8] # (z, y, x)
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -15,9 +16,9 @@ def get_args():
     return args
 
 def generate_annot_csv(series_list_path: str,
-                       save_path: str):
-    global SPACING
-    spacing = np.array(SPACING)
+                       save_path: str,
+                       spacing: List[float] = None):
+    spacing = np.array(spacing)
     column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd']
 
     all_locs = []

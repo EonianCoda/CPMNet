@@ -118,7 +118,7 @@ def training_data_prepare(crop_size=CROP_SIZE, blank_side=0):
                             transform.CoordToAnnot(blank_side=blank_side)]
     train_transform = torchvision.transforms.Compose(transform_list_train)
 
-    crop_fn_train = InstanceCrop(crop_size=crop_size, tp_ratio=0.75, spacing=SPACING,
+    crop_fn_train = InstanceCrop(crop_size=crop_size, tp_ratio=0.75, target_spacing=SPACING,
                                         rand_trans=[10, 20, 20], rand_rot=[20, 0, 0], rand_space=[0.9, 1.2],
                                         sample_num=args.num_sam, blank_side=blank_side, instance_crop=True)
 

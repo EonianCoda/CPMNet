@@ -33,7 +33,7 @@ from utils.generate_annot_csv_from_series_list import generate_annot_csv
 SAVE_ROOT = './save'
 CROP_SIZE = [64, 128, 128]
 OVERLAP_SIZE = [16, 32, 32]
-SPACING = [1.0, 0.8, 0.8]
+IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
 
 def get_args():
@@ -73,7 +73,7 @@ def get_args():
 
 def prepare_training(args):
     # build model
-    detection_loss = DetectionLoss(crop_size=CROP_SIZE, pos_target_topk=args.pos_target_topk, spacing=SPACING)
+    detection_loss = DetectionLoss(crop_size=CROP_SIZE, pos_target_topk=args.pos_target_topk, spacing=IMAGE_SPACING)
     model = Resnet18(n_channels = 1, 
                      n_blocks = [2, 3, 3, 3], 
                      n_filters = [64, 96, 128, 160], 
@@ -98,6 +98,38 @@ def prepare_training(args):
     scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
 
     return model, optimizer, scheduler_warm, detection_postprocess
+
+def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
+    transform_list_train = [
+                            transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
+                            transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=False, trans_zy=False),
+                            transform.Pad(output_size=crop_size),
+                            transform.RandomCrop(output_size=crop_size, pos_ratio=0.9),
+                            transform.CoordToAnnot(blank_side=blank_side)]
+    
+    train_transform = torchvision.transforms.Compose(transform_list_train)
+
+    crop_fn_train = InstanceCrop(crop_size=crop_size, tp_ratio=0.75, rand_trans=[10, 20, 20], 
+                                 rand_rot=[20, 0, 0], rand_space=[0.9, 1.2],sample_num=args.num_samples,
+                                 blank_side=blank_side, instance_crop=True)
+
+    train_dataset = DetDatasetCSVR(series_list_path = args.train_set,
+                                   crop_fn = crop_fn_train,
+                                   image_spacing=IMAGE_SPACING,
+                                   transform_post = train_transform)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
+                              collate_fn=collate_fn_dict,num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=True)
+    logger.info("Number of training samples: {}".format(len(train_loader.dataset)))
+    logger.info("Number of training batches: {}".format(len(train_loader)))
+    return train_loader
+
+def test_val_data_prepare(args):
+    split_comber = SplitComb(crop_size=CROP_SIZE, overlap=OVERLAP_SIZE, pad_value=-1)
+    test_dataset = DetDatasetCSVRTest(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers)
+    logger.info("Number of test samples: {}".format(len(test_loader.dataset)))
+    logger.info("Number of test batches: {}".format(len(test_loader)))
+    return test_loader
 
 def train_one_step(args, model, sample, device):
     image = sample['image'].to(device, non_blocking=True) # z, y, x
@@ -135,6 +167,9 @@ def train(args,
     progress_bar = get_progress_bar('Train', len(train_loader))
     for batch_idx, sample in enumerate(train_loader):
         optimizer.zero_grad(set_to_none=True)
+        np.save('sample.npy', sample['image'].cpu().numpy())
+        np.save('annot.npy', sample['annot'].cpu().numpy())
+        raise ValueError('stop')
         if mixed_precision:
             with torch.cuda.amp.autocast():
                 loss, (cls_loss, shape_loss, offset_loss, iou_loss) = train_one_step(args, model, sample, device)
@@ -260,37 +295,6 @@ def val(epoch: int,
     #     logger.info('====> Epoch: {} FROC compute error'.format(epoch))
     #     pass
 
-def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
-    transform_list_train = [
-                            transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
-                            # transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=False, trans_zy=False),
-                            transform.Pad(output_size=crop_size),
-                            transform.RandomCrop(output_size=crop_size, pos_ratio=0.9),
-                            transform.CoordToAnnot(blank_side=blank_side)]
-    
-    train_transform = torchvision.transforms.Compose(transform_list_train)
-
-    crop_fn_train = InstanceCrop(crop_size=crop_size, tp_ratio=0.75, spacing=SPACING,
-                                        rand_trans=[10, 20, 20], rand_rot=[20, 0, 0], rand_space=[0.9, 1.2],
-                                        sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-
-    train_dataset = DetDatasetCSVR(series_list_path = args.train_set,
-                                   crop_fn = crop_fn_train,
-                                   transform_post = train_transform)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                              collate_fn=collate_fn_dict,num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=True)
-    logger.info("Number of training samples: {}".format(len(train_loader.dataset)))
-    logger.info("Number of training batches: {}".format(len(train_loader)))
-    return train_loader
-
-def test_val_data_prepare(args):
-    split_comber = SplitComb(crop_size=CROP_SIZE, overlap=OVERLAP_SIZE, pad_value=-1)
-    test_dataset = DetDatasetCSVRTest(series_list_path = args.val_set, SplitComb=split_comber)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers)
-    logger.info("Number of test samples: {}".format(len(test_loader.dataset)))
-    logger.info("Number of test batches: {}".format(len(test_loader)))
-    return test_loader
-
 def convert_to_standard_csv(csv_path, save_dir, state, spacing):
     '''
     convert [seriesuid	coordX	coordY	coordZ	w	h	d] to 
@@ -345,11 +349,11 @@ if __name__ == '__main__':
     state = 'validate'
     origin_annot_path = os.path.join(annot_dir, 'origin_annotation_{}.csv'.format(state))
     annot_path = os.path.join(annot_dir, 'annotation_{}.csv'.format(state))
-    generate_annot_csv(args.val_set, origin_annot_path)
+    generate_annot_csv(args.val_set, origin_annot_path, spacing=IMAGE_SPACING)
     convert_to_standard_csv(csv_path = origin_annot_path, 
                             save_dir = annot_dir, 
                             state = state, 
-                            spacing = SPACING)
+                            spacing = IMAGE_SPACING)
     # if args.load:
     #     start_epoch = 60
     # else:
