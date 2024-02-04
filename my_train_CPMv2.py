@@ -167,9 +167,6 @@ def train(args,
     progress_bar = get_progress_bar('Train', len(train_loader))
     for batch_idx, sample in enumerate(train_loader):
         optimizer.zero_grad(set_to_none=True)
-        np.save('sample.npy', sample['image'].cpu().numpy())
-        np.save('annot.npy', sample['annot'].cpu().numpy())
-        raise ValueError('stop')
         if mixed_precision:
             with torch.cuda.amp.autocast():
                 loss, (cls_loss, shape_loss, offset_loss, iou_loss) = train_one_step(args, model, sample, device)
