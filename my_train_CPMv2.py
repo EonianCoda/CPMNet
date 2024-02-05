@@ -27,7 +27,7 @@ from evaluationScript.detectionCADEvalutionIOU import noduleCADEvaluation
 
 from utils.logs import setup_logging
 from utils.average_meter import AverageMeter
-from utils.utils import init_seed, get_local_time_in_taiwan, get_progress_bar, write_yaml
+from utils.utils import init_seed, get_local_time_in_taiwan, get_progress_bar, write_yaml, load_yaml
 from utils.generate_annot_csv_from_series_list import generate_annot_csv
 
 SAVE_ROOT = './save'
@@ -46,7 +46,7 @@ def get_args():
     parser.add_argument('--batch-size', type=int, default=1, metavar='N', help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=300, metavar='N', help='number of epochs to train (default: 10)')
     # resume
-    parser.add_argument('--resume', default=True,help='resume training from epoch n')
+    parser.add_argument('--resume_folder', type=str, default='', metavar='str', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='', metavar='str')
     # data
     parser.add_argument('--train_set', type=str, required=True, help='train_list')
@@ -67,6 +67,7 @@ def get_args():
     parser.add_argument('--act_type', type=str, default='ReLU', metavar='N', help='act type of network')
     parser.add_argument('--se', action='store_true', default=False, help='use se block')
     # other
+    parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, metavar='N', help='how many batches to wait before logging training status')
     args = parser.parse_args()
@@ -90,18 +91,39 @@ def prepare_training(args):
                      detection_loss = detection_loss,
                      device = device)
     detection_postprocess = DetectionPostprocess(topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
-    if args.pretrained_model_path != '':
+    if args.resume_folder != '':
+        logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
+        
+        model_folder = os.path.join(args.resume_folder, 'model')
+        model_names = os.listdir(model_folder)
+        model_epochs = [int(name.split('.')[0].split('_')[-1]) for name in model_names]
+        start_epoch = model_epochs[np.argmax(model_epochs)]
+        model_path = os.path.join(model_folder, f'epoch_{start_epoch}.pth')
+        
+        logger.info('Load model from "{}"'.format(model_path))
+        model.to(device)
+        # build optimizer
+        optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
+
+        state_dict = torch.load(model_path, map_location=device)
+        model.load_state_dict(state_dict['state_dict'])
+        optimizer.load_state_dict(state_dict['optimizer'])       
+        scheduler_warm.load_state_dict(state_dict['scheduler'])
+        
+    elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         state_dict = torch.load(args.pretrained_model_path)
         model.load_state_dict(state_dict['state_dict'])
-    model.to(device)
     
-    # build optimizer
-    optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
-    scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
-
-    return model, optimizer, scheduler_warm, detection_postprocess
+        model.to(device)
+        # build optimizer
+        optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
+        start_epoch = 0
+    return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
 
 def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
     transform_list_train = [
@@ -326,13 +348,22 @@ def convert_to_standard_csv(csv_path, save_dir, state, spacing):
 
 if __name__ == '__main__':
     args = get_args()
-    cur_time = get_local_time_in_taiwan()
-    timestamp = "[%d-%02d-%02d-%02d%02d]" % (cur_time.year, 
-                                            cur_time.month, 
-                                            cur_time.day, 
-                                            cur_time.hour, 
-                                            cur_time.minute)
-    exp_folder = os.path.join(SAVE_ROOT, timestamp + '_' + args.exp_name)
+    if args.resume_folder != '': # resume training
+        exp_folder = args.resume_folder
+        setting_yaml_path = os.path.join(exp_folder, 'setting.yaml')
+        setting = load_yaml(setting_yaml_path)
+        for key, value in setting.items():
+            setattr(args, key, value)
+    else:     
+        cur_time = get_local_time_in_taiwan()
+        timestamp = "[%d-%02d-%02d-%02d%02d]" % (cur_time.year, 
+                                                cur_time.month, 
+                                                cur_time.day, 
+                                                cur_time.hour, 
+                                                cur_time.minute)
+        exp_folder = os.path.join(SAVE_ROOT, timestamp + '_' + args.exp_name)
+        setup_logging(level='info', log_file=os.path.join(exp_folder, 'log.txt'))
+        
     setup_logging(level='info', log_file=os.path.join(exp_folder, 'log.txt'))
     logger.info("The number of GPUs: {}".format(torch.cuda.device_count()))
     args.cuda = torch.cuda.is_available()
@@ -345,7 +376,7 @@ if __name__ == '__main__':
     logger.info('The Crop Size: [{}, {}, {}]'.format(CROP_SIZE[0], CROP_SIZE[1], CROP_SIZE[2]))
     logger.info('positive_target_topk: {}, lambda_cls: {}, lambda_shape: {}, lambda_offset: {}, lambda_iou: {},, num_samples: {}'.format(args.pos_target_topk, args.lambda_cls, args.lambda_shape, args.lambda_offset, args.lambda_iou, args.num_samples))
     logger.info('norm type: {}, head norm: {}, act_type: {}, using se block: {}'.format(args.norm_type, args.head_norm, args.act_type, args.se))
-    model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args)
+    start_epoch, model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args)
 
     init_seed(args.seed)
     
@@ -361,12 +392,7 @@ if __name__ == '__main__':
                             save_dir = annot_dir, 
                             state = state, 
                             spacing = IMAGE_SPACING)
-    if args.load:
-        start_epoch = 60
-    else:
-        start_epoch = 150
-
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         train(args = args,
               model = model,
               optimizer = optimizer,
@@ -375,7 +401,7 @@ if __name__ == '__main__':
               device = device,
               epoch = epoch, 
               exp_folder = exp_folder)
-        if epoch > start_epoch: 
+        if epoch > args.start_val_epoch: 
             val(epoch = epoch,
                 test_loader = val_loader, 
                 save_dir = annot_dir,

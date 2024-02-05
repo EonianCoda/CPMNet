@@ -2,6 +2,7 @@ import os
 import yaml
 import datetime
 from tqdm import tqdm
+from typing import Optional, Dict, Any
 
 def init_seed(seed: int):
     import torch
@@ -36,3 +37,15 @@ def write_yaml(save_path: str,
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, 'w') as f:
         yaml.dump(config, f, default_flow_style = default_flow_style)
+        
+def load_yaml(path: str, 
+            overwrite_config:Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
+    """Load the yaml path
+    """
+    with open(path, 'r') as f:
+        settings = yaml.safe_load(f)
+    if overwrite_config != None:
+        for key, value in overwrite_config:
+            if settings.get(key) != None:
+                settings[key] = value
+    return settings
