@@ -319,10 +319,15 @@ def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0
     return anchor_points, stride_tensor
 
 class DetectionLoss(nn.Module):
-    def __init__(self, crop_size=[64, 128, 128], pos_target_topk = 7, spacing=[2.0, 1.0, 1.0]):
+    def __init__(self, 
+                 crop_size=[64, 128, 128], 
+                 pos_target_topk = 7, 
+                 pos_ignore_ratio = 3,
+                 spacing=[2.0, 1.0, 1.0]):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
+        self.pos_ignore_ratio = pos_ignore_ratio
         self.spacing = np.array(spacing)
 
     @staticmethod  
@@ -355,12 +360,15 @@ class DetectionLoss(nn.Module):
                 FN_weights = 4.0  # 10.0  for ablation study
                 FN_index = torch.lt(cls_prob, 0.8) & (record_targets == 1)  # 0.9
                 cls_loss[FN_index == 1] = FN_weights * cls_loss[FN_index == 1]
+                
                 Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
+                
                 neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
                 Negative_loss = Negative_loss[neg_idcs] 
-                _, keep_idx = torch.topk(Negative_loss, ratio * num_positive_pixels) 
+                _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
                 Negative_loss = Negative_loss[keep_idx] 
+                
                 Positive_loss = Positive_loss.sum()
                 Negative_loss = Negative_loss.sum()
                 cls_loss = Positive_loss + Negative_loss
@@ -488,7 +496,7 @@ class DetectionLoss(nn.Module):
                        stride: torch.Tensor,
                        spacing: np.ndarray,
                        pos_target_topk = 7, 
-                       ignore_ratio = 5):# larger the ignore_ratio, the more GPU memory is used
+                       ignore_ratio = 3):# larger the ignore_ratio, the more GPU memory is used
         """Get the positive targets for the network.
         Steps:
             1. Calculate the distance between each annotation and each anchor point.
@@ -582,8 +590,12 @@ class DetectionLoss(nn.Module):
         # predict bboxes (zyxdhw)
         pred_bboxes = self.bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor) # shape = (b, num_anchors, 6)
         # assigned points and targets (target bboxes zyxdhw)
-        target_offset, target_shape, target_bboxes, target_scores, mask_ignore = self.get_pos_target(process_annotations, 
-                                                anchor_points, stride_tensor[0].view(1, 1, 3), self.spacing, self.pos_target_topk)
+        target_offset, target_shape, target_bboxes, target_scores, mask_ignore = self.get_pos_target(annotations = process_annotations,
+                                                                                                     anchor_points = anchor_points,
+                                                                                                     stride = stride_tensor[0].view(1, 1, 3), 
+                                                                                                     spacing = self.spacing, 
+                                                                                                     pos_target_topk = self.pos_target_topk,
+                                                                                                     ignore_ratio = self.pos_ignore_ratio)
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         fg_mask = target_scores.squeeze(-1).bool()

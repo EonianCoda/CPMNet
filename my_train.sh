@@ -1,1 +1,1 @@
-python my_train_CPMv2.py --train_set ./pretrained_train.txt --val_set ./pretrained_val.txt --batch-size 4 --num_workers 1 --se --mixed_precision --num_samples 6
+python my_train_CPMv2.py --train_set ./pretrained_train.txt --val_set ./pretrained_val.txt --batch-size 2 --num_workers 1 --se --num_samples 5

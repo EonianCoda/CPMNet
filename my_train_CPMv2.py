@@ -56,9 +56,10 @@ def get_args():
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
     parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
-    parser.add_argument('--lr', type=float, default=0.01, help='the learning rate')
+    parser.add_argument('--lr', type=float, default=1e-4, help='the learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
     parser.add_argument('--pos_target_topk', type=int, default=5, metavar='N', help='topk grids assigned as positives')
+    parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=6, metavar='N', help='sampling batch number in per sample')
     # network
     parser.add_argument('--norm_type', type=str, default='batchnorm', metavar='N', help='norm type of backbone')
@@ -73,7 +74,10 @@ def get_args():
 
 def prepare_training(args):
     # build model
-    detection_loss = DetectionLoss(crop_size=CROP_SIZE, pos_target_topk=args.pos_target_topk, spacing=IMAGE_SPACING)
+    detection_loss = DetectionLoss(crop_size = CROP_SIZE, 
+                                   pos_target_topk = args.pos_target_topk, 
+                                   spacing = IMAGE_SPACING, 
+                                   pos_ignore_ratio = args.pos_ignore_ratio)
     model = Resnet18(n_channels = 1, 
                      n_blocks = [2, 3, 3, 3], 
                      n_filters = [64, 96, 128, 160], 
@@ -117,8 +121,14 @@ def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
                                    crop_fn = crop_fn_train,
                                    image_spacing=IMAGE_SPACING,
                                    transform_post = train_transform)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True,
-                              collate_fn=collate_fn_dict,num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=True)
+    train_loader = DataLoader(train_dataset, 
+                              batch_size=args.batch_size, 
+                              shuffle=True,
+                              collate_fn=collate_fn_dict,
+                              num_workers=args.num_workers, 
+                              pin_memory=args.pin_memory, 
+                              drop_last=True,
+                              prefetch_factor=1)
     logger.info("Number of training samples: {}".format(len(train_loader.dataset)))
     logger.info("Number of training batches: {}".format(len(train_loader)))
     return train_loader
@@ -126,7 +136,7 @@ def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
 def test_val_data_prepare(args):
     split_comber = SplitComb(crop_size=CROP_SIZE, overlap=OVERLAP_SIZE, pad_value=-1)
     test_dataset = DetDatasetCSVRTest(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=False, prefetch_factor=1)
     logger.info("Number of test samples: {}".format(len(test_loader.dataset)))
     logger.info("Number of test batches: {}".format(len(test_loader)))
     return test_loader
@@ -351,12 +361,11 @@ if __name__ == '__main__':
                             save_dir = annot_dir, 
                             state = state, 
                             spacing = IMAGE_SPACING)
-    # if args.load:
-    #     start_epoch = 60
-    # else:
-    #     start_epoch = 150
+    if args.load:
+        start_epoch = 60
+    else:
+        start_epoch = 150
 
-    start_epoch = 20
     for epoch in range(1, args.epochs + 1):
         train(args = args,
               model = model,

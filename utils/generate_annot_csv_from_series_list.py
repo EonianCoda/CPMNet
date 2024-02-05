@@ -25,8 +25,7 @@ def generate_annot_csv(series_list_path: str,
     all_rads = []
     series_infos = load_series_list(series_list_path)
     for folder, series_name in series_infos:
-        dicom_path = os.path.join(folder, 'npy', f'{series_name}.npy')
-        label_path = os.path.join(folder, 'mask', f'{series_name}_nodule_count.json')
+        label_path = os.path.join(folder, 'mask', f'{series_name}_nodule_count_crop.json')
         with open(label_path, 'r') as f:
             info = json.load(f)
             
@@ -37,11 +36,11 @@ def generate_annot_csv(series_list_path: str,
             all_rads.append([])
             continue
         # calculate center of bboxes
-        all_loc = ((bboxes[:, 0] + bboxes[:, 1]) / 2).astype(np.float32) # (y, x, z)
+        all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
         all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
 
-        all_loc = all_loc[:, [2, 0, 1]] # (z, x, y)
-        all_rad = all_rad[:, [2, 0, 1]] # (d, w, h)
+        all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
+        all_rad = all_rad[:, [2, 0, 1]] # (d, h, w)
         all_rad = all_rad * spacing
         
         all_locs.append(all_loc)
@@ -54,10 +53,10 @@ def generate_annot_csv(series_list_path: str,
             for i in range(len(all_locs[series_i])):
                 loc = all_locs[series_i][i]
                 rad = all_rads[series_i][i]
-                z, x, y = loc
-                d, w, h = rad
+                z, y, x = loc
+                d, h, w = rad
                 
-                row = [series_infos[series_i][1] + '.npy']
+                row = [series_infos[series_i][1] + '_crop.npy']
                 for i in [x, y, z, w, h, d]:
                     row.append('{:.2f}'.format(i))
                 f.write(','.join(row) + '\n')
