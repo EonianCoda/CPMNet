@@ -91,6 +91,7 @@ def prepare_training(args):
                      detection_loss = detection_loss,
                      device = device)
     detection_postprocess = DetectionPostprocess(topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
+    start_epoch = 0
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
         
@@ -116,13 +117,18 @@ def prepare_training(args):
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         state_dict = torch.load(args.pretrained_model_path)
         model.load_state_dict(state_dict['state_dict'])
-    
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
         scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
-        start_epoch = 0
+    else:
+        model.to(device)
+        # build optimizer
+        optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
+    
     return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
 
 def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
@@ -149,8 +155,7 @@ def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
                               collate_fn=collate_fn_dict,
                               num_workers=args.num_workers, 
                               pin_memory=args.pin_memory, 
-                              drop_last=True,
-                              prefetch_factor=1)
+                              drop_last=True)
     logger.info("Number of training samples: {}".format(len(train_loader.dataset)))
     logger.info("Number of training batches: {}".format(len(train_loader)))
     return train_loader
@@ -158,7 +163,7 @@ def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
 def test_val_data_prepare(args):
     split_comber = SplitComb(crop_size=CROP_SIZE, overlap=OVERLAP_SIZE, pad_value=-1)
     test_dataset = DetDatasetCSVRTest(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=False, prefetch_factor=1)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=False,)
     logger.info("Number of test samples: {}".format(len(test_loader.dataset)))
     logger.info("Number of test batches: {}".format(len(test_loader)))
     return test_loader
@@ -272,7 +277,7 @@ def val(epoch: int,
     batch_size = 2 * args.batch_size * args.num_samples
     aneurysm_lists = []
     for s, sample in enumerate(test_loader):
-        data = sample['split_images'][0].to(device)
+        data = sample['split_images'][0].to(device, non_blocking=True)
         nzhw = sample['nzhw']
         name = sample['file_name'][0]
         spacing = sample['spacing'][0]
