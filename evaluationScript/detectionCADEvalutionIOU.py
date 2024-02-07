@@ -92,6 +92,7 @@ def compute_FROC_bootstrap(FROC_gt_list: List[float],
     set1 = np.concatenate(([FROC_gt_list], [FROC_prob_list], [FROC_is_FN_list]), axis=0) # 3 x N, N is the number of candidates
     fp_scans_list = []
     sens_list = []
+    precision_list = []
     thresholds_list = []
     
     FROC_series_uids_np = np.asarray(FROC_series_uids)
@@ -114,6 +115,7 @@ def compute_FROC_bootstrap(FROC_gt_list: List[float],
     
         fp_scans_list.append(fp_scans)
         sens_list.append(sens)
+        precision_list.append(precisions)
         thresholds_list.append(thresholds)
 
     # compute statistic
@@ -121,13 +123,15 @@ def compute_FROC_bootstrap(FROC_gt_list: List[float],
     
     # Then interpolate all FROC curves at this points
     interp_sens = np.zeros((numberOfBootstrapSamples, len(all_fp_scans)), dtype = 'float32')
+    interp_precisions = np.zeros((numberOfBootstrapSamples, len(all_fp_scans)), dtype = 'float32')
     for i in range(numberOfBootstrapSamples):
         interp_sens[i,:] = np.interp(all_fp_scans, fp_scans_list[i], sens_list[i])
-    
+        interp_precisions[i,:] = np.interp(all_fp_scans, fp_scans_list[i], precision_list[i])
     # compute mean and CI
     sens_mean, sens_lb, sens_up = compute_mean_ci(interp_sens, confidence = confidence)
-
-    return all_fp_scans, sens_mean, sens_lb, sens_up
+    prec_mean, prec_lb, prec_up = compute_mean_ci(interp_precisions, confidence = confidence)
+    
+    return all_fp_scans, (sens_mean, sens_lb, sens_up), (prec_mean, prec_lb, prec_up)
 
 def compute_mean_ci(interp_sens, confidence = 0.95):
     sens_mean = np.zeros((interp_sens.shape[1]), dtype = 'float32')
@@ -190,7 +194,7 @@ def compute_FROC(FROC_is_pos_list: List[float],
         fp_per_scans = fp_ratio * (num_of_cand - num_of_detected_pos) / total_num_of_series # shape (len(fp_ratio),)
     
     sens = (tp_ratio * num_of_detected_pos) / num_of_gt_pos # sensitivity
-    precisions = (tp_ratio * num_of_detected_pos) / (tp_ratio * num_of_detected_pos + fp_ratio * (num_of_cand - num_of_detected_pos)) # precision
+    precisions = (tp_ratio * num_of_detected_pos) / np.maximum(1, tp_ratio * num_of_detected_pos + fp_ratio * (num_of_cand - num_of_detected_pos)) # precision
     return fp_per_scans, sens, precisions, thresholds
 
 def evaluateCAD(seriesUIDs: List[str], 
@@ -350,6 +354,23 @@ def evaluateCAD(seriesUIDs: List[str],
         "    FN_diammeter:\n")
     for idx, whd in enumerate(FN_diameter):
         nodule_output_file.write("    FN_%d: w:%.9f, h:%.9f, d:%.9f sericeuid:%s\n" % (idx+1, whd[0], whd[1], whd[2], FN_seriesuid[idx]))
+    
+    CLS_PROB_THRESHOLDS = 0.9
+    fixed_tp, fixed_fp, fixed_fn = 0, 0, 0
+    for is_pos, prob, is_fn in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list):
+        if is_fn:
+            fixed_fn += 1
+        elif is_pos == 1.0 and prob > CLS_PROB_THRESHOLDS:
+            fixed_tp += 1
+        elif is_pos == 0.0 and prob > CLS_PROB_THRESHOLDS:
+            fixed_fp += 1
+    
+    fixed_recall = fixed_tp / (fixed_tp + fixed_fn)
+    fixed_precision = fixed_tp / (fixed_tp + fixed_fp)
+    f1_score = 2 * fixed_precision * fixed_recall / (fixed_precision + fixed_recall)
+    logger.info('TP = {}, FP = {}, FN = {}'.format(fixed_tp, fixed_fp, fixed_fn))
+    logger.info('Fixed recall: {:.4f}, fixed precision: {:.4f}, f1 score: {:.4f}'.format(fixed_recall, fixed_precision, f1_score))
+    
     # compute FROC
     fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
                                                     FROC_prob_list = FROC_prob_list, 
@@ -357,17 +378,21 @@ def evaluateCAD(seriesUIDs: List[str],
                                                     FROC_is_FN_list = FROC_is_FN_list)
     
     if PERFORMBOOTSTRAPPING:  # True
-        fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
+        fps_bs_itp, senstitivity_info, precision_info = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
                                                                                 FROC_prob_list = FROC_prob_list,
                                                                                 FROC_series_uids = FROC_series_uids,
                                                                                 seriesUIDs = seriesUIDs,
                                                                                 FROC_is_FN_list = FROC_is_FN_list,
                                                                                 numberOfBootstrapSamples = NUMBEROFBOOTSTRAPSAMPLES, 
                                                                                 confidence = CONFIDENCE)
+        sens_bs_mean, sens_bs_lb, sens_bs_up = senstitivity_info
+        prec_bs_mean, prec_bs_lb, prec_bs_up = precision_info
+        f1_score_mean = 2 * prec_bs_mean * sens_bs_mean / np.maximum(1e-6, prec_bs_mean + sens_bs_mean)
     # Write FROC curve
     with open(os.path.join(output_dir, "froc_{}.txt".format(iou_threshold)), 'w') as f:
+        f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
         for i in range(len(sens)):
-            f.write("%.9f,%.9f,%.9f\n" % (fps[i], sens[i], thresholds[i]))
+            f.write("%.5f,%.5f,%.5f,%.5f,%.5f\n" % (fps[i], sens[i], precisions[i], f1_score_mean[i], thresholds[i]))
     
     # Write FROC vectors to disk as well
     with open(os.path.join(output_dir, "froc_gt_prob_vectors_{}.csv".format(iou_threshold)), 'w') as f:
@@ -376,8 +401,13 @@ def evaluateCAD(seriesUIDs: List[str],
 
     fps_itp = np.linspace(FROC_MINX, FROC_MAXX, num=10001)  # FROC横坐标范围
     
-    sens_itp = np.interp(fps_itp, fps, sens)  # FROC纵坐标
-    forcs = []
+    sens_itp = np.interp(fps_itp, fps, sens)
+    prec_itp = np.interp(fps_itp, fps, precisions)
+    
+    sens_points = []
+    prec_points = []
+    
+    
     if PERFORMBOOTSTRAPPING: # True
         # Write mean, lower, and upper bound curves to disk
         with open(os.path.join(output_dir, "froc_bootstrapping_{}.csv".format(iou_threshold)), 'w') as f:
@@ -385,18 +415,20 @@ def evaluateCAD(seriesUIDs: List[str],
             for i in range(len(fps_bs_itp)):
                 f.write("%.9f,%.9f,%.9f,%.9f\n" % (fps_bs_itp[i], sens_bs_mean[i], sens_bs_lb[i], sens_bs_up[i]))
             FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-            Total_Sens = 0
+            total_sens = 0
             for fp_point in FPS:
                 index = np.argmin(abs(fps_bs_itp - fp_point))
                 nodule_output_file.write("\n")
                 nodule_output_file.write(str(index))
                 nodule_output_file.write(str(sens_bs_mean[index]))
-                forcs.append(sens_bs_mean[index])
-                Total_Sens += sens_bs_mean[index]
-            print('Froc_mean:', Total_Sens / len(FPS))
+                sens_points.append(sens_bs_mean[index])
+                prec_points.append(prec_bs_mean[index])
+                logger.info('{} FP/Scans: sen = {:.2f}, prec = {:.2f}'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
+                total_sens += sens_bs_mean[index]
+            logger.info('Froc_mean: {}'.format(total_sens / len(FPS)))
             nodule_output_file.write("\n")
             nodule_output_file.write("Froc_mean")
-            nodule_output_file.write(str(Total_Sens / len(FPS)))
+            nodule_output_file.write(str(total_sens / len(FPS)))
     else:
         fps_bs_itp = None
         sens_bs_mean = None
@@ -421,7 +453,7 @@ def evaluateCAD(seriesUIDs: List[str],
         plt.ylim(0, 1)
         plt.xlabel('Average number of false positives per scan')
         plt.ylabel('Sensitivity')
-        plt.legend(loc='lower right')
+        # plt.legend(loc='lower right')
         plt.title('FROC performance')
         
         if bLogPlot:
@@ -436,7 +468,7 @@ def evaluateCAD(seriesUIDs: List[str],
 
         plt.savefig(os.path.join(output_dir, "froc_{}.png".format(iou_threshold)), bbox_inches=0, dpi=300)
 
-    return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, forcs)
+    return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points)
     
 def get_nodule(annot: List[Any], 
                header: List[str]) -> NoduleFinding:
@@ -445,9 +477,9 @@ def get_nodule(annot: List[Any],
     nodule.coordY = annot[header.index(COORDY)]
     nodule.coordZ = annot[header.index(COORDZ)]
 
-    nodule.w = annot[header.index(WW)]
-    nodule.h = annot[header.index(HH)]
-    nodule.d = annot[header.index(DD)]
+    nodule.w = float(annot[header.index(WW)])
+    nodule.h = float(annot[header.index(HH)])
+    nodule.d = float(annot[header.index(DD)])
     
     nodule.update_area()
     if CADProbability_label in header:

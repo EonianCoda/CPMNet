@@ -339,7 +339,6 @@ def val(model: nn.Module,
                                  seriesuids_path = seriesuids_path, 
                                  pred_results_path = pred_results_path,
                                  output_dir = outputDir,
-                                 image_spacing = IMAGE_SPACING,
                                  iou_threshold = 0.1)
     frocs = out_01[-1]
     logger.info('====> Epoch: {}'.format(epoch))
@@ -419,15 +418,15 @@ if __name__ == '__main__':
                             state = state, 
                             spacing = IMAGE_SPACING)
     for epoch in range(start_epoch, args.epochs + 1):
-        train(args = args,
-              model = model,
-              optimizer = optimizer,
-              scheduler_warm = scheduler_warm,
-              train_loader = train_loader, 
-              device = device,
-              epoch = epoch, 
-              exp_folder = exp_folder)
-        if epoch > args.start_val_epoch: 
+        # train(args = args,
+        #       model = model,
+        #       optimizer = optimizer,
+        #       scheduler_warm = scheduler_warm,
+        #       train_loader = train_loader, 
+        #       device = device,
+        #       epoch = epoch, 
+        #       exp_folder = exp_folder)
+        if epoch >= 0: 
             val(epoch = epoch,
                 test_loader = val_loader, 
                 save_dir = annot_dir,
