@@ -23,7 +23,7 @@ from sync_batchnorm import convert_model
 import optimizer.solver as solver
 ###postprocessing###
 from utils.box_utils import nms_3D
-from evaluationScript.detectionCADEvalutionIOU import noduleCADEvaluation
+from evaluationScript.detectionCADEvalutionIOU import nodule_evaluation
 import pandas as pd
 
 parser = argparse.ArgumentParser(description='anchorfree_3D_aneurysm_refine')
@@ -238,7 +238,7 @@ def val(epoch, test_loader, save_dir, anno_filename, anno_ex_filename, suid_file
         os.makedirs(outputDir)
     try:
         FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-        out_01 = noduleCADEvaluation(anno_filename, anno_ex_filename, suid_filename, results_filename, outputDir, 0.1)
+        out_01 = nodule_evaluation(anno_filename, anno_ex_filename, suid_filename, results_filename, outputDir, 0.1)
         frocs = out_01[-1]
         logger.info('====> Epoch: {}'.format(epoch))
         for s in range(len(frocs)):

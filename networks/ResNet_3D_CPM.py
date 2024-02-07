@@ -17,6 +17,24 @@ def crack(integer):
         factor = integer / start
     return int(factor), start
 
+def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
+    """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
+    anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
+    Args:
+        anchor_points: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
+        pred_offsets: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the predicted offsets in the format (dz, dy, dx).
+        pred_shapes: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the predicted shapes in the format (d, h, w).
+        stride_tensor: torch.Tensor
+            A tensor of shape (bs, 3) containing the strides of each dimension in format (z, y, x).
+    Returns:
+        A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
+    """
+    center_zyx = (anchor_points + pred_offsets) * stride_tensor
+    return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
+
 class BasicBlockNew(nn.Module):
 
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):
@@ -305,7 +323,6 @@ def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0
             stride_tensor: torch.Tensor
                 A tensor of shape (num_anchors, 3) containing the strides of the anchor points, the strides of each anchor point are same.
     """
-    assert feat is not None
     dtype, device = feat.dtype, feat.device
     _, _, d, h, w = feat.shape
     strides = torch.tensor([input_size[0] / d, 
@@ -480,15 +497,15 @@ class DetectionLoss(nn.Module):
             return iou - rho2 / c2  # DIoU
         return iou  # IoU
     
-    @staticmethod
-    def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
-        """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
-        anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
-        Returns:
-            A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
-        """
-        c_zyx = (anchor_points + pred_offsets) * stride_tensor
-        return torch.cat((c_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
+    # @staticmethod
+    # def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
+    #     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
+    #     anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
+    #     Returns:
+    #         A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
+    #     """
+    #     c_zyx = (anchor_points + pred_offsets) * stride_tensor
+    #     return torch.cat((c_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
     
     @staticmethod
     def get_pos_target(annotations: torch.Tensor,
@@ -588,7 +605,7 @@ class DetectionLoss(nn.Module):
         # generate center points. Only support single scale feature
         anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0) # shape = (num_anchors, 3)
         # predict bboxes (zyxdhw)
-        pred_bboxes = self.bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor) # shape = (b, num_anchors, 6)
+        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor) # shape = (b, num_anchors, 6)
         # assigned points and targets (target bboxes zyxdhw)
         target_offset, target_shape, target_bboxes, target_scores, mask_ignore = self.get_pos_target(annotations = process_annotations,
                                                                                                      anchor_points = anchor_points,
@@ -612,25 +629,19 @@ class DetectionLoss(nn.Module):
         return classification_losses, reg_losses, offset_losses, iou_losses
 
 class DetectionPostprocess(nn.Module):
-    def __init__(self, topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=[64, 96, 96]):
+    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[64, 96, 96]):
         super(DetectionPostprocess, self).__init__()
         self.topk = topk
         self.threshold = threshold
         self.nms_threshold = nms_threshold
-        self.nms_topk = num_topk
+        self.nms_topk = nms_topk
         self.crop_size = crop_size
-    
-    @staticmethod
-    def bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor, dim=-1):
-        c_zyx = (anchor_points + pred_offsets) * stride_tensor
-        return torch.cat((c_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
 
     def forward(self, output, device):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
         batch_size = Cls.size()[0]
-        dets = (-torch.ones((batch_size, self.topk, 8))).to(device)
         anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0)
         # view shape
         pred_scores = Cls.view(batch_size, 1, -1)
@@ -642,23 +653,28 @@ class DetectionPostprocess(nn.Module):
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         
         # recale to input_size
-        pred_bboxes = self.bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor)
-        topk_scores, topk_idxs = torch.topk(pred_scores.squeeze(), self.topk, dim=-1, largest=True)
+        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor)
+        # Get the topk scores and indices
+        topk_scores, topk_indices = torch.topk(pred_scores.squeeze(), self.topk, dim=-1, largest=True)
+        
         dets = (-torch.ones((batch_size, self.topk, 8))).to(device)
         for j in range(batch_size):
+            # Get indices of scores greater than threshold
             topk_score = topk_scores[j]
-            topk_idx = topk_idxs[j]
-            keep_box_mask = topk_score > self.threshold
+            topk_idx = topk_indices[j]
+            keep_box_mask = (topk_score > self.threshold)
             keep_box_n = keep_box_mask.sum()
+            
             if keep_box_n > 0:
-                det = (- torch.ones((torch.sum(keep_box_n), 8))).to(device)
                 keep_topk_score = topk_score[keep_box_mask]
                 keep_topk_idx = topk_idx[keep_box_mask]
-                for k, idx, score in zip(range(keep_box_n), keep_topk_idx, keep_topk_score):
-                    det[k, 0] = 1
-                    det[k, 1] = score
-                    det[k, 2:] = pred_bboxes[j][idx]
+                
                 # 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                det = (-torch.ones((keep_box_n, 8))).to(device)
+                det[:, 0] = 1
+                det[:, 1] = keep_topk_score
+                det[:, 2:] = pred_bboxes[j][keep_topk_idx]
+            
                 keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
                 dets[j][:len(keep)] = det[keep.long()]
         return dets

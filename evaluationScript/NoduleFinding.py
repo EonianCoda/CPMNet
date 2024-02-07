@@ -4,7 +4,7 @@ class NoduleFinding(object):
   '''
   
   def __init__(self, noduleid=None, coordX=None, coordY=None, coordZ=None, coordType="World",
-               CADprobability=None, noduleType=None, w=None, h=None, d=None, state=None, seriesInstanceUID=None):
+               CADprobability=None, noduleType=None, w=None, h=None, d=None, seriesInstanceUID=None):
 
     # set the variables and convert them to the correct type
     self.id = noduleid
@@ -18,6 +18,5 @@ class NoduleFinding(object):
     self.w = w
     self.h = h
     self.d = d
-    self.state = state
     self.candidateID = None
     self.seriesuid = seriesInstanceUID

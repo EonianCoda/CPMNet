@@ -67,7 +67,7 @@ logger.info('norm type:{}, head norm:{}, act_type:{}, using se block:{}'
 model = Resnet18(n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,norm_type=args.norm_type, 
                 head_norm=args.head_norm, act_type=args.act_type, se=args.se, first_stride=(1, 2, 2))
 # set threshold 0.8 for 1.5 FPs
-detection_postprocess = DetectionPostprocess(topk=60, threshold=0.8, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
+detection_postprocess = DetectionPostprocess(topk=60, threshold=0.8, nms_threshold=0.05, nms_topk=20, crop_size=CROP_SIZE)
 
 # model = nn.DataParallel(model)
 model.to(device)
@@ -120,7 +120,7 @@ def findCube(z, y, x, d, h, w, shape, stride=4):
 def infer(save_dir, model, ct_dir, label_dir):
     global N
     model.eval().to(device)
-    split_comber = SplitComb(crop_size=CROP_SIZE, overlap=OVERLAP_SIZE, pad_value=-1)
+    split_comber = SplitComb(crop_size=CROP_SIZE, overlap_size=OVERLAP_SIZE, pad_value=-1)
     simage = sitk.ReadImage(ct_dir)
     # spacing = torch.from_numpy(np.array(simage.GetSpacing()[::-1])) # z, y, x
     image = sitk.GetArrayFromImage(simage).astype('float32')# z, y, x
@@ -190,4 +190,3 @@ if __name__ == '__main__':
         image_dir = os.path.join(images_root, i)
         label_dir = os.path.join(labels_root, i.replace('_0000.nii.gz', '.nii.gz'))
         infer(args.save_dir, model, image_dir, label_dir)
-

@@ -1,18 +1,29 @@
 import torch
 import numpy as np
-import math
-
-def nms_3D(dets, overlap=0.5, top_k=200):
+from numpy.typing import NDArray
+def nms_3D(dets: NDArray[np.float32], overlap=0.5, top_k=200):
+    """
+    Args:
+        dets: 
+            (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
+        overlap: 
+            iou threshold
+        top_k: 
+            keep top_k results
+    """
     # det {prob, ctr_z, ctr_y, ctr_x, d, h, w}
     dd, hh, ww = dets[:, 4], dets[:, 5], dets[:, 6]
     z1 = dets[:, 1] - 0.5 * dd
     y1 = dets[:, 2] - 0.5 * hh
     x1 = dets[:, 3] - 0.5 * ww
+    
     z2 = dets[:, 1] + 0.5 * dd
     y2 = dets[:, 2] + 0.5 * hh
     x2 = dets[:, 3] + 0.5 * ww
+    
     scores = dets[:, 0]
     areas = dd * hh * ww
+    
     _, idx = scores.sort(0, descending=True)
     keep = []
     while idx.size(0) > 0:
@@ -58,4 +69,3 @@ def iou_3D(box1, box2):
     uni = np.maximum(uni, 1e-8)
     ious = inters / uni
     return ious
-

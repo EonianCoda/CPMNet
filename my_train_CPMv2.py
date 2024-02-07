@@ -11,19 +11,20 @@ from typing import List, Tuple, Any, Dict
 
 ###network###
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
-###data###
+### data ###
 from dataload.my_dataset_crop import DetDatasetCSVR, DetDatasetCSVRTest, collate_fn_dict
 from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
-import transform
+import torch.nn as nn
+import transform as transform
 import torchvision
 ###optimzer###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
 ###postprocessing###
 from utils.box_utils import nms_3D
-from evaluationScript.detectionCADEvalutionIOU import noduleCADEvaluation
+from evaluationScript.detectionCADEvalutionIOU import nodule_evaluation
 
 from utils.logs import setup_logging
 from utils.average_meter import AverageMeter
@@ -31,8 +32,8 @@ from utils.utils import init_seed, get_local_time_in_taiwan, get_progress_bar, w
 from utils.generate_annot_csv_from_series_list import generate_annot_csv
 
 SAVE_ROOT = './save'
-CROP_SIZE = [64, 128, 128]
-OVERLAP_SIZE = [16, 32, 32]
+DEFAULT_CROP_SIZE = [64, 128, 128]
+OVERLAY_RATIO = 0.25
 IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ def get_args():
     parser.add_argument('--num_workers', type=int, default=1, metavar='S', help='num_workers (default: 1)')
     parser.add_argument('--batch-size', type=int, default=1, metavar='N', help='input batch size for training (default: 128)')
     parser.add_argument('--epochs', type=int, default=300, metavar='N', help='number of epochs to train (default: 10)')
+    parser.add_argument('--crop_size', nargs='+', type=int, default=DEFAULT_CROP_SIZE, help='crop size')
     # resume
     parser.add_argument('--resume_folder', type=str, default='', metavar='str', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='', metavar='str')
@@ -61,6 +63,12 @@ def get_args():
     parser.add_argument('--pos_target_topk', type=int, default=5, metavar='N', help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=6, metavar='N', help='sampling batch number in per sample')
+    
+    # detection-hyper-parameters
+    parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
+    parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
+    parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
+    parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     # network
     parser.add_argument('--norm_type', type=str, default='batchnorm', metavar='N', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', metavar='N', help='norm type of head')
@@ -75,7 +83,7 @@ def get_args():
 
 def prepare_training(args):
     # build model
-    detection_loss = DetectionLoss(crop_size = CROP_SIZE, 
+    detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
                                    spacing = IMAGE_SPACING, 
                                    pos_ignore_ratio = args.pos_ignore_ratio)
@@ -90,7 +98,12 @@ def prepare_training(args):
                      first_stride = (1, 2, 2), 
                      detection_loss = detection_loss,
                      device = device)
-    detection_postprocess = DetectionPostprocess(topk=60, threshold=0.15, nms_threshold=0.05, num_topk=20, crop_size=CROP_SIZE)
+    detection_postprocess = DetectionPostprocess(topk=args.det_topk, 
+                                                 threshold=args.det_threshold, 
+                                                 nms_threshold=args.det_nms_threshold,
+                                                 nms_topk=args.det_nms_topk,
+                                                 crop_size=args.crop_size)
+    
     start_epoch = 0
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
@@ -131,9 +144,9 @@ def prepare_training(args):
     
     return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
 
-def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
-    transform_list_train = [
-                            transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
+def training_data_prepare(args, blank_side=0):
+    crop_size = args.crop_size
+    transform_list_train = [transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
                             transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=False, trans_zy=False),
                             transform.Pad(output_size=crop_size),
                             transform.RandomCrop(output_size=crop_size, pos_ratio=0.9),
@@ -149,6 +162,7 @@ def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
                                    crop_fn = crop_fn_train,
                                    image_spacing=IMAGE_SPACING,
                                    transform_post = train_transform)
+    
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 
                               shuffle=True,
@@ -161,7 +175,10 @@ def training_data_prepare(args, crop_size: List[int] = CROP_SIZE, blank_side=0):
     return train_loader
 
 def test_val_data_prepare(args):
-    split_comber = SplitComb(crop_size=CROP_SIZE, overlap=OVERLAP_SIZE, pad_value=-1)
+    crop_size = args.crop_size
+    overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
+    
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=-1)
     test_dataset = DetDatasetCSVRTest(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=False,)
     logger.info("Number of test samples: {}".format(len(test_loader.dataset)))
@@ -254,80 +271,80 @@ def train(args,
     torch.save(ckpt_path, os.path.join(model_save_folder, 'epoch_{}.pth'.format(epoch)))    
 
 def val(epoch: int,
-        test_loader,
+        test_loader: DataLoader,
         save_dir: str,
         annot_path: str, 
-        annot_excluded_path: str, 
         seriesuids_path: str,
-        model):
-    def convert_to_standard_output(output, spacing, name):
+        model: nn.Module):
+    def convert_to_standard_output(output: np.ndarray, spacing: torch.Tensor, name: str) -> List[List[Any]]:
         '''
         convert [id, prob, ctr_z, ctr_y, ctr_x, d, h, w] to
         ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
         '''
-        AneurysmList = []
+        preds = []
         spacing = np.array([spacing[0].numpy(), spacing[1].numpy(), spacing[2].numpy()]).reshape(-1, 3)
         for j in range(output.shape[0]):
-            AneurysmList.append([name, output[j, 4], output[j, 3], output[j, 2], output[j, 1], output[j, 7], output[j, 6], output[j, 5]])
-        return AneurysmList
+            preds.append([name, output[j, 4], output[j, 3], output[j, 2], output[j, 1], output[j, 7], output[j, 6], output[j, 5]])
+        return preds
     
     top_k = 40
     model.eval()
     split_comber = test_loader.dataset.splitcomb
     batch_size = 2 * args.batch_size * args.num_samples
-    aneurysm_lists = []
-    for s, sample in enumerate(test_loader):
+    all_preds = []
+    for sample in test_loader:
         data = sample['split_images'][0].to(device, non_blocking=True)
         nzhw = sample['nzhw']
         name = sample['file_name'][0]
         spacing = sample['spacing'][0]
         outputlist = []
+        
         for i in range(int(math.ceil(data.size(0) / batch_size))):
             end = (i + 1) * batch_size
             if end > data.size(0):
                 end = data.size(0)
-            input = data[i*batch_size:end]
+            input = data[i * batch_size:end]
             with torch.no_grad():
                 output = model(input)
                 output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
             outputlist.append(output.data.cpu().numpy())
+            
         output = np.concatenate(outputlist, 0)
         output = split_comber.combine(output, nzhw=nzhw)
         output = torch.from_numpy(output).view(-1, 8)
+        
+        # Remove the padding
         object_ids = output[:, 0] != -1.0
         output = output[object_ids]
+        
+        # NMS
         if len(output) > 0:
             keep = nms_3D(output[:, 1:], overlap=0.05, top_k=top_k)
             output = output[keep]
         output = output.numpy()
-        # convert to ['seriesuid', 'coordX', 'coordY', 'coordZ', 'radius', 'probability']
-        AneurysmList = convert_to_standard_output(output, spacing, name)
-        aneurysm_lists.extend(AneurysmList)
-    # save predict csv
-    column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
-    df = pd.DataFrame(aneurysm_lists, columns=column_order)
+        
+        preds = convert_to_standard_output(output, spacing, name) # convert to ['seriesuid', 'coordX', 'coordY', 'coordZ', 'radius', 'probability']
+        all_preds.extend(preds)
+        
+    # Save the results to csv
+    header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
+    df = pd.DataFrame(all_preds, columns=header)
+    pred_results_path = os.path.join(save_dir, 'predict_epoch_{}.csv'.format(epoch))
+    df.to_csv(pred_results_path, index=False)
     
-    results_path = os.path.join(save_dir, 'predict_epoch_{}.csv'.format(epoch))
-    df.to_csv(results_path, index=False)
-    outputDir = os.path.join(save_dir, results_path.split('/')[-1].split('.')[0])
-    if not os.path.exists(outputDir):
-        os.makedirs(outputDir)
-    # try:
-    FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    out_01 = noduleCADEvaluation(annot_path = annot_path, 
-                                 annot_excluded_path = annot_excluded_path, 
+    outputDir = os.path.join(save_dir, pred_results_path.split('/')[-1].split('.')[0])
+    os.makedirs(outputDir, exist_ok=True)
+    FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
+    out_01 = nodule_evaluation(annot_path = annot_path, 
                                  seriesuids_path = seriesuids_path, 
-                                 results_path = results_path,
+                                 pred_results_path = pred_results_path,
                                  output_dir = outputDir,
                                  iou_threshold = 0.1)
     frocs = out_01[-1]
     logger.info('====> Epoch: {}'.format(epoch))
     for s in range(len(frocs)):
-        logger.info('====> fps:{:.4f} iou 0.1 frocs:{:.4f}'.format(FPS[s], frocs[s]))
+        logger.info('====> fps:{:.4f} iou 0.1 frocs:{:.4f}'.format(FP_ratios[s], frocs[s]))
     logger.info('====> mean frocs:{:.4f}'.format(np.mean(np.array(frocs))))
-    # except:
-    #     logger.info('====> Epoch: {} FROC compute error'.format(epoch))
-    #     pass
 
 def convert_to_standard_csv(csv_path, save_dir, state, spacing):
     '''
@@ -353,12 +370,14 @@ def convert_to_standard_csv(csv_path, save_dir, state, spacing):
 
 if __name__ == '__main__':
     args = get_args()
+    
     if args.resume_folder != '': # resume training
         exp_folder = args.resume_folder
         setting_yaml_path = os.path.join(exp_folder, 'setting.yaml')
         setting = load_yaml(setting_yaml_path)
         for key, value in setting.items():
-            setattr(args, key, value)
+            if key != 'resume_folder':
+                setattr(args, key, value)
     else:     
         cur_time = get_local_time_in_taiwan()
         timestamp = "[%d-%02d-%02d-%02d%02d]" % (cur_time.year, 
@@ -378,7 +397,8 @@ if __name__ == '__main__':
     write_yaml(os.path.join(exp_folder, 'setting.yaml'), vars(args))
     logger.info('The learning rate: {}'.format(args.lr))
     logger.info('The batch size: {}'.format(args.batch_size))
-    logger.info('The Crop Size: [{}, {}, {}]'.format(CROP_SIZE[0], CROP_SIZE[1], CROP_SIZE[2]))
+    
+    logger.info('The Crop Size: [{}, {}, {}]'.format(args.crop_size[0], args.crop_size[1], args.crop_size[2]))
     logger.info('positive_target_topk: {}, lambda_cls: {}, lambda_shape: {}, lambda_offset: {}, lambda_iou: {},, num_samples: {}'.format(args.pos_target_topk, args.lambda_cls, args.lambda_shape, args.lambda_offset, args.lambda_iou, args.num_samples))
     logger.info('norm type: {}, head norm: {}, act_type: {}, using se block: {}'.format(args.norm_type, args.head_norm, args.act_type, args.se))
     start_epoch, model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args)
@@ -411,6 +431,5 @@ if __name__ == '__main__':
                 test_loader = val_loader, 
                 save_dir = annot_dir,
                 annot_path = os.path.join(annot_dir, 'annotation_validate.csv'), 
-                annot_excluded_path = 'evaluationScript/annotations_excluded.csv', 
                 seriesuids_path = os.path.join(annot_dir, 'seriesuid_validate.csv'), 
                 model = model)
