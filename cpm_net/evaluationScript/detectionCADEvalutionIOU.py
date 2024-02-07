@@ -1,6 +1,5 @@
 # coding:utf-8
 import os
-import math
 import logging
 from typing import Tuple, List, Any, Dict
 
@@ -9,7 +8,6 @@ from matplotlib.ticker import FixedFormatter
 import sklearn.metrics as skl_metrics
 import numpy as np
 from .NoduleFinding import NoduleFinding
-
 from .tools import csvTools
 
 logger = logging.getLogger(__name__)
@@ -187,7 +185,7 @@ def evaluateCAD(seriesUIDs: List[str],
                 output_dir: str,
                 all_gt_nodules: Dict[str, List[NoduleFinding]],
                 CADSystemName: str,
-                maxNumberOfCADMarks=-1,
+                max_num_of_nodule_candidate_in_series: int = -1,
                 iou_threshold = 0.1):
     '''
     function to evaluate a CAD algorithm
@@ -197,7 +195,6 @@ def evaluateCAD(seriesUIDs: List[str],
     @param allNodules: dictionary with all nodule annotations of all cases, keys of the dictionary are the seriesuids
     @param CADSystemName: name of the CAD system, to be used in filenames and on FROC curve
     '''
-    logger.info('IOU threshold: {}'.format(iou_threshold))
     nodule_output_file = open(os.path.join(output_dir,'CADAnalysis_{}.txt'.format(iou_threshold)),'w')
     nodule_output_file.write("\n")
     nodule_output_file.write((60 * "*") + "\n")
@@ -221,28 +218,18 @@ def evaluateCAD(seriesUIDs: List[str],
                 nodule.candidateID = i
                 nodules[nodule.candidateID] = nodule
                 i += 1
-
-        if (maxNumberOfCADMarks > 0):
-            # number of CAD marks, only keep must suspicous marks
-
-            if len(nodules.keys()) > maxNumberOfCADMarks:  
-                # make a list of all probabilities
-                probs = []
-                for keytemp, noduletemp in nodules.items():  
-                    probs.append(float(noduletemp.CADprobability))
-                probs.sort(reverse=True)  # sort from large to small
-                probThreshold = probs[maxNumberOfCADMarks]
-                
-                keep_nodules = {}
-                cur_num_of_keep_nodules = 0
-                for keytemp, noduletemp in nodules.items():
-                    if cur_num_of_keep_nodules >= maxNumberOfCADMarks:
-                        break
-                    if float(noduletemp.CADprobability) > probThreshold:
-                        keep_nodules[keytemp] = noduletemp
-                        cur_num_of_keep_nodules += 1
-
-                nodules = keep_nodules  
+        
+        # If number of candidate in a series of prediction is larger than max_num_of_nodule_candidate_in_series, keep 
+        # the top max_num_of_nodule_candidate_in_series candidates
+        if (max_num_of_nodule_candidate_in_series > 0) and (len(nodules.keys()) > max_num_of_nodule_candidate_in_series):
+            # sort the candidates by their probability
+            sorted_nodules = sorted(nodules.items(), key=lambda x: x[1].CADprobability, reverse=True) 
+            
+            keep_nodules = dict()
+            for i in range(max_num_of_nodule_candidate_in_series):
+                keep_nodules[sorted_nodules[i][0]] = sorted_nodules[i][1]
+            
+            nodules = keep_nodules  
         
         all_pred_cands[series_uid] = nodules  
         
@@ -493,7 +480,6 @@ def get_nodule(annot: List[Any],
     return nodule
 
 def collect_nodule_annotations(annotations: List[List[Any]],
-                               annotations_excluded: List[List[Any]],
                                seriesUIDs: List[str]) -> Dict[str, List[NoduleFinding]]:
     """Collects all nodule annotations from the annotations file and returns them in a dictionary
     
@@ -521,15 +507,6 @@ def collect_nodule_annotations(annotations: List[List[Any]],
                 nodule = get_nodule(annotation, header, state = "Included")
                 nodules.append(nodule)
                 numberOfIncludedNodules += 1
-        
-        # add excluded findings
-        header = annotations_excluded[0]
-        for annotation in annotations_excluded[1:]:
-            nodule_seriesuid = annotation[header.index(SERIESUID)]
-            
-            if seriesuid == nodule_seriesuid:
-                nodule = get_nodule(annotation, header, state = "Excluded")
-                nodules.append(nodule)
             
         allNodules[seriesuid] = nodules
         noduleCount += numberOfIncludedNodules
@@ -540,12 +517,10 @@ def collect_nodule_annotations(annotations: List[List[Any]],
     return allNodules
     
 def collect(annot_path: str, 
-            annot_excluded_path: str, 
             seriesuids_path: str) -> Tuple[Dict[str, List[NoduleFinding]], List[str]]:
     """Collects all nodule annotations from the annotations file and returns them in a dictionary
     Args:
         annot_path: path to annotations file
-        annot_excluded_path: path to annotations_excluded file
         seriesuids_path: path to seriesuids file
     Returns:
         A tuple of:
@@ -553,39 +528,39 @@ def collect(annot_path: str,
         - List of seriesuids
     """
     annotations = csvTools.readCSV(annot_path) 
-    annotations_excluded = csvTools.readCSV(annot_excluded_path)
     seriesUIDs_csv = csvTools.readCSV(seriesuids_path)
     
     seriesUIDs = []
     for seriesUID in seriesUIDs_csv:
         seriesUIDs.append(seriesUID[0])
 
-    allNodules = collect_nodule_annotations(annotations, annotations_excluded, seriesUIDs)  
+    allNodules = collect_nodule_annotations(annotations, seriesUIDs)  
     return allNodules, seriesUIDs
     
 def noduleCADEvaluation(annot_path: str,
-                        annot_excluded_path: str,
                         seriesuids_path: str,
-                        results_path: str,
+                        pred_results_path: str,
                         output_dir: str,
-                        iou_threshold: float):
-    '''
+                        iou_threshold: float,
+                        max_num_of_nodule_candidate_in_series: int = 100):
+    """
     function to load annotations and evaluate a CAD algorithm
-    @param annotations_filename: list of annotations
-    @param annotations_excluded_filename: list of annotations that are excluded from analysis
-    @param seriesuids_filename: list of CT images in seriesuids
-    @param results_filename: list of CAD marks with probabilities
-    @param outputDir: output directory
-    '''
+    Args:
+        annot_path: path to annotations file
+        seriesuids_path: path to seriesuids file
+        pred_results_path: path to prediction results file
+        output_dir: output directory
+        iou_threshold: iou threshold
+    """
     logger.info('Annotation path: {}'.format(annot_path))
-    all_gt_nodules, seriesUIDs = collect(annot_path, annot_excluded_path, seriesuids_path)
+    all_gt_nodules, seriesUIDs = collect(annot_path, seriesuids_path)
     
     out = evaluateCAD(seriesUIDs = seriesUIDs, 
-                      results_path = results_path, 
+                      results_path = pred_results_path, 
                       output_dir = output_dir, 
                       all_gt_nodules = all_gt_nodules,
-                      CADSystemName = os.path.splitext(os.path.basename(results_path))[0],
-                      maxNumberOfCADMarks = 100, 
+                      CADSystemName = os.path.splitext(os.path.basename(pred_results_path))[0],
+                      max_num_of_nodule_candidate_in_series = max_num_of_nodule_candidate_in_series, 
                       iou_threshold = iou_threshold)
     return out
 

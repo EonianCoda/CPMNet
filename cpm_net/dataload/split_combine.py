@@ -1,24 +1,24 @@
-import torch
+from typing import List
 import numpy as np
 
 
 class SplitComb():
-    def __init__(self, crop_size:list=[64, 128, 128], overlap:list=[16, 32, 32], pad_value:float=0):
-        self.side_len = [crop_size[0]-overlap[0], crop_size[1]-overlap[1], crop_size[2]-overlap[2]]
-        self.overlap = overlap
+    def __init__(self, crop_size: List[int]=[64, 128, 128], overlap_size:List[int]=[16, 32, 32], pad_value:float=0):
+        self.side_len = [crop_size[0]-overlap_size[0], crop_size[1]-overlap_size[1], crop_size[2]-overlap_size[2]]
+        self.overlap = overlap_size
         self.pad_value = pad_value
 
     def split(self, data):
-
         splits = []
-        z, h, w = data.shape
+        d, h, w = data.shape
 
-        nz = int(np.ceil(float(z) / self.side_len[0]))
+        # Number of splits in each dimension
+        nz = int(np.ceil(float(d) / self.side_len[0]))
         nh = int(np.ceil(float(h) / self.side_len[1]))
         nw = int(np.ceil(float(w) / self.side_len[2]))
 
         nzhw = [nz, nh, nw]
-        pad = [[0, int(nz * self.side_len[0] + self.overlap[0] - z)],
+        pad = [[0, int(nz * self.side_len[0] + self.overlap[0] - d)],
                 [0, int(nh * self.side_len[1] + self.overlap[1] - h)],
                 [0, int(nw * self.side_len[2] + self.overlap[2] - w)]]
 
@@ -40,10 +40,8 @@ class SplitComb():
         splits = np.concatenate(splits, 0)
         return splits, nzhw
 
-
-    def combine(self, output, nzhw=None):
-        assert nzhw is not None
-        nz,nh,nw = nzhw
+    def combine(self, output, nzhw):
+        nz, nh, nw = nzhw
         idx = 0
         for iz in range(nz):
             for ih in range(nh):
