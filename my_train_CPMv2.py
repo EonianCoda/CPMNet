@@ -270,12 +270,13 @@ def train(args,
                  'scheduler': scheduler_warm.state_dict()}
     torch.save(ckpt_path, os.path.join(model_save_folder, 'epoch_{}.pth'.format(epoch)))    
 
-def val(epoch: int,
+def val(model: nn.Module,
         test_loader: DataLoader,
+        epoch: int,
         save_dir: str,
         annot_path: str, 
         seriesuids_path: str,
-        model: nn.Module):
+        nms_keep_top_k: int = 40):
     def convert_to_standard_output(output: np.ndarray, spacing: torch.Tensor, name: str) -> List[List[Any]]:
         '''
         convert [id, prob, ctr_z, ctr_y, ctr_x, d, h, w] to
@@ -287,7 +288,6 @@ def val(epoch: int,
             preds.append([name, output[j, 4], output[j, 3], output[j, 2], output[j, 1], output[j, 7], output[j, 6], output[j, 5]])
         return preds
     
-    top_k = 40
     model.eval()
     split_comber = test_loader.dataset.splitcomb
     batch_size = 2 * args.batch_size * args.num_samples
@@ -319,7 +319,7 @@ def val(epoch: int,
         
         # NMS
         if len(output) > 0:
-            keep = nms_3D(output[:, 1:], overlap=0.05, top_k=top_k)
+            keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
             output = output[keep]
         output = output.numpy()
         
@@ -339,11 +339,12 @@ def val(epoch: int,
                                  seriesuids_path = seriesuids_path, 
                                  pred_results_path = pred_results_path,
                                  output_dir = outputDir,
+                                 image_spacing = IMAGE_SPACING,
                                  iou_threshold = 0.1)
     frocs = out_01[-1]
     logger.info('====> Epoch: {}'.format(epoch))
-    for s in range(len(frocs)):
-        logger.info('====> fps:{:.4f} iou 0.1 frocs:{:.4f}'.format(FP_ratios[s], frocs[s]))
+    for i in range(len(frocs)):
+        logger.info('====> fps:{:.4f} iou 0.1 frocs:{:.4f}'.format(FP_ratios[i], frocs[i]))
     logger.info('====> mean frocs:{:.4f}'.format(np.mean(np.array(frocs))))
 
 def convert_to_standard_csv(csv_path, save_dir, state, spacing):
