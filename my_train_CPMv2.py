@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from typing import List, Tuple, Any, Dict
 
-###network###
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
 from dataload.my_dataset_crop import DetDatasetCSVR, DetDatasetCSVRTest, collate_fn_dict
@@ -19,6 +18,7 @@ from torch.utils.data import DataLoader
 import torch.nn as nn
 import transform as transform
 import torchvision
+from torch.utils.tensorboard import SummaryWriter
 ###optimzer###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
@@ -36,6 +36,8 @@ DEFAULT_CROP_SIZE = [64, 128, 128]
 OVERLAY_RATIO = 0.25
 IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
+best_epoch = 0
+best_metric = 0.0
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -64,22 +66,33 @@ def get_args():
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=6, metavar='N', help='sampling batch number in per sample')
     
-    # detection-hyper-parameters
+    # val-hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
+    parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
+    parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.7, help='fixed probability threshold for validation')
     # network
     parser.add_argument('--norm_type', type=str, default='batchnorm', metavar='N', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', metavar='N', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', metavar='N', help='act type of network')
     parser.add_argument('--se', action='store_true', default=False, help='use se block')
     # other
+    parser.add_argument('--metric', type=str, default='f1_score', metavar='str', help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, metavar='N', help='how many batches to wait before logging training status')
     args = parser.parse_args()
     return args
+
+def write_metrics(metrics: dict, 
+                epoch: int,
+                prefix: str,
+                writer: SummaryWriter):
+    for metric, value in metrics.items():
+        writer.add_scalar(f'{prefix}/{metric}', value, global_step = epoch)
+    writer.flush()
 
 def prepare_training(args):
     # build model
@@ -109,9 +122,20 @@ def prepare_training(args):
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
         
         model_folder = os.path.join(args.resume_folder, 'model')
+        
+        # Resume best metric
+        if os.path.exists(os.path.join(args.resume_folder, 'best_epoch.txt')):
+            global best_epoch
+            global best_metric
+            with open(os.path.join(args.resume_folder, 'best_epoch.txt'), 'r') as f:
+                best_epoch = int(f.readline().split(':')[-1])
+                best_metric = float(f.readline().split(':')[-1])
+            logger.info('Best epoch: {}, Best metric: {:.4f}'.format(best_epoch, best_metric))
+        # Get the latest model
         model_names = os.listdir(model_folder)
         model_epochs = [int(name.split('.')[0].split('_')[-1]) for name in model_names]
         start_epoch = model_epochs[np.argmax(model_epochs)]
+        
         model_path = os.path.join(model_folder, f'epoch_{start_epoch}.pth')
         
         logger.info('Load model from "{}"'.format(model_path))
@@ -169,7 +193,8 @@ def training_data_prepare(args, blank_side=0):
                               collate_fn=collate_fn_dict,
                               num_workers=args.num_workers, 
                               pin_memory=args.pin_memory, 
-                              drop_last=True)
+                              drop_last=True,
+                              persistent_workers=True)
     logger.info("Number of training samples: {}".format(len(train_loader.dataset)))
     logger.info("Number of training batches: {}".format(len(train_loader)))
     return train_loader
@@ -201,6 +226,7 @@ def train(args,
           train_loader,
           scheduler_warm,
           device,
+          writer: SummaryWriter,
           epoch: int,
           exp_folder: str):
     model.train()
@@ -254,7 +280,15 @@ def train(args,
     logger.info('====> Epoch: {} train_shape_loss: {:.4f}'.format(epoch, avg_shape_loss.avg))
     logger.info('====> Epoch: {} train_offset_loss: {:.4f}'.format(epoch, avg_offset_loss.avg))
     logger.info('====> Epoch: {} train_iou_loss: {:.4f}'.format(epoch, avg_iou_loss.avg))
-
+    
+    metrics = {'loss': avg_loss.avg,
+                'cls_loss': avg_cls_loss.avg,
+                'shape_loss': avg_shape_loss.avg,
+                'offset_loss': avg_offset_loss.avg,
+                'iou_loss': avg_iou_loss.avg}
+    
+    write_metrics(metrics, epoch, 'train', writer)
+    
     # Remove the checkpoint of epoch % save_model_interval != 0
     model_save_folder = os.path.join(exp_folder, 'model')
     os.makedirs(model_save_folder, exist_ok=True)
@@ -273,9 +307,11 @@ def train(args,
 def val(model: nn.Module,
         test_loader: DataLoader,
         epoch: int,
+        exp_folder: str,
         save_dir: str,
         annot_path: str, 
         seriesuids_path: str,
+        writer: SummaryWriter = None,
         nms_keep_top_k: int = 40):
     def convert_to_standard_output(output: np.ndarray, spacing: torch.Tensor, name: str) -> List[List[Any]]:
         '''
@@ -290,7 +326,7 @@ def val(model: nn.Module,
     
     model.eval()
     split_comber = test_loader.dataset.splitcomb
-    batch_size = 2 * args.batch_size * args.num_samples
+    batch_size = args.batch_size * args.num_samples
     all_preds = []
     for sample in test_loader:
         data = sample['split_images'][0].to(device, non_blocking=True)
@@ -335,16 +371,42 @@ def val(model: nn.Module,
     outputDir = os.path.join(save_dir, pred_results_path.split('/')[-1].split('.')[0])
     os.makedirs(outputDir, exist_ok=True)
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    out_01 = nodule_evaluation(annot_path = annot_path, 
-                                 seriesuids_path = seriesuids_path, 
-                                 pred_results_path = pred_results_path,
-                                 output_dir = outputDir,
-                                 iou_threshold = 0.1)
+    out_01, fiexed_out = nodule_evaluation(annot_path = annot_path,
+                                            seriesuids_path = seriesuids_path, 
+                                            pred_results_path = pred_results_path,
+                                            output_dir = outputDir,
+                                            iou_threshold = args.val_iou_threshold,
+                                            fixed_prob_threshold=args.val_fixed_prob_threshold)
     frocs = out_01[-1]
     logger.info('====> Epoch: {}'.format(epoch))
     for i in range(len(frocs)):
         logger.info('====> fps:{:.4f} iou 0.1 frocs:{:.4f}'.format(FP_ratios[i], frocs[i]))
     logger.info('====> mean frocs:{:.4f}'.format(np.mean(np.array(frocs))))
+    
+    fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score = fiexed_out
+    metrics = {'tp': fixed_tp,
+                'fp': fixed_fp,
+                'fn': fixed_fn,
+                'recall': fixed_recall,
+                'precision': fixed_precision,
+                'f1_score': fixed_f1_score}
+    if metrics[args.metric] >= best_metric:
+        global best_metric
+        global best_epoch
+        best_metric = metrics[args.metric]
+        best_epoch = epoch
+        torch.save(model.state_dict(), os.path.join(exp_folder, 'best_model.pth'))
+        logger.info('====> Best model saved at epoch: {}'.format(epoch))
+        logger.info('====> Best metric {}: {:.4f}'.format(args.metric, best_metric))
+        with open(os.path.join(exp_folder, 'best_epoch.txt'), 'w') as f:
+            f.write('Epoch: {}\n'.format(best_epoch))
+            f.write('Metric: {}\n'.format(args.metric))
+            f.write('Value: {}\n'.format(best_metric))
+            f.write('-'*20)
+            for key, value in metrics.items():
+                f.write('{}: {:.4f}\n'.format(key, value))
+    if writer is not None:
+        write_metrics(metrics, epoch, 'val', writer)
 
 def convert_to_standard_csv(csv_path, save_dir, state, spacing):
     '''
@@ -390,9 +452,8 @@ if __name__ == '__main__':
         
     setup_logging(level='info', log_file=os.path.join(exp_folder, 'log.txt'))
     logger.info("The number of GPUs: {}".format(torch.cuda.device_count()))
-    args.cuda = torch.cuda.is_available()
-    device = torch.device("cuda" if args.cuda else "cpu")
-    kwargs = {'num_workers': args.num_workers, 'pin_memory': args.pin_memory} if args.cuda else {}
+    writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     write_yaml(os.path.join(exp_folder, 'setting.yaml'), vars(args))
     logger.info('The learning rate: {}'.format(args.lr))
@@ -418,18 +479,21 @@ if __name__ == '__main__':
                             state = state, 
                             spacing = IMAGE_SPACING)
     for epoch in range(start_epoch, args.epochs + 1):
-        # train(args = args,
-        #       model = model,
-        #       optimizer = optimizer,
-        #       scheduler_warm = scheduler_warm,
-        #       train_loader = train_loader, 
-        #       device = device,
-        #       epoch = epoch, 
-        #       exp_folder = exp_folder)
-        if epoch >= 0: 
+        train(args = args,
+              model = model,
+              optimizer = optimizer,
+              scheduler_warm = scheduler_warm,
+              train_loader = train_loader, 
+              device = device,
+              writer = writer,
+              epoch = epoch, 
+              exp_folder = exp_folder)
+        if epoch >= args.start_val_epoch: 
             val(epoch = epoch,
                 test_loader = val_loader, 
                 save_dir = annot_dir,
+                exp_folder=exp_folder,
+                writer = writer,
                 annot_path = os.path.join(annot_dir, 'annotation_validate.csv'), 
                 seriesuids_path = os.path.join(annot_dir, 'seriesuid_validate.csv'), 
                 model = model)

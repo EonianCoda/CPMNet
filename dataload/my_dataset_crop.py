@@ -63,6 +63,8 @@ class DetDatasetCSVR(Dataset):
         series_infos = load_series_list(series_list_path)
         for folder, series_name in series_infos:
             label_path = os.path.join(folder, 'mask', f'{series_name}_nodule_count_crop.json')
+            dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
+            self.dicom_paths.append(dicom_path)
             
             with open(label_path, 'r') as f:
                 info = json.load(f)
@@ -71,21 +73,22 @@ class DetDatasetCSVR(Dataset):
             bboxes = np.array(bboxes)
 
             if len(bboxes) == 0:
-                continue
-            dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
-            self.dicom_paths.append(dicom_path)
-            # calculate center of bboxes
-            all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
-            all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
+                label = {'all_loc': np.zeros((0, 3), dtype=np.float32),
+                        'all_rad': np.zeros((0, 3), dtype=np.float32),
+                        'all_cls': np.zeros((0,), dtype=np.int32)}
+            else:
+                # calculate center of bboxes
+                all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
+                all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
 
-            all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
-            all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
-            all_rad = all_rad * self.image_spacing # (z, y, x)
-            all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
-            
-            label = {'all_loc': all_loc, 
-                    'all_rad': all_rad,
-                    'all_cls': all_cls}
+                all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
+                all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
+                all_rad = all_rad * self.image_spacing # (z, y, x)
+                all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
+                
+                label = {'all_loc': all_loc, 
+                        'all_rad': all_rad,
+                        'all_cls': all_cls}
             self.labels.append(label)
 
         self.transform_post = transform_post

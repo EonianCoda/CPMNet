@@ -83,7 +83,7 @@ class InstanceCrop(object):
                 for x in x_range:
                     crop_centers.append(np.array([z, y, x]))
 
-        if self.instance_crop:
+        if self.instance_crop and len(instance_loc) > 0:
             if self.rand_trans is not None:
                 instance_crop = instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans,size=3)
             else:

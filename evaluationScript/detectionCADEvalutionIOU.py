@@ -202,7 +202,8 @@ def evaluateCAD(seriesUIDs: List[str],
                 output_dir: str,
                 all_gt_nodules: Dict[str, List[NoduleFinding]],
                 max_num_of_nodule_candidate_in_series: int = -1,
-                iou_threshold = 0.1):
+                iou_threshold = 0.1,
+                fixed_prob_threshold = 0.8):
     """
     function to evaluate a CAD algorithm
     """
@@ -321,7 +322,6 @@ def evaluateCAD(seriesUIDs: List[str],
                 FROC_prob_list.append(min_prob_value)  
                 
                 FROC_is_FN_list.append(True)  
-                
                 # For FN
                 FN_list_file.write("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s\n" % (series_uid, gt_nodule.id, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d), str(-1)))
                 FN_diameter.append([w, h, d])
@@ -355,21 +355,21 @@ def evaluateCAD(seriesUIDs: List[str],
     for idx, whd in enumerate(FN_diameter):
         nodule_output_file.write("    FN_%d: w:%.9f, h:%.9f, d:%.9f sericeuid:%s\n" % (idx+1, whd[0], whd[1], whd[2], FN_seriesuid[idx]))
     
-    CLS_PROB_THRESHOLDS = 0.9
     fixed_tp, fixed_fp, fixed_fn = 0, 0, 0
     for is_pos, prob, is_fn in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list):
-        if is_fn:
+        if is_fn or (is_pos == 1.0 and prob < fixed_prob_threshold):
             fixed_fn += 1
-        elif is_pos == 1.0 and prob > CLS_PROB_THRESHOLDS:
+        elif is_pos == 1.0 and prob >= fixed_prob_threshold:
             fixed_tp += 1
-        elif is_pos == 0.0 and prob > CLS_PROB_THRESHOLDS:
+        elif is_pos == 0.0 and prob >= fixed_prob_threshold:
             fixed_fp += 1
     
-    fixed_recall = fixed_tp / (fixed_tp + fixed_fn)
-    fixed_precision = fixed_tp / (fixed_tp + fixed_fp)
-    f1_score = 2 * fixed_precision * fixed_recall / (fixed_precision + fixed_recall)
+    fixed_recall = fixed_tp / max(fixed_tp + fixed_fn, 1e-6)
+    fixed_precision = fixed_tp / max(fixed_tp + fixed_fp, 1e-6)
+    fixed_f1_score = 2 * fixed_precision * fixed_recall / (fixed_precision + fixed_recall)
+    logger.info('Fixed threshold: {}'.format(fixed_prob_threshold))
     logger.info('TP = {}, FP = {}, FN = {}'.format(fixed_tp, fixed_fp, fixed_fn))
-    logger.info('Fixed recall: {:.4f}, fixed precision: {:.4f}, f1 score: {:.4f}'.format(fixed_recall, fixed_precision, f1_score))
+    logger.info('Fixed recall: {:.4f}, fixed precision: {:.4f}, f1 score: {:.4f}'.format(fixed_recall, fixed_precision, fixed_f1_score))
     
     # compute FROC
     fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
@@ -423,9 +423,9 @@ def evaluateCAD(seriesUIDs: List[str],
                 nodule_output_file.write(str(sens_bs_mean[index]))
                 sens_points.append(sens_bs_mean[index])
                 prec_points.append(prec_bs_mean[index])
-                logger.info('{} FP/Scans: sen = {:.2f}, prec = {:.2f}'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
+                # logger.info('{} FP/Scans: sen = {:.2f}, prec = {:.2f}'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
                 total_sens += sens_bs_mean[index]
-            logger.info('Froc_mean: {}'.format(total_sens / len(FPS)))
+            # logger.info('Froc_mean: {}'.format(total_sens / len(FPS)))
             nodule_output_file.write("\n")
             nodule_output_file.write("Froc_mean")
             nodule_output_file.write(str(total_sens / len(FPS)))
@@ -468,7 +468,7 @@ def evaluateCAD(seriesUIDs: List[str],
 
         plt.savefig(os.path.join(output_dir, "froc_{}.png".format(iou_threshold)), bbox_inches=0, dpi=300)
 
-    return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points)
+    return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score)
     
 def get_nodule(annot: List[Any], 
                header: List[str]) -> NoduleFinding:
@@ -549,6 +549,7 @@ def nodule_evaluation(annot_path: str,
                     pred_results_path: str,
                     output_dir: str,
                     iou_threshold: float,
+                    fixed_prob_threshold: float = 0.8,
                     max_num_of_nodule_candidate_in_series: int = 100):
     """
     function to load annotations and evaluate a CAD algorithm
@@ -561,13 +562,14 @@ def nodule_evaluation(annot_path: str,
     """
     all_gt_nodules, seriesUIDs = collect(annot_path, seriesuids_path)
     
-    out = evaluateCAD(seriesUIDs = seriesUIDs, 
-                      results_path = pred_results_path, 
-                      output_dir = output_dir, 
-                      all_gt_nodules = all_gt_nodules,
-                      max_num_of_nodule_candidate_in_series = max_num_of_nodule_candidate_in_series, 
-                      iou_threshold = iou_threshold)
-    return out
+    out, fixed_out = evaluateCAD(seriesUIDs = seriesUIDs, 
+                                results_path = pred_results_path, 
+                                output_dir = output_dir, 
+                                all_gt_nodules = all_gt_nodules,
+                                max_num_of_nodule_candidate_in_series = max_num_of_nodule_candidate_in_series, 
+                                fixed_prob_threshold=fixed_prob_threshold,
+                                iou_threshold = iou_threshold)
+    return out, fixed_out
 
 if __name__ == '__main__':
     annotations_filename          = './annotations/annotations.csv'
