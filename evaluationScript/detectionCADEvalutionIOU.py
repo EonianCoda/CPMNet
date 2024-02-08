@@ -258,7 +258,7 @@ def evaluateCAD(seriesUIDs: List[str],
     FROC_prob_list = []
     FROC_series_uids = []
     FROC_is_FN_list = []
-
+    FROC_nodule_list = []
     # -- loop over the cases
     FN_diameter = []
     FN_seriesuid = []
@@ -308,13 +308,12 @@ def evaluateCAD(seriesUIDs: List[str],
             
             FROC_is_pos_list.append(1.0) 
             FROC_series_uids.append(series_uid)  
-            
+            FROC_nodule_list.append(gt_nodule)
             if len(nodule_matches) > 0: # at least one candidate overlaps with the ground truth nodule
                 tp_count += 1  
                 # append the sample with the highest probability for the FROC analysis
                 max_prob = max([float(candidate.CADprobability) for candidate in nodule_matches])
                 FROC_prob_list.append(float(max_prob))  
-                
                 FROC_is_FN_list.append(False)
             else: # no candidate overlaps with the ground truth nodule
                 fn_count += 1
@@ -334,6 +333,7 @@ def evaluateCAD(seriesUIDs: List[str],
             FROC_prob_list.append(float(candidate.CADprobability))
             FROC_series_uids.append(series_uid)
             FROC_is_FN_list.append(False)
+            FROC_nodule_list.append(candidate)
 
     # Statistics that are computed
     nodule_output_file.write("Candidate detection results:\n")
@@ -356,21 +356,37 @@ def evaluateCAD(seriesUIDs: List[str],
         nodule_output_file.write("    FN_%d: w:%.9f, h:%.9f, d:%.9f sericeuid:%s\n" % (idx+1, whd[0], whd[1], whd[2], FN_seriesuid[idx]))
     
     fixed_tp, fixed_fp, fixed_fn = 0, 0, 0
-    for is_pos, prob, is_fn in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list):
+    
+    
+    classified_metrics = {'benign': [0 ,0, 0],
+                        'probably_benign': [0 ,0, 0],
+                        'probably_suspicious': [0 ,0, 0],
+                        'suspicious': [0 ,0, 0]}
+    
+    for is_pos, prob, is_fn, nodule in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, FROC_nodule_list):
         if is_fn or (is_pos == 1.0 and prob < fixed_prob_threshold):
             fixed_fn += 1
+            classified_metrics[nodule.nodule_type][2] += 1
         elif is_pos == 1.0 and prob >= fixed_prob_threshold:
             fixed_tp += 1
+            classified_metrics[nodule.nodule_type][0] += 1
         elif is_pos == 0.0 and prob >= fixed_prob_threshold:
             fixed_fp += 1
+            classified_metrics[nodule.nodule_type][1] += 1
     
     fixed_recall = fixed_tp / max(fixed_tp + fixed_fn, 1e-6)
     fixed_precision = fixed_tp / max(fixed_tp + fixed_fp, 1e-6)
     fixed_f1_score = 2 * fixed_precision * fixed_recall / (fixed_precision + fixed_recall)
     logger.info('Fixed threshold: {}'.format(fixed_prob_threshold))
-    logger.info('TP = {}, FP = {}, FN = {}'.format(fixed_tp, fixed_fp, fixed_fn))
-    logger.info('Fixed recall: {:.4f}, fixed precision: {:.4f}, f1 score: {:.4f}'.format(fixed_recall, fixed_precision, fixed_f1_score))
     
+    template = '{:20s}: Recall={:.3f}, Precision={:.3f}, F1={:.3f}, TP={:4d}, FP={:4d}, FN={:4d}'
+    for nodule_type, metrics in classified_metrics.items():
+        tp, fp, fn = metrics
+        recall = tp / max(tp + fn, 1e-6)
+        precision = tp / max(tp + fp, 1e-6)
+        f1_score = 2 * precision * recall / max(precision + recall, 1e-6)
+        logger.info(template.format(nodule_type, recall, precision, f1_score, tp, fp, fn))
+    logger.info(template.format('All', fixed_recall, fixed_precision, fixed_f1_score, fixed_tp, fixed_fp, fixed_fn))
     # compute FROC
     fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
                                                     FROC_prob_list = FROC_prob_list, 
