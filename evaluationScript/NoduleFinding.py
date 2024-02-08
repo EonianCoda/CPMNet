@@ -41,7 +41,7 @@ class NoduleFinding(object):
             r = max(self.w, self.h, self.d) / 2
             self.area = 4/3 * math.pi * r**3
         elif self.area_method == 2:
-            r = (self.w * self.h * self.d) / 6.0
+            r = (self.w + self.h + self.d) / 6.0
             self.area = 4/3 * math.pi * r**3
             
         self.nodule_type = get_nodule_type(self.area)

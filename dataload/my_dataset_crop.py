@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 lesion_label_default = ['aneurysm']
 
 BBOXES = 'bboxes'
+USE_BG = False
 
 def load_series_list(series_list_path: str):
     """
@@ -64,7 +65,6 @@ class DetDatasetCSVR(Dataset):
         for folder, series_name in series_infos:
             label_path = os.path.join(folder, 'mask', f'{series_name}_nodule_count_crop.json')
             dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
-            self.dicom_paths.append(dicom_path)
             
             with open(label_path, 'r') as f:
                 info = json.load(f)
@@ -73,10 +73,15 @@ class DetDatasetCSVR(Dataset):
             bboxes = np.array(bboxes)
 
             if len(bboxes) == 0:
+                if not USE_BG:
+                    continue
+                
+                self.dicom_paths.append(dicom_path)
                 label = {'all_loc': np.zeros((0, 3), dtype=np.float32),
                         'all_rad': np.zeros((0, 3), dtype=np.float32),
                         'all_cls': np.zeros((0,), dtype=np.int32)}
             else:
+                self.dicom_paths.append(dicom_path)
                 # calculate center of bboxes
                 all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
                 all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)

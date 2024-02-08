@@ -142,7 +142,7 @@ def prepare_training(args):
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
         scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
 
         state_dict = torch.load(model_path, map_location=device)
@@ -157,13 +157,13 @@ def prepare_training(args):
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
         scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
     else:
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=300, eta_min=1e-6)
+        scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
         scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
     
     return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
@@ -390,9 +390,9 @@ def val(model: nn.Module,
                 'recall': fixed_recall,
                 'precision': fixed_precision,
                 'f1_score': fixed_f1_score}
+    global best_metric
+    global best_epoch
     if metrics[args.metric] >= best_metric:
-        global best_metric
-        global best_epoch
         best_metric = metrics[args.metric]
         best_epoch = epoch
         torch.save(model.state_dict(), os.path.join(exp_folder, 'best_model.pth'))
