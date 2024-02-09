@@ -153,7 +153,10 @@ def prepare_training(args):
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         state_dict = torch.load(args.pretrained_model_path)
-        model.load_state_dict(state_dict['state_dict'])
+        if 'state_dict' not in state_dict:
+            model.load_state_dict(state_dict)
+        else:
+            model.load_state_dict(state_dict['state_dict'])
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
