@@ -405,7 +405,7 @@ def val(model: nn.Module,
             f.write('Epoch: {}\n'.format(best_epoch))
             f.write('Metric: {}\n'.format(args.metric))
             f.write('Value: {}\n'.format(best_metric))
-            f.write('-'*20)
+            f.write('-'*20 + '\n')
             for key, value in metrics.items():
                 f.write('{}: {:.4f}\n'.format(key, value))
     if writer is not None:
