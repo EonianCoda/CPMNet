@@ -8,6 +8,7 @@ def get_nodule_type(nodule_size: float) -> str:
     for key in nodule_size_rangs:
         if nodule_size >= nodule_size_rangs[key][0] and (nodule_size < nodule_size_rangs[key][1] or nodule_size_rangs[key][1] == -1):
             return key
+    return 'benign'
 
 class NoduleFinding(object):
     '''

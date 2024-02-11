@@ -95,7 +95,10 @@ def prepare_validation(args):
     
     logger.info('Load model from "{}"'.format(args.model_path))
     state_dict = torch.load(args.model_path)
-    model.load_state_dict(state_dict['state_dict'])
+    if 'state_dict' not in state_dict:
+        model.load_state_dict(state_dict)
+    else:
+        model.load_state_dict(state_dict['state_dict'])
     model.to(device)
     
     return model, detection_postprocess
