@@ -6,7 +6,6 @@ import argparse
 from typing import List
 
 BBOXES = 'bboxes'
-# SPACING = [1.0, 0.8, 0.8] # (z, y, x)
 
 def get_args():
     parser = argparse.ArgumentParser()

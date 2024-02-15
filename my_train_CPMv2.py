@@ -2,7 +2,6 @@
 from __future__ import print_function
 import argparse
 import torch
-import math
 import os
 import logging
 import numpy as np
@@ -19,17 +18,16 @@ import torch.nn as nn
 import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
-###optimzer###
+### optimzer
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
-###postprocessing###
-from utils.box_utils import nms_3D
-from evaluationScript.detectionCADEvalutionIOU import nodule_evaluation
-
+### postprocessing
+from logic.train import train, write_metrics, save_states
+from logic.val import val
+from inference.evaluation import DEFAULT_FP_RATIOS
+### utils
 from utils.logs import setup_logging
-from utils.average_meter import AverageMeter
-from utils.utils import init_seed, get_local_time_in_taiwan, get_progress_bar, write_yaml, load_yaml
-from utils.generate_annot_csv_from_series_list import generate_annot_csv
+from utils.utils import init_seed, get_local_time_in_taiwan, write_yaml, load_yaml
 
 SAVE_ROOT = './save'
 DEFAULT_CROP_SIZE = [64, 128, 128]
@@ -83,16 +81,10 @@ def get_args():
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, metavar='N', help='how many batches to wait before logging training status')
+    parser.add_argument('--best_model_metric', type=str, default='sens', metavar='str', help='best model metric')
+    parser.add_argument('--best_model_fp_ratio', type=float, default=2.0, metavar='N', help='best model fp ratio')
     args = parser.parse_args()
     return args
-
-def write_metrics(metrics: dict, 
-                epoch: int,
-                prefix: str,
-                writer: SummaryWriter):
-    for metric, value in metrics.items():
-        writer.add_scalar(f'{prefix}/{metric}', value, global_step = epoch)
-    writer.flush()
 
 def prepare_training(args):
     # build model
@@ -171,7 +163,7 @@ def prepare_training(args):
     
     return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
 
-def training_data_prepare(args, blank_side=0):
+def get_train_loader(args, blank_side=0):
     crop_size = args.crop_size
     transform_list_train = [transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
                             transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=False, trans_zy=False),
@@ -202,7 +194,7 @@ def training_data_prepare(args, blank_side=0):
     logger.info("Number of training batches: {}".format(len(train_loader)))
     return train_loader
 
-def test_val_data_prepare(args):
+def get_val_loader(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
     
@@ -212,204 +204,6 @@ def test_val_data_prepare(args):
     logger.info("Number of test samples: {}".format(len(test_loader.dataset)))
     logger.info("Number of test batches: {}".format(len(test_loader)))
     return test_loader
-
-def train_one_step(args, model, sample, device):
-    image = sample['image'].to(device, non_blocking=True) # z, y, x
-    labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
-    
-    # Compute loss
-    cls_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
-    cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-    loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-    return loss, (cls_loss, shape_loss, offset_loss, iou_loss)
-
-def train(args,
-          model,
-          optimizer,
-          train_loader,
-          scheduler_warm,
-          device,
-          writer: SummaryWriter,
-          epoch: int,
-          exp_folder: str):
-    model.train()
-    scheduler_warm.step()
-    
-    avg_cls_loss = AverageMeter()
-    avg_shape_loss = AverageMeter()
-    avg_offset_loss = AverageMeter()
-    avg_iou_loss = AverageMeter()
-    avg_loss = AverageMeter()
-    
-    # mixed precision training
-    mixed_precision = args.mixed_precision
-    if mixed_precision:
-        scaler = torch.cuda.amp.GradScaler()
-        
-    # get_progress_bar
-    progress_bar = get_progress_bar('Train', len(train_loader))
-    for batch_idx, sample in enumerate(train_loader):
-        optimizer.zero_grad(set_to_none=True)
-        if mixed_precision:
-            with torch.cuda.amp.autocast():
-                loss, (cls_loss, shape_loss, offset_loss, iou_loss) = train_one_step(args, model, sample, device)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss, (cls_loss, shape_loss, offset_loss, iou_loss) = train_one_step(args, model, sample, device)
-            loss.backward()
-            optimizer.step()
-        
-        # Update history
-        avg_cls_loss.update(cls_loss.item() * args.lambda_cls)
-        avg_shape_loss.update(shape_loss.item() * args.lambda_shape)
-        avg_offset_loss.update(offset_loss.item() * args.lambda_offset)
-        avg_iou_loss.update(iou_loss.item() * args.lambda_iou)
-        avg_loss.update(loss.item())
-        
-        if progress_bar is not None:
-            progress_bar.set_postfix(loss = avg_loss.avg,
-                                    cls_Loss = avg_cls_loss.avg,
-                                    shape_loss = avg_shape_loss.avg,
-                                    offset_loss = avg_offset_loss.avg,
-                                    giou_loss = avg_iou_loss.avg)
-            progress_bar.update()
-
-    if progress_bar is not None:
-        progress_bar.close()
-
-    logger.info('====> Epoch: {} train_cls_loss: {:.4f}'.format(epoch, avg_cls_loss.avg))
-    logger.info('====> Epoch: {} train_shape_loss: {:.4f}'.format(epoch, avg_shape_loss.avg))
-    logger.info('====> Epoch: {} train_offset_loss: {:.4f}'.format(epoch, avg_offset_loss.avg))
-    logger.info('====> Epoch: {} train_iou_loss: {:.4f}'.format(epoch, avg_iou_loss.avg))
-    
-    metrics = {'loss': avg_loss.avg,
-                'cls_loss': avg_cls_loss.avg,
-                'shape_loss': avg_shape_loss.avg,
-                'offset_loss': avg_offset_loss.avg,
-                'iou_loss': avg_iou_loss.avg}
-    
-    write_metrics(metrics, epoch, 'train', writer)
-    
-    # Remove the checkpoint of epoch % save_model_interval != 0
-    model_save_folder = os.path.join(exp_folder, 'model')
-    os.makedirs(model_save_folder, exist_ok=True)
-    for i in range(epoch):
-        ckpt_path = os.path.join(model_save_folder, 'epoch_{}.pth'.format(i))
-        if (i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path):
-            os.remove(ckpt_path)
-    
-    # Save checkpoint    
-    ckpt_path = {'epoch': epoch,
-                 'state_dict': model.state_dict(),
-                 'optimizer': optimizer.state_dict(),
-                 'scheduler': scheduler_warm.state_dict()}
-    torch.save(ckpt_path, os.path.join(model_save_folder, 'epoch_{}.pth'.format(epoch)))    
-
-def val(model: nn.Module,
-        test_loader: DataLoader,
-        epoch: int,
-        exp_folder: str,
-        save_dir: str,
-        annot_path: str, 
-        seriesuids_path: str,
-        writer: SummaryWriter = None,
-        nms_keep_top_k: int = 40):
-    def convert_to_standard_output(output: np.ndarray, spacing: torch.Tensor, name: str) -> List[List[Any]]:
-        '''
-        convert [id, prob, ctr_z, ctr_y, ctr_x, d, h, w] to
-        ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
-        '''
-        preds = []
-        spacing = np.array([spacing[0].numpy(), spacing[1].numpy(), spacing[2].numpy()]).reshape(-1, 3)
-        for j in range(output.shape[0]):
-            preds.append([name, output[j, 4], output[j, 3], output[j, 2], output[j, 1], output[j, 7], output[j, 6], output[j, 5]])
-        return preds
-    
-    model.eval()
-    split_comber = test_loader.dataset.splitcomb
-    batch_size = args.batch_size * args.num_samples
-    all_preds = []
-    for sample in test_loader:
-        data = sample['split_images'][0].to(device, non_blocking=True)
-        nzhw = sample['nzhw']
-        name = sample['file_name'][0]
-        spacing = sample['spacing'][0]
-        outputlist = []
-        
-        for i in range(int(math.ceil(data.size(0) / batch_size))):
-            end = (i + 1) * batch_size
-            if end > data.size(0):
-                end = data.size(0)
-            input = data[i * batch_size:end]
-            with torch.no_grad():
-                output = model(input)
-                output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-            outputlist.append(output.data.cpu().numpy())
-            
-        output = np.concatenate(outputlist, 0)
-        output = split_comber.combine(output, nzhw=nzhw)
-        output = torch.from_numpy(output).view(-1, 8)
-        
-        # Remove the padding
-        object_ids = output[:, 0] != -1.0
-        output = output[object_ids]
-        
-        # NMS
-        if len(output) > 0:
-            keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
-            output = output[keep]
-        output = output.numpy()
-        
-        preds = convert_to_standard_output(output, spacing, name) # convert to ['seriesuid', 'coordX', 'coordY', 'coordZ', 'radius', 'probability']
-        all_preds.extend(preds)
-        
-    # Save the results to csv
-    header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
-    df = pd.DataFrame(all_preds, columns=header)
-    pred_results_path = os.path.join(save_dir, 'predict_epoch_{}.csv'.format(epoch))
-    df.to_csv(pred_results_path, index=False)
-    
-    outputDir = os.path.join(save_dir, pred_results_path.split('/')[-1].split('.')[0])
-    os.makedirs(outputDir, exist_ok=True)
-    FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    out_01, fiexed_out = nodule_evaluation(annot_path = annot_path,
-                                            seriesuids_path = seriesuids_path, 
-                                            pred_results_path = pred_results_path,
-                                            output_dir = outputDir,
-                                            iou_threshold = args.val_iou_threshold,
-                                            fixed_prob_threshold=args.val_fixed_prob_threshold)
-    frocs = out_01[-1]
-    logger.info('====> Epoch: {}'.format(epoch))
-    for i in range(len(frocs)):
-        logger.info('====> fps:{:.4f} iou 0.1 frocs:{:.4f}'.format(FP_ratios[i], frocs[i]))
-    logger.info('====> mean frocs:{:.4f}'.format(np.mean(np.array(frocs))))
-    
-    fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score = fiexed_out
-    metrics = {'tp': fixed_tp,
-                'fp': fixed_fp,
-                'fn': fixed_fn,
-                'recall': fixed_recall,
-                'precision': fixed_precision,
-                'f1_score': fixed_f1_score}
-    global best_metric
-    global best_epoch
-    if metrics[args.metric] >= best_metric:
-        best_metric = metrics[args.metric]
-        best_epoch = epoch
-        torch.save(model.state_dict(), os.path.join(exp_folder, 'best_model.pth'))
-        logger.info('====> Best model saved at epoch: {}'.format(epoch))
-        logger.info('====> Best metric {}: {:.4f}'.format(args.metric, best_metric))
-        with open(os.path.join(exp_folder, 'best_epoch.txt'), 'w') as f:
-            f.write('Epoch: {}\n'.format(best_epoch))
-            f.write('Metric: {}\n'.format(args.metric))
-            f.write('Value: {}\n'.format(best_metric))
-            f.write('-'*20 + '\n')
-            for key, value in metrics.items():
-                f.write('{}: {:.4f}\n'.format(key, value))
-    if writer is not None:
-        write_metrics(metrics, epoch, 'val', writer)
 
 def convert_to_standard_csv(csv_path, save_dir, state, spacing):
     '''
@@ -451,7 +245,6 @@ if __name__ == '__main__':
                                                 cur_time.hour, 
                                                 cur_time.minute)
         exp_folder = os.path.join(SAVE_ROOT, timestamp + '_' + args.exp_name)
-        setup_logging(level='info', log_file=os.path.join(exp_folder, 'log.txt'))
         
     setup_logging(level='info', log_file=os.path.join(exp_folder, 'log.txt'))
     logger.info("The number of GPUs: {}".format(torch.cuda.device_count()))
@@ -461,42 +254,65 @@ if __name__ == '__main__':
     write_yaml(os.path.join(exp_folder, 'setting.yaml'), vars(args))
     logger.info('The learning rate: {}'.format(args.lr))
     logger.info('The batch size: {}'.format(args.batch_size))
-    
     logger.info('The Crop Size: [{}, {}, {}]'.format(args.crop_size[0], args.crop_size[1], args.crop_size[2]))
     logger.info('positive_target_topk: {}, lambda_cls: {}, lambda_shape: {}, lambda_offset: {}, lambda_iou: {},, num_samples: {}'.format(args.pos_target_topk, args.lambda_cls, args.lambda_shape, args.lambda_offset, args.lambda_iou, args.num_samples))
     logger.info('norm type: {}, head norm: {}, act_type: {}, using se block: {}'.format(args.norm_type, args.head_norm, args.act_type, args.se))
     start_epoch, model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args)
 
+    if args.best_model_metric not in ['f1','sens','prec']:
+        raise ValueError('The best model metric should be in ["f1","sens","prec"], but got {}'.format(args.best_model_metric))
+    if args.best_model_fp_ratio not in DEFAULT_FP_RATIOS:
+        raise ValueError('The best model fp ratio should be in {}, but got {}'.format(DEFAULT_FP_RATIOS, args.best_model_fp_ratio))
+    
     init_seed(args.seed)
+    train_loader = get_train_loader(args)
+    val_loader = get_val_loader(args)
     
-    train_loader = training_data_prepare(args)
-    val_loader = test_val_data_prepare(args)
-    
-    annot_dir = os.path.join(exp_folder, 'annotation')
-    state = 'validate'
-    origin_annot_path = os.path.join(annot_dir, 'origin_annotation_{}.csv'.format(state))
-    annot_path = os.path.join(annot_dir, 'annotation_{}.csv'.format(state))
-    generate_annot_csv(args.val_set, origin_annot_path, spacing=IMAGE_SPACING)
-    convert_to_standard_csv(csv_path = origin_annot_path, 
-                            save_dir = annot_dir, 
-                            state = state, 
-                            spacing = IMAGE_SPACING)
+    model_save_folder = os.path.join(exp_folder, 'model')
+    os.makedirs(model_save_folder, exist_ok=True)
     for epoch in range(start_epoch, args.epochs + 1):
-        train(args = args,
-              model = model,
-              optimizer = optimizer,
-              scheduler_warm = scheduler_warm,
-              train_loader = train_loader, 
-              device = device,
-              writer = writer,
-              epoch = epoch, 
-              exp_folder = exp_folder)
+        train_metrics = train(args = args,
+                            model = model,
+                            optimizer = optimizer,
+                            scheduler_warm = scheduler_warm,
+                            train_loader = train_loader, 
+                            device = device)
+        write_metrics(train_metrics, epoch, 'Train', writer)
+        for key, value in train_metrics.items():
+            logger.info('====> Epoch: {} loss: {:.4f}'.format(epoch, value))
+        # Remove the checkpoint of epoch % save_model_interval != 0
+        for i in range(epoch):
+            ckpt_path = os.path.join(model_save_folder, 'epoch_{}.pth'.format(i))
+            if (i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path):
+                os.remove(ckpt_path)
+        save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, f'epoch_{epoch}.pth'))
+        
         if epoch >= args.start_val_epoch: 
-            val(epoch = epoch,
-                test_loader = val_loader, 
-                save_dir = annot_dir,
-                exp_folder=exp_folder,
-                writer = writer,
-                annot_path = os.path.join(annot_dir, 'annotation_validate.csv'), 
-                seriesuids_path = os.path.join(annot_dir, 'seriesuid_validate.csv'), 
-                model = model)
+            all_metrics, inter_btp_mean, inter_points = val(args = args,
+                                                            model = model,
+                                                            val_loader = val_loader,
+                                                            detection_postprocess = detection_postprocess,
+                                                            device = device,
+                                                            epoch = epoch,
+                                                            image_spacing = IMAGE_SPACING,
+                                                            series_list_path = args.val_set)
+            idx = DEFAULT_FP_RATIOS.index(args.best_model_fp_ratio)
+            if inter_points[args.best_model_metric][idx] > best_metric:
+                best_metric = inter_points[args.best_model_metric][idx]
+                best_epoch = epoch
+                save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, 'best.pth'))
+                with open(os.path.join(exp_folder, 'best_epoch.txt'), 'w') as f:
+                    f.write('best_epoch: {}\n'.format(best_epoch))
+                    f.write('best_metric: {:.4f}\n'.format(best_metric))
+            
+            for i, fp_ratio in enumerate(DEFAULT_FP_RATIOS):
+                line = '====> fp_ratio:{:.4f}'.format(fp_ratio)
+                for key, value in inter_points.items():
+                    line += ' {}: {:.4f}'.format(key, value[i])
+                    write_metrics(value[i], epoch, 'Val/fp_ratio_{:.3f}_{}'.format(fp_ratio, key), writer)
+                logger.info(line)
+            
+            line = '====> '
+            for key, value in inter_points.items():
+                line += ' {mean }: {:.4f}'.format(key, np.mean(value))
+            logger.info(line)
