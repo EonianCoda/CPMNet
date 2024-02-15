@@ -13,8 +13,7 @@ class NoduleFinding(object):
     '''
     Represents a nodule
     '''
-    def __init__(self, coord_x=None, coord_y=None, coord_z=None, 
-            pred_prob=None, w=None, h=None, d=None, iou=None):
+    def __init__(self, coord_x, coord_y, coord_z, w, h, d, pred_prob=None, iou=0.0):
 
         # set the variables and convert them to the correct type
         
@@ -28,7 +27,10 @@ class NoduleFinding(object):
                      self.coord_y - self.h/2, self.coord_y + self.h/2,
                      self.coord_z - self.d/2, self.coord_z + self.d/2]
         
-        self.pred_prob = float(pred_prob)
+        if pred_prob is not None:
+            self.pred_prob = float(pred_prob)
+        else:
+            self.pred_prob = None
         self.iou = iou
         
         self.area = None

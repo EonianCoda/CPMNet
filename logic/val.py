@@ -73,7 +73,6 @@ def val(args,
         
         preds = convert_to_standard_output(output, spacing, name) # convert to ['seriesuid', 'coordX', 'coordY', 'coordZ', 'radius', 'probability']
         all_preds.extend(preds)
-        
     pred_nodules = defaultdict(list)
     # Save the results to csv
     for pred in all_preds:

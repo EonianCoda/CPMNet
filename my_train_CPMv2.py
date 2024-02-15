@@ -14,7 +14,6 @@ from dataload.my_dataset_crop import DetDatasetCSVR, DetDatasetCSVRTest, collate
 from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
-import torch.nn as nn
 import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
@@ -205,28 +204,6 @@ def get_val_loader(args):
     logger.info("Number of test batches: {}".format(len(test_loader)))
     return test_loader
 
-def convert_to_standard_csv(csv_path, save_dir, state, spacing):
-    '''
-    convert [seriesuid	coordX	coordY	coordZ	w	h	d] to 
-    'seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm'
-    spacing:[z, y, x]
-    '''
-    column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd']
-    gt_list = []
-    csv_file = pd.read_csv(csv_path)
-    seriesuid = csv_file['seriesuid']
-    coordX, coordY, coordZ = csv_file['coordX'], csv_file['coordY'], csv_file['coordZ']
-    w, h, d = csv_file['w'], csv_file['h'], csv_file['d']
-    clean_seriesuid = []
-    for j in range(seriesuid.shape[0]):
-        if seriesuid[j] not in clean_seriesuid: 
-            clean_seriesuid.append(seriesuid[j])
-        gt_list.append([seriesuid[j], coordX[j], coordY[j], coordZ[j], w[j]/spacing[2], h[j]/spacing[1], d[j]/spacing[0]])
-    df = pd.DataFrame(gt_list, columns=column_order)
-    df.to_csv(os.path.join(save_dir, 'annotation_{}.csv'.format(state)), index=False)
-    df = pd.DataFrame(clean_seriesuid)
-    df.to_csv(os.path.join(save_dir, 'seriesuid_{}.csv'.format(state)), index=False, header=None)
-
 if __name__ == '__main__':
     args = get_args()
     
@@ -268,6 +245,8 @@ if __name__ == '__main__':
     train_loader = get_train_loader(args)
     val_loader = get_val_loader(args)
     
+    val_output_root = os.path.join(exp_folder, 'val_predictions')
+    os.makedirs(val_output_root, exist_ok=True)
     model_save_folder = os.path.join(exp_folder, 'model')
     os.makedirs(model_save_folder, exist_ok=True)
     for epoch in range(start_epoch, args.epochs + 1):
@@ -287,13 +266,14 @@ if __name__ == '__main__':
                 os.remove(ckpt_path)
         save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, f'epoch_{epoch}.pth'))
         
-        if epoch >= args.start_val_epoch: 
+        if epoch >= args.start_val_epoch:
             all_metrics, inter_btp_mean, inter_points = val(args = args,
                                                             model = model,
                                                             val_loader = val_loader,
                                                             detection_postprocess = detection_postprocess,
                                                             device = device,
                                                             epoch = epoch,
+                                                            output_root=val_output_root,
                                                             image_spacing = IMAGE_SPACING,
                                                             series_list_path = args.val_set)
             idx = DEFAULT_FP_RATIOS.index(args.best_model_fp_ratio)
@@ -312,7 +292,7 @@ if __name__ == '__main__':
                     write_metrics(value[i], epoch, 'Val/fp_ratio_{:.3f}_{}'.format(fp_ratio, key), writer)
                 logger.info(line)
             
-            line = '====> '
+            line = '====>'
             for key, value in inter_points.items():
-                line += ' {mean }: {:.4f}'.format(key, np.mean(value))
+                line += ' mean {}: {:.4f}'.format(key, np.mean(value))
             logger.info(line)

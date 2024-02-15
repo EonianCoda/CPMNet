@@ -16,11 +16,12 @@ from .nodule_finding import NoduleFinding
 logger = logging.getLogger(__name__)
 
 BBOXES = 'bboxes'
-DEFAULT_IOU_THRESHOLDS = [0.0, 0.01, 0.1, 0.2, 0.5, 0.75, 0.9, 0.95]
-DEFAULT_PROB_THRESHOLDS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+DEFAULT_IOU_THRESHOLDS = [0.0, 0.01, 0.1, 0.2, 0.5]
+DEFAULT_PROB_THRESHOLDS = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
 DEFAULT_FP_RATIOS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
 
 NUM_INTERPOLATION_POINTS = 10001
+NUM_BOOTSTRAPPING_INTERPOLATION_POINTS = 1001
 
 def compute_bbox3d_iou(box1: npt.NDArray[np.int32], box2: npt.NDArray[np.int32]) -> npt.NDArray[np.int32]:
     """ 
@@ -54,10 +55,11 @@ def match_pred_with_gt(all_gt_nodules: Dict[str, List[NoduleFinding]],
         gt_bboxes = gt_bboxes.reshape(-1, 2, 3)
         pred_bboxes = pred_bboxes.reshape(-1, 2, 3)
         
+        if len(gt_bboxes) == 0 or len(pred_bboxes) == 0:
+            continue
         iou = compute_bbox3d_iou(gt_bboxes, pred_bboxes)
         gt_ious = np.max(iou, axis=1)
         argmax_gt_ious = np.argmax(iou, axis=1)
-        
         pred_ious = np.max(iou, axis=0)
         
         for iou, gt_nodule, match_i in zip(gt_ious, gt_nodules, argmax_gt_ious):
@@ -95,19 +97,25 @@ def compute_froc_btp(scan_qualified_tp_fp_fn: List[List[int]],
     qualified_tp_fp_fn = np.array(qualified_tp_fp_fn) # [N, 3]
     unqualified_tp_fp_fn = np.array(unqualified_tp_fp_fn) # [N, 3]
     probs = np.array(probs) # [N,]
-    num_of_pos = sum(qualified_tp_fp_fn[:, 0])
+    if len(qualified_tp_fp_fn) == 0:
+        num_of_pos = 0
+    else:
+        num_of_pos = sum(qualified_tp_fp_fn[:, 0])
     
     thresholded_tp_fp_fn = []
-    froc_prob_thresholds = np.linspace(0, 1, num=NUM_INTERPOLATION_POINTS)
+    froc_prob_thresholds = np.linspace(0, 1, num=NUM_BOOTSTRAPPING_INTERPOLATION_POINTS)
     if num_of_pos == 0:
         thresholded_tp_fp_fn = np.zeros((len(froc_prob_thresholds), 3))
     else:
         for prob_threshold in froc_prob_thresholds:
-            thresholded_tp_fp_fn.append(np.where(np.array(probs) >= prob_threshold, qualified_tp_fp_fn, unqualified_tp_fp_fn).sum(axis=0))
+            mask = probs >= prob_threshold
+            qualified_tp_fp_fn_masked = qualified_tp_fp_fn[mask]
+            unqualified_tp_fp_fn_masked = unqualified_tp_fp_fn[~mask]
+            thresholded_tp_fp_fn.append(qualified_tp_fp_fn_masked.sum(axis=0) + unqualified_tp_fp_fn_masked.sum(axis=0))
         thresholded_tp_fp_fn = np.array(thresholded_tp_fp_fn)
         
     fp_per_scan = thresholded_tp_fp_fn[:, 1] / len(indices)
-    sens = thresholded_tp_fp_fn[:, 0] / num_of_pos # sensitivity
+    sens = thresholded_tp_fp_fn[:, 0] / max(num_of_pos, 1e-6) # sensitivity
     precs = thresholded_tp_fp_fn[:, 0] / np.maximum(thresholded_tp_fp_fn[:, 0] + thresholded_tp_fp_fn[:, 1], 1e-6) # precision
     f1_scores = 2 * precs * sens / np.maximum(precs + sens, 1e-6)
     
@@ -137,20 +145,23 @@ def compute_froc(all_gt_nodules: Dict[str, List[NoduleFinding]],
             probs.append(gt_nodule.pred_prob)
             if gt_nodule.iou >= froc_iou_threshold:
                 qualified_tp_fp_fn.append([1, 0, 0])
+                unqualified_tp_fp_fn.append([0, 0, 0])
             else:
+                qualified_tp_fp_fn.append([0, 0, 1])
                 unqualified_tp_fp_fn.append([0, 0, 1])
         
         for pred_nodule in all_pred_nodules[series_name]:
             probs.append(pred_nodule.pred_prob)
             if pred_nodule.iou >= froc_iou_threshold:
                 qualified_tp_fp_fn.append([0, 0, 0])
-            else:
                 unqualified_tp_fp_fn.append([0, 1, 0])
-
+            else:
+                qualified_tp_fp_fn.append([0, 1, 0])
+                unqualified_tp_fp_fn.append([0, 1, 0])
+                
         scan_qualified_tp_fp_fn.append(qualified_tp_fp_fn)
         scan_unqualified_tp_fp_fn.append(unqualified_tp_fp_fn)
         scan_probs.append(probs)
-    
     sens_interp, prec_interp, f1_interp = compute_froc_btp(scan_qualified_tp_fp_fn, scan_unqualified_tp_fp_fn, scan_probs, list(range(num_of_scan)), froc_fp_ratios)
     
     # Bootstrapping sampling to get the confidence interval
@@ -177,7 +188,7 @@ def compute_froc(all_gt_nodules: Dict[str, List[NoduleFinding]],
     sens_points = []
     prec_points = []
     f1_points = []
-    for i in range(froc_fp_ratios):
+    for i in range(len(froc_fp_ratios)):
         index = np.argmin(abs(fp_per_scan_interp_btp - froc_fp_ratios[i]))
         sens_points.append(sens_interp_btp_mean[index])
         prec_points.append(prec_interp_btp_mean[index])
@@ -221,7 +232,7 @@ class Evaluation(object):
                  image_spacing: np.ndarray,
                  froc_iou_threshold: float = 0.1,
                  max_num_of_nodule_candidate_in_series: int = 100,
-                 bootstrapping_times: int = 2000):
+                 bootstrapping_times: int = 1000):
         self.series_list_path = series_list_path
         self.image_spacing = image_spacing
         self.froc_iou_threshold = froc_iou_threshold
@@ -229,11 +240,10 @@ class Evaluation(object):
         self.bootstrapping_times = bootstrapping_times
         self.series_names = []
         
-        self.gt_nodules = []
+        self.gt_nodules = dict()
         for folder, series_name in load_series_list(series_list_path):
             self.series_names.append(series_name)
             self.gt_nodules[series_name] = read_nodule_info(folder, series_name, image_spacing)
-    
     def evaluate(self,
                 all_gt_nodules: Dict[str, List[NoduleFinding]],
                 all_pred_nodules: Dict[str, List[NoduleFinding]],
@@ -247,7 +257,7 @@ class Evaluation(object):
         metric_output_txt = open(os.path.join(output_dir, 'metrics.txt'), 'w')
         metric_bst_output_txt = open(os.path.join(output_dir, 'metrics_bst.txt'), 'w')
         header = 'iou_threshold,prob_threshold,sensitivity,precision,f1_score,tp,fp,fn\n'
-        metric_template = '{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:d},{:d},{:d}\n'
+        metric_template = '{:.2f},{:.2f},{:.3f},{:.3f},{:.3f},{:.1f},{:.1f},{:.1f}\n'
         metric_output_txt.write(header)
         metric_bst_output_txt.write(header)
         
@@ -270,7 +280,8 @@ class Evaluation(object):
                     else:
                         fn += 1
                 for pred_nodule in pred_nodules:
-                    if pred_nodule.iou < iou_threshold and pred_nodule.pred_prob >= prob_threshold:
+                    if (pred_nodule.iou < iou_threshold) or (iou_threshold == 0 and pred_nodule.iou == 0) \
+                        and pred_nodule.pred_prob >= prob_threshold:
                         fp += 1
                 scan_tp_fp_fn.append([tp, fp, fn])
             
@@ -294,7 +305,7 @@ class Evaluation(object):
             bst_result_mean = np.mean(bst_result, axis=0)
             line = metric_template.format(iou_threshold, prob_threshold, *bst_result_mean.tolist())
             metric_bst_output_txt.write(line)
-            logger.info(f'====> iou_threshold:{iou_threshold:.3f}, prob_threshold:{prob_threshold:.3f} sensitivity:{bst_result_mean[0]:.3f}, precision:{bst_result_mean[1]:.3f}, f1_score:{bst_result_mean[2]:.3f}')
+            logger.info(f'iou_thrs: {iou_threshold:.2f}, prob_thrs: {prob_threshold:.2f} sens: {bst_result_mean[0]:.2f}, prec: {bst_result_mean[1]:.2f}, f1: {bst_result_mean[2]:.3f}')
             all_metrics[key] = [result, bst_result_mean]
         # Compute FROC
         inter_btp_mean, inter_points = compute_froc(all_gt_nodules = all_gt_nodules,
