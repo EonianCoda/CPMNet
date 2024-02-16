@@ -9,7 +9,7 @@ from typing import List, Tuple, Any, Dict
 
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
-from dataload.my_semi_dataset_crop import LabeledDataset, DetDatasetCSVRTest, labeled_collate_fn_dict, unlabeled_infer_collate_fn_dict, unlabeled_train_collate_fn_dict, UnLabeledInferDataset, UnLabeledTrainDataset
+from dataload.my_semi_threshold_dataset_crop import LabeledDataset, DetDatasetCSVRTest, labeled_collate_fn_dict, unlabeled_infer_collate_fn_dict, unlabeled_train_collate_fn_dict, UnLabeledInferDataset, UnLabeledTrainDataset
 from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
@@ -17,7 +17,7 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.semi_train import train, write_metrics, save_states
+from logic.semi_threshold_train import train, write_metrics, save_states
 from logic.val import val
 ### optimzer ###
 from optimizer.optim import AdamW
@@ -42,7 +42,7 @@ def get_args():
     parser.add_argument('--pin_memory', action='store_true', default=False, help='use pin memory')
     parser.add_argument('--num_workers', type=int, default=1, metavar='S', help='num_workers (default: 1)')
     parser.add_argument('--labeled_batch_size', type=int, default=1, metavar='N', help='input batch size for labeled training (default: 1)')
-    parser.add_argument('--unlabeled_batch_size', type=int, default=2, metavar='N', help='input batch size for unlabeled training (default: 1)')
+    parser.add_argument('--unlabeled_batch_size', type=int, default=3, metavar='N', help='input batch size for unlabeled training (default: 1)')
     
     parser.add_argument('--epochs', type=int, default=300, metavar='N', help='number of epochs to train (default: 10)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=DEFAULT_CROP_SIZE, help='crop size')
@@ -63,7 +63,7 @@ def get_args():
     parser.add_argument('--pos_target_topk', type=int, default=5, metavar='N', help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=6, metavar='N', help='sampling batch number in per sample')
-    
+    parser.add_argument('--semi_ema_alpha', type=float, default=0.999, help='ema alpha')
     # val-hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -109,7 +109,6 @@ def prepare_training(args):
                      first_stride = (1, 2, 2), 
                      detection_loss = detection_loss,
                      device = device)
-    
     teacher_model = Resnet18(n_channels = 1,
                                 n_blocks = [2, 3, 3, 3],
                                 n_filters = [64, 96, 128, 160],

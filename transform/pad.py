@@ -5,7 +5,7 @@ import json
 import math
 from .abstract_transform import AbstractTransform
 from .image_process import *
-
+from .ctr_transform import OffsetPlusCTR
 
 class Pad(AbstractTransform):
     """
@@ -45,7 +45,7 @@ class Pad(AbstractTransform):
 
         if 'ctr' in sample:
             sample['ctr'] = sample['ctr'].copy() + margin_lower
-
+            sample['ctr_transform'].append(OffsetPlusCTR(margin_lower))
         return sample
 
 

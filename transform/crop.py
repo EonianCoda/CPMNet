@@ -5,7 +5,7 @@ import json
 import random
 from .abstract_transform import AbstractTransform
 from .image_process import *
-
+from .ctr_transform import OffsetPlusCTR
 
 class RandomCrop0(object):
     """Randomly crop the input image (shape [C, D, H, W] or [C, H, W])
@@ -46,7 +46,7 @@ class RandomCrop0(object):
 
         if 'ctr' in sample:
             sample['ctr'] = sample['ctr'].copy() - crop_min[1:]
-
+            sample['ctr_transform'].append(OffsetPlusCTR(-crop_min[1:]))
         return sample
 
 
@@ -75,7 +75,7 @@ class RandomCrop(object):
 
         bb_min = [0] * (input_dim + 1)
         bb_max = image.shape
-        bb_min, bb_max = bb_min[1:], bb_max[1:]
+        bb_min, bb_max = bb_min[1:], bb_max[1:] # Remove the channel dimension
 
         if self.pos_ratio > 0 and sample['ctr'].size > 0:
             bb_min = sample['ctr'].min(0) - np.array(self.output_size) + 10

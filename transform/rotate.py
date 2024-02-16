@@ -4,6 +4,7 @@ from __future__ import print_function, division
 import json
 from .abstract_transform import AbstractTransform
 from .image_process import *
+from .ctr_transform import EmptyTransform, TransposeCTR
 import random
 
 
@@ -131,7 +132,7 @@ class RandomTranspose(AbstractTransform):
 
             sample['image'] = image_t
             sample['ctr'] = ctr_t
-
+            sample['ctr_transform'].append(TransposeCTR(transpose))
         return sample
 
 

@@ -3,7 +3,7 @@ from __future__ import print_function, division
 import random
 import numpy as np
 from .abstract_transform import AbstractTransform
-
+from .ctr_transform import EmptyTransform, OffsetMinusCTR
 
 class RandomFlip(AbstractTransform):
     """ random flip the image (shape [C, D, H, W] or [C, H, W]) """
@@ -42,13 +42,14 @@ class RandomFlip(AbstractTransform):
 
             if 'ctr' in sample:
                 coord = sample['ctr'].copy()
+ 
+                offset = np.array([0, 0, 0]) # (z, y, x)
                 for axis in flip_axis:
                     coord[:, axis] = input_shape[axis] - 1 - coord[:, axis]
+                    offset[axis] = input_shape[axis] - 1
                 sample['ctr'] = coord
-
+                sample['ctr_transform'].append(OffsetMinusCTR(offset))
         return sample
-
-
 
 class RandomMaskFlip(AbstractTransform):
     """ random flip the image (shape [C, D, H, W] or [C, H, W]) """
