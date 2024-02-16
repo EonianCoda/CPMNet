@@ -50,7 +50,8 @@ def get_args():
     parser.add_argument('--resume_folder', type=str, default='', metavar='str', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='', metavar='str')
     # data
-    parser.add_argument('--train_set', type=str, required=True, help='train_list')
+    parser.add_argument('--unlabeled_train_set', type=str, required=True, help='unlabeled_train_list')
+    parser.add_argument('--labeled_train_set', type=str, required=True, help='unlabeled_infer_list')
     parser.add_argument('--val_set', type=str, required=True,help='val_list')
     # hyper-parameters
     parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of seg')
@@ -211,14 +212,16 @@ def training_data_prepare(args, blank_side=0):
                                     batch_size=args.labeled_batch_size,
                                     shuffle=True,
                                     collate_fn=labeled_collate_fn_dict,
-                                    num_workers=args.num_workers, 
+                                    num_workers=args.labeled_batch_size,
                                     pin_memory=args.pin_memory, 
                                     drop_last=True,
                                     persistent_workers=True)
     
     # Unlabeled dataset
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=args.crop_size, pad_value=-1)
-    unlabeled_infer_dataset = UnLabeledInferDataset(series_list_path = args.unlabeled_infer_set, 
+    crop_size = args.crop_size
+    overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=-1)
+    unlabeled_infer_dataset = UnLabeledInferDataset(series_list_path = args.unlabeled_train_set, 
                                                     SplitComb=split_comber, 
                                                     image_spacing=IMAGE_SPACING)
     
@@ -226,7 +229,7 @@ def training_data_prepare(args, blank_side=0):
                                         batch_size=args.unlabeled_batch_size,
                                         shuffle=False,
                                         collate_fn=unlabeled_infer_collate_fn_dict,
-                                        num_workers=args.num_workers,
+                                        num_workers=args.unlabeled_batch_size,
                                         pin_memory=args.pin_memory,
                                         drop_last=True,
                                         persistent_workers=False)
@@ -238,8 +241,9 @@ def training_data_prepare(args, blank_side=0):
     
     unlabeled_train_loader = DataLoader(unlabeled_train_dataset,
                                         batch_size=args.unlabeled_batch_size,
-                                        shuffle=True,
-                                        num_workers=args.num_workers,
+                                        shuffle=False,
+                                        collate_fn=unlabeled_train_collate_fn_dict,
+                                        num_workers=args.unlabeled_batch_size,
                                         pin_memory=args.pin_memory,
                                         drop_last=True,
                                         persistent_workers=False)
@@ -288,7 +292,8 @@ if __name__ == '__main__':
 
     write_yaml(os.path.join(exp_folder, 'setting.yaml'), vars(args))
     logger.info('The learning rate: {}'.format(args.lr))
-    logger.info('The batch size: {}'.format(args.batch_size))
+    logger.info('The unlabeled batch size: {}'.format(args.unlabeled_batch_size))
+    logger.info('The labeled batch size: {}'.format(args.labeled_batch_size))
     
     logger.info('The Crop Size: [{}, {}, {}]'.format(args.crop_size[0], args.crop_size[1], args.crop_size[2]))
     logger.info('positive_target_topk: {}, lambda_cls: {}, lambda_shape: {}, lambda_offset: {}, lambda_iou: {},, num_samples: {}'.format(args.pos_target_topk, args.lambda_cls, args.lambda_shape, args.lambda_offset, args.lambda_iou, args.num_samples))
@@ -307,11 +312,11 @@ if __name__ == '__main__':
                             teacher_model=teacher_model,
                             model = model,
                             optimizer = optimizer,
-                            scheduler_warm = scheduler_warm,
+                            scheduler = scheduler_warm,
                             labeled_dataloader=labeled_train_loader,
-                            unlabeled_infer_dataloader=unlabeled_infer_loader,
-                            unlabeled_train_dataloader=unlabeled_train_loader,
-                            detection_postprocess=detection_postprocess,
+                            unlabeled_infer_dataloader = unlabeled_infer_loader,
+                            unlabeled_train_dataloader = unlabeled_train_loader,
+                            detection_postprocess = detection_postprocess,
                             device = device)
         write_metrics(train_metrics, epoch, 'Train', writer)
         for key, value in train_metrics.items():

@@ -255,8 +255,8 @@ if __name__ == '__main__':
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,
-                            scheduler_warm = scheduler_warm,
-                            train_loader = train_loader, 
+                            scheduler = scheduler_warm,
+                            dataloader = train_loader, 
                             device = device)
         write_metrics(train_metrics, epoch, 'Train', writer)
         for key, value in train_metrics.items():

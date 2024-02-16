@@ -169,7 +169,7 @@ class UnLabeledTrainDataset(Dataset):
         series_folder = self.series_folders[idx]
         series_name = self.series_names[idx]
         
-        label_path = os.path.join(series_folder, 'semi_label', f'{series_name}.json')
+        label_path = os.path.join(series_folder, 'pseudo_label', f'{series_name}.json')
         
         with open(label_path, 'r') as f:
             label = json.load(f)
@@ -178,7 +178,7 @@ class UnLabeledTrainDataset(Dataset):
         
         selected_indices = []
         for i, prob in enumerate(all_prob):
-            if prob >= self.prob_threshold:
+            if prob[0] >= self.prob_threshold:
                 selected_indices.append(i)
         
         if len(selected_indices) == 0:
@@ -199,6 +199,7 @@ class UnLabeledTrainDataset(Dataset):
         idx = self.selected_indices[idx]
         dicom_path = self.dicom_paths[idx]
         series_name = self.series_names[idx]
+        series_folder = self.series_folders[idx]
         label = self.read_labels(idx)
 
         if len(label['all_loc']) == 0:
@@ -251,7 +252,7 @@ class UnLabeledInferDataset(Dataset):
     def shuffle(self, seed: int):
         random.seed(seed)
         random.shuffle(self.selected_indices)
-    
+        
     def __len__(self):
         return len(self.dicom_paths)
     

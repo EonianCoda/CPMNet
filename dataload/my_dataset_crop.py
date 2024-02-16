@@ -146,6 +146,7 @@ class DetDatasetCSVRTest(Dataset):
         for folder, series_name in series_infos:
             dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
             self.dicom_paths.append(dicom_path)
+            self.series_names.append(series_name)
         self.splitcomb = SplitComb
         
     def __len__(self):

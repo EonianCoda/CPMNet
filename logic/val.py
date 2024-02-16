@@ -59,7 +59,6 @@ def val(args,
         image_spacing: List[float],
         series_list_path: str,
         exp_folder: str,
-        save_dir: str,
         epoch: int = 0,
         nms_keep_top_k: int = 40) -> Dict[str, float]:
     
@@ -116,10 +115,10 @@ def val(args,
     # Save the results to csv
     header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
     df = pd.DataFrame(all_preds, columns=header)
-    pred_results_path = os.path.join(save_dir, 'predict_epoch_{}.csv'.format(epoch))
+    pred_results_path = os.path.join(annot_dir, 'predict_epoch_{}.csv'.format(epoch))
     df.to_csv(pred_results_path, index=False)
     
-    output_dir = os.path.join(save_dir, pred_results_path.split('/')[-1].split('.')[0])
+    output_dir = os.path.join(annot_dir, f'epoch_{epoch}')
     os.makedirs(output_dir, exist_ok=True)
     
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
