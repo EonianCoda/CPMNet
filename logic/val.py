@@ -8,10 +8,9 @@ from typing import List, Any, Dict
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 
 from utils.box_utils import nms_3D
-from utils.generate_annot_csv_from_series_list import generate_annot_csv, generate_series_uids_csv
+from utils.generate_annot_csv_from_series_list import generate_annot_csv
 from evaluationScript.detectionCADEvalutionIOU import nodule_evaluation
 
 logger = logging.getLogger(__name__)

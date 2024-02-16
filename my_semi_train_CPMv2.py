@@ -5,12 +5,11 @@ import torch
 import os
 import logging
 import numpy as np
-import pandas as pd
 from typing import List, Tuple, Any, Dict
 
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
-from dataload.my_dataset_crop import DetDatasetCSVR, DetDatasetCSVRTest, collate_fn_dict
+from dataload.my_semi_dataset_crop import LabeledDataset, DetDatasetCSVRTest, labeled_collate_fn_dict, unlabeled_infer_collate_fn_dict, unlabeled_train_collate_fn_dict, UnLabeledInferDataset, UnLabeledTrainDataset
 from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
@@ -18,7 +17,7 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.train import train, write_metrics, save_states
+from logic.semi_train import train, write_metrics, save_states
 from logic.val import val
 ### optimzer ###
 from optimizer.optim import AdamW
@@ -42,7 +41,9 @@ def get_args():
     parser.add_argument('--mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--pin_memory', action='store_true', default=False, help='use pin memory')
     parser.add_argument('--num_workers', type=int, default=1, metavar='S', help='num_workers (default: 1)')
-    parser.add_argument('--batch-size', type=int, default=1, metavar='N', help='input batch size for training (default: 128)')
+    parser.add_argument('--labeled_batch_size', type=int, default=1, metavar='N', help='input batch size for labeled training (default: 1)')
+    parser.add_argument('--unlabeled_batch_size', type=int, default=2, metavar='N', help='input batch size for unlabeled training (default: 1)')
+    
     parser.add_argument('--epochs', type=int, default=300, metavar='N', help='number of epochs to train (default: 10)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=DEFAULT_CROP_SIZE, help='crop size')
     # resume
@@ -107,6 +108,19 @@ def prepare_training(args):
                      first_stride = (1, 2, 2), 
                      detection_loss = detection_loss,
                      device = device)
+    
+    teacher_model = Resnet18(n_channels = 1,
+                                n_blocks = [2, 3, 3, 3],
+                                n_filters = [64, 96, 128, 160],
+                                stem_filters = 32,
+                                norm_type = args.norm_type,
+                                head_norm = args.head_norm,
+                                act_type = args.act_type,
+                                se = args.se,
+                                first_stride = (1, 2, 2),
+                                detection_loss = detection_loss,
+                                device = device)
+    
     detection_postprocess = DetectionPostprocess(topk=args.det_topk, 
                                                  threshold=args.det_threshold, 
                                                  nms_threshold=args.det_nms_threshold,
@@ -137,6 +151,7 @@ def prepare_training(args):
         
         logger.info('Load model from "{}"'.format(model_path))
         model.to(device)
+        teacher_model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
@@ -144,6 +159,7 @@ def prepare_training(args):
 
         state_dict = torch.load(model_path, map_location=device)
         model.load_state_dict(state_dict['model_state_dict'])
+        teacher_model.load_state_dict(state_dict['teacher_state_dict'])
         optimizer.load_state_dict(state_dict['optimizer_state_dict'])       
         scheduler_warm.load_state_dict(state_dict['scheduler_state_dict'])
         
@@ -152,21 +168,26 @@ def prepare_training(args):
         state_dict = torch.load(args.pretrained_model_path)
         if 'state_dict' not in state_dict:
             model.load_state_dict(state_dict)
+            teacher_model.load_state_dict(state_dict)
         else:
             model.load_state_dict(state_dict['model_state_dict'])
+            teacher_model.load_state_dict(state_dict['teacher_state_dict'])
+        
+        teacher_model.to(device)
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
         scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
     else:
+        teacher_model.to(device)
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
         scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
     
-    return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
+    return start_epoch, teacher_model, model, optimizer, scheduler_warm, detection_postprocess
 
 def training_data_prepare(args, blank_side=0):
     crop_size = args.crop_size
@@ -182,22 +203,52 @@ def training_data_prepare(args, blank_side=0):
                                  rand_rot=[20, 0, 0], rand_space=[0.9, 1.2],sample_num=args.num_samples,
                                  blank_side=blank_side, instance_crop=True)
 
-    train_dataset = DetDatasetCSVR(series_list_path = args.train_set,
-                                   crop_fn = crop_fn_train,
-                                   image_spacing=IMAGE_SPACING,
-                                   transform_post = train_transform)
+    labeled_train_dataset = LabeledDataset(series_list_path = args.labeled_train_set,
+                                            crop_fn = crop_fn_train,
+                                            image_spacing=IMAGE_SPACING,
+                                            transform_post = train_transform)
+    labeled_train_loader = DataLoader(labeled_train_dataset, 
+                                    batch_size=args.labeled_batch_size,
+                                    shuffle=True,
+                                    collate_fn=labeled_collate_fn_dict,
+                                    num_workers=args.num_workers, 
+                                    pin_memory=args.pin_memory, 
+                                    drop_last=True,
+                                    persistent_workers=True)
     
-    train_loader = DataLoader(train_dataset, 
-                              batch_size=args.batch_size, 
-                              shuffle=True,
-                              collate_fn=collate_fn_dict,
-                              num_workers=args.num_workers, 
-                              pin_memory=args.pin_memory, 
-                              drop_last=True,
-                              persistent_workers=True)
-    logger.info("Number of training samples: {}".format(len(train_loader.dataset)))
-    logger.info("Number of training batches: {}".format(len(train_loader)))
-    return train_loader
+    # Unlabeled dataset
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=args.crop_size, pad_value=-1)
+    unlabeled_infer_dataset = UnLabeledInferDataset(series_list_path = args.unlabeled_infer_set, 
+                                                    SplitComb=split_comber, 
+                                                    image_spacing=IMAGE_SPACING)
+    
+    unlabeled_infer_loader = DataLoader(unlabeled_infer_dataset,
+                                        batch_size=args.unlabeled_batch_size,
+                                        shuffle=False,
+                                        collate_fn=unlabeled_infer_collate_fn_dict,
+                                        num_workers=args.num_workers,
+                                        pin_memory=args.pin_memory,
+                                        drop_last=True,
+                                        persistent_workers=False)
+
+    unlabeled_train_dataset = UnLabeledTrainDataset(series_list_path = args.unlabeled_train_set,
+                                                    crop_fn = crop_fn_train,
+                                                    image_spacing=IMAGE_SPACING,
+                                                    transform_post = train_transform)
+    
+    unlabeled_train_loader = DataLoader(unlabeled_train_dataset,
+                                        batch_size=args.unlabeled_batch_size,
+                                        shuffle=True,
+                                        num_workers=args.num_workers,
+                                        pin_memory=args.pin_memory,
+                                        drop_last=True,
+                                        persistent_workers=False)
+    
+    logger.info("Number of labeled training samples: {}".format(len(labeled_train_loader.dataset)))
+    logger.info("Number of labeled training batches: {}".format(len(labeled_train_loader)))
+    logger.info("Number of unlabeled training samples: {}".format(len(unlabeled_train_loader.dataset)))
+    logger.info("Number of unlabeled training batches: {}".format(len(unlabeled_train_loader)))
+    return labeled_train_loader, unlabeled_infer_loader, unlabeled_train_loader
 
 def test_val_data_prepare(args):
     crop_size = args.crop_size
@@ -242,21 +293,25 @@ if __name__ == '__main__':
     logger.info('The Crop Size: [{}, {}, {}]'.format(args.crop_size[0], args.crop_size[1], args.crop_size[2]))
     logger.info('positive_target_topk: {}, lambda_cls: {}, lambda_shape: {}, lambda_offset: {}, lambda_iou: {},, num_samples: {}'.format(args.pos_target_topk, args.lambda_cls, args.lambda_shape, args.lambda_offset, args.lambda_iou, args.num_samples))
     logger.info('norm type: {}, head norm: {}, act_type: {}, using se block: {}'.format(args.norm_type, args.head_norm, args.act_type, args.se))
-    start_epoch, model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args)
+    start_epoch, teacher_model, model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args)
 
     init_seed(args.seed)
     
-    train_loader = training_data_prepare(args)
+    labeled_train_loader, unlabeled_infer_loader, unlabeled_train_loader = training_data_prepare(args)
     val_loader = test_val_data_prepare(args)
     
     model_save_folder = os.path.join(exp_folder, 'model')
     os.makedirs(model_save_folder, exist_ok=True)
     for epoch in range(start_epoch, args.epochs + 1):
         train_metrics = train(args = args,
+                            teacher_model=teacher_model,
                             model = model,
                             optimizer = optimizer,
                             scheduler_warm = scheduler_warm,
-                            train_loader = train_loader, 
+                            labeled_dataloader=labeled_train_loader,
+                            unlabeled_infer_dataloader=unlabeled_infer_loader,
+                            unlabeled_train_dataloader=unlabeled_train_loader,
+                            detection_postprocess=detection_postprocess,
                             device = device)
         write_metrics(train_metrics, epoch, 'Train', writer)
         for key, value in train_metrics.items():
@@ -266,7 +321,7 @@ if __name__ == '__main__':
             ckpt_path = os.path.join(model_save_folder, 'epoch_{}.pth'.format(i))
             if (i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path):
                 os.remove(ckpt_path)
-        save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, f'epoch_{epoch}.pth'))
+        save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, f'epoch_{epoch}.pth'), teacher_state_dict=teacher_model.state_dict())
         
         if epoch >= args.start_val_epoch: 
             metrics = val(args = args,
@@ -282,7 +337,7 @@ if __name__ == '__main__':
                 best_metric = metrics[args.metric]
                 best_epoch = epoch
                 
-                save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, 'best.pth'))
+                save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, 'best.pth'), teacher_state_dict=teacher_model.state_dict())
                 logger.info('====> Best model saved at epoch: {}'.format(epoch))
                 logger.info('====> Best metric {}: {:.4f}'.format(args.metric, best_metric))
                 with open(os.path.join(exp_folder, 'best_epoch.txt'), 'w') as f:
