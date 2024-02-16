@@ -125,6 +125,7 @@ def prepare_training(args):
             global best_metric
             with open(os.path.join(args.resume_folder, 'best_epoch.txt'), 'r') as f:
                 best_epoch = int(f.readline().split(':')[-1])
+                f.readline()
                 best_metric = float(f.readline().split(':')[-1])
             logger.info('Best epoch: {}, Best metric: {:.4f}'.format(best_epoch, best_metric))
         # Get the latest model
