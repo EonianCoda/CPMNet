@@ -5,28 +5,11 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 
 from utils.average_meter import AverageMeter
 from utils.utils import get_progress_bar
 
 logger = logging.getLogger(__name__)
-
-def write_metrics(metrics: Dict[str, float], epoch: int, prefix: str, writer: SummaryWriter):
-    for metric, value in metrics.items():
-        writer.add_scalar(f'{prefix}/{metric}', value, global_step = epoch)
-    writer.flush()
-
-def save_states(model: nn.Module, 
-                optimizer: torch.optim.Optimizer,
-                scheduler: torch.optim.lr_scheduler,
-                save_path: str):
-    
-    save_dict = {'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'model_structure': model}
-    torch.save(save_dict, save_path)
 
 def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     image = sample['image'].to(device, non_blocking=True) # z, y, x

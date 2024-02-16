@@ -17,8 +17,9 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.semi_threshold_train import train, write_metrics, save_states
+from logic.semi_threshold_train import train, generate_pseudo_labels
 from logic.val import val
+from logic.utils import write_metrics, save_states
 ### optimzer ###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
@@ -64,12 +65,14 @@ def get_args():
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=6, metavar='N', help='sampling batch number in per sample')
     parser.add_argument('--semi_ema_alpha', type=float, default=0.999, help='ema alpha')
+    parser.add_argument('--unlabeled_threshold', type=float, default=0.8, help='unlabeled threshold')
     # val-hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
+    parser.add_argument('--val_nms_keep_top_k', type=int, default=40, help='nms keep top k for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.7, help='fixed probability threshold for validation')
     # network
     parser.add_argument('--norm_type', type=str, default='batchnorm', metavar='N', help='norm type of backbone')
@@ -236,32 +239,23 @@ def training_data_prepare(args, blank_side=0):
     unlabeled_train_dataset = UnLabeledTrainDataset(series_list_path = args.unlabeled_train_set,
                                                     crop_fn = crop_fn_train,
                                                     image_spacing=IMAGE_SPACING,
-                                                    transform_post = train_transform)
-    
-    unlabeled_train_loader = DataLoader(unlabeled_train_dataset,
-                                        batch_size=args.unlabeled_batch_size,
-                                        shuffle=False,
-                                        collate_fn=unlabeled_train_collate_fn_dict,
-                                        num_workers=args.unlabeled_batch_size,
-                                        pin_memory=args.pin_memory,
-                                        drop_last=True,
-                                        persistent_workers=False)
+                                                    transform_post = train_transform,
+                                                    prob_threshold=args.unlabeled_threshold)
     
     logger.info("Number of labeled training samples: {}".format(len(labeled_train_loader.dataset)))
     logger.info("Number of labeled training batches: {}".format(len(labeled_train_loader)))
-    logger.info("Number of unlabeled training samples: {}".format(len(unlabeled_train_loader.dataset)))
-    logger.info("Number of unlabeled training batches: {}".format(len(unlabeled_train_loader)))
-    return labeled_train_loader, unlabeled_infer_loader, unlabeled_train_loader
+    logger.info("Number of unlabeled training samples: {}".format(len(unlabeled_infer_loader.dataset)))
+    return labeled_train_loader, unlabeled_infer_loader, unlabeled_train_dataset
 
-def test_val_data_prepare(args):
+def val_data_prepare(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=-1)
     test_dataset = DetDatasetCSVRTest(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
-    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=args.num_workers, pin_memory=args.pin_memory, drop_last=False,)
-    logger.info("Number of test samples: {}".format(len(test_loader.dataset)))
-    logger.info("Number of test batches: {}".format(len(test_loader)))
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=1, pin_memory=args.pin_memory, drop_last=False,)
+    logger.info("Number of validation samples: {}".format(len(test_loader.dataset)))
+    logger.info("Number of validation batches: {}".format(len(test_loader)))
     return test_loader
 
 if __name__ == '__main__':
@@ -301,21 +295,30 @@ if __name__ == '__main__':
 
     init_seed(args.seed)
     
-    labeled_train_loader, unlabeled_infer_loader, unlabeled_train_loader = training_data_prepare(args)
-    val_loader = test_val_data_prepare(args)
+    labeled_train_loader, unlabeled_infer_loader, unlabeled_train_dataset = training_data_prepare(args)
+    val_loader = val_data_prepare(args)
     
     model_save_folder = os.path.join(exp_folder, 'model')
     os.makedirs(model_save_folder, exist_ok=True)
     for epoch in range(start_epoch, args.epochs + 1):
+        generate_pseudo_labels(args, teacher_model, unlabeled_infer_loader, device, detection_postprocess, nms_keep_top_k = args.val_nms_keep_top_k)
+        unlabeled_train_dataset.update_labels()
+        if epoch == 0:
+            unlabeled_train_loader = DataLoader(unlabeled_train_dataset,
+                                                batch_size=args.unlabeled_batch_size,
+                                                shuffle=True,
+                                                collate_fn=unlabeled_train_collate_fn_dict,
+                                                num_workers=args.unlabeled_batch_size,
+                                                pin_memory=args.pin_memory,
+                                                drop_last=True,
+                                                persistent_workers=False)
         train_metrics = train(args = args,
                             teacher_model=teacher_model,
                             model = model,
                             optimizer = optimizer,
                             scheduler = scheduler_warm,
                             labeled_dataloader=labeled_train_loader,
-                            unlabeled_infer_dataloader = unlabeled_infer_loader,
                             unlabeled_train_dataloader = unlabeled_train_loader,
-                            detection_postprocess = detection_postprocess,
                             device = device)
         write_metrics(train_metrics, epoch, 'Train', writer)
         for key, value in train_metrics.items():
@@ -336,7 +339,8 @@ if __name__ == '__main__':
                             image_spacing = IMAGE_SPACING,
                             series_list_path=args.val_set,
                             exp_folder=exp_folder,
-                            epoch = epoch)
+                            epoch = epoch,
+                            nms_keep_top_k = args.val_nms_keep_top_k)
             if metrics[args.metric] >= best_metric:
                 best_metric = metrics[args.metric]
                 best_epoch = epoch

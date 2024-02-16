@@ -6,35 +6,17 @@ import numpy as np
 import random
 from typing import Any, Dict, List, Tuple
 
-
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from utils.box_utils import nms_3D
 from utils.utils import get_progress_bar
-from torch.utils.tensorboard import SummaryWriter
 
 from utils.average_meter import AverageMeter
 logger = logging.getLogger(__name__)
 
 UNLABELED_LOSS_WEIGHT = 1.0
 LABELED_LOSS_WEIGHT = 1.0
-
-def write_metrics(metrics: Dict[str, float], epoch: int, prefix: str, writer: SummaryWriter):
-    for metric, value in metrics.items():
-        writer.add_scalar(f'{prefix}/{metric}', value, global_step = epoch)
-    writer.flush()
-
-def save_states(model: nn.Module, 
-                optimizer: torch.optim.Optimizer,
-                scheduler: torch.optim.lr_scheduler,
-                save_path: str):
-    
-    save_dict = {'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
-                'model_structure': model}
-    torch.save(save_dict, save_path)
 
 def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     image = sample['image'].to(device, non_blocking=True) # z, y, x
@@ -51,14 +33,16 @@ def generate_pseudo_labels(args,
                         dataloader: DataLoader,
                         device: torch.device,
                         detection_postprocess,
-                        infer_nms_keep_top_k: int = 40) -> None:
+                        nms_keep_top_k: int = 40) -> None:
+    logger.info("Generating pseudo labels")
     model.eval()
     split_comber = dataloader.dataset.splitcomb
-    infer_batch_size = min(20, 2 * args.unlabeled_batch_size * args.num_samples)
+    infer_batch_size = 2 * args.unlabeled_batch_size * args.num_samples
     
-    for sample in dataloader:
+    for i, sample in enumerate(dataloader):
         # Generate pseudo labels
-        data = sample['split_images'].to(device, non_blocking=True)
+        with torch.no_grad():
+            data = sample['split_images'].to(device, non_blocking=True)
         nzhws = sample['nzhws']
         series_names = sample['series_names']
         series_folders = sample['series_folders']
@@ -70,9 +54,10 @@ def generate_pseudo_labels(args,
             if end > data.size(0):
                 end = data.size(0)
             input = data[i * infer_batch_size:end]
-            with torch.no_grad():
-                output = model(input)
-                output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+            with torch.cuda.amp.autocast():
+                with torch.no_grad():
+                    output = model(input)
+                    output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
             outputlist.append(output.data.cpu().numpy())
          
         outputs = np.concatenate(outputlist, 0)
@@ -90,7 +75,7 @@ def generate_pseudo_labels(args,
             
             # NMS
             if len(output) > 0:
-                keep = nms_3D(output[:, 1:], overlap=0.05, top_k=infer_nms_keep_top_k)
+                keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
                 output = output[keep]
             output = output.numpy()
             scan_outputs.append(output)           
@@ -111,19 +96,16 @@ def generate_pseudo_labels(args,
             with open(save_path, 'w') as f:
                 json.dump({'all_loc': all_loc.tolist(), 
                            'all_prob': all_prob.tolist(), 
-                           'all_rad': all_rad.tolist()}, f)
+                           'all_rad': all_rad.tolist()}, f, indent=4)
                 
 def train(args,
           teacher_model: nn.modules,
           model: nn.modules,
           optimizer: torch.optim.Optimizer,
-          detection_postprocess,
-          unlabeled_infer_dataloader: DataLoader,
           unlabeled_train_dataloader: DataLoader,
           labeled_dataloader: DataLoader,
           scheduler: torch.optim.lr_scheduler,
-          device: torch.device,
-          infer_nms_keep_top_k: int = 40) -> Dict[str, float]:
+          device: torch.device) -> Dict[str, float]:
     teacher_model.eval()
     model.train()
     scheduler.step()
@@ -139,18 +121,12 @@ def train(args,
     if mixed_precision:
         scaler = torch.cuda.amp.GradScaler()
         
-    seed = random.randint(0, 100000)
-    logger.info(f"Shuffling unlabeled data with seed {seed}")
-    unlabeled_infer_dataloader.dataset.shuffle(seed)
-    unlabeled_train_dataloader.dataset.shuffle(seed)
-    
-    logger.info("Generating pseudo labels")
-    generate_pseudo_labels(args, teacher_model, unlabeled_infer_dataloader, device, detection_postprocess, infer_nms_keep_top_k)
+    logger.info('Number of unlabeled batch: %d', len(unlabeled_train_dataloader))
     # get_progress_bar
-    progress_bar = get_progress_bar('Train', len(labeled_dataloader))
-    
+    progress_bar = get_progress_bar('Train', len(unlabeled_train_dataloader))
     iter_labeled_train = iter(labeled_dataloader)
-    for unlabeled_sample in unlabeled_train_dataloader:            
+    
+    for unlabeled_sample in unlabeled_train_dataloader:         
         if len(unlabeled_sample['image']) == 0:
             logger.info("No unlabeled data")
             continue

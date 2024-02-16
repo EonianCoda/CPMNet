@@ -3,6 +3,7 @@ from __future__ import print_function, division
 
 import os
 import random
+import logging
 import torch
 import json
 import numpy as np
@@ -12,6 +13,8 @@ lesion_label_default = ['aneurysm']
 
 BBOXES = 'bboxes'
 USE_BG = False
+
+logger = logging.getLogger(__name__)
 
 def load_series_list(series_list_path: str):
     """
@@ -123,10 +126,10 @@ class LabeledDataset(Dataset):
         for i in range(len(samples)):
             sample = samples[i]
             if self.transform_post:
+                sample['ctr_transform'] = []
                 sample = self.transform_post(sample)
             sample['image'] = (sample['image'] * 2.0 - 1.0) # normalized to -1 ~ 1
             random_samples.append(sample)
-        sample['ctr_transform'] = []
         return random_samples
 
 class UnLabeledTrainDataset(Dataset):
@@ -141,39 +144,18 @@ class UnLabeledTrainDataset(Dataset):
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         self.prob_threshold = prob_threshold
         
-        self.labels = []
-        self.dicom_paths = []
-        self.series_names = []
-        self.series_folders = []
-        
-        series_infos = load_series_list(series_list_path)
-        for folder, series_name in series_infos:
-            dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
-            
-            label_path = os.path.join(folder, 'pseudo_label', f'{series_name}.json')
-            label = self.read_labels(label_path)
-            if len(label['all_loc']) == 0:
-                continue
-            
-            self.dicom_paths.append(dicom_path)
-            self.series_names.append(series_name)
-            self.series_folders.append(folder)
-            self.labels.append(label)
-                
         self.transform_post = transform_post
         self.crop_fn = crop_fn
-
-        self.selected_indices = list(range(len(self.dicom_paths)))
-        
-    def shuffle(self, seed: int):
-        random.seed(seed)
-        random.shuffle(self.selected_indices)
+        self.series_infos = load_series_list(series_list_path)
     
     def __len__(self):
-        return len(self.dicom_paths)
-    
+        if hasattr(self, 'dicom_paths'):
+            return len(self.dicom_paths)
+        else:
+            logger.warning('Please call update_labels() before using this dataset')
+            return 0
     @staticmethod
-    def read_labels(self, label_path):
+    def read_labels(label_path, prob_threshold: float = 0.9):
         with open(label_path, 'r') as f:
             label = json.load(f)
             
@@ -181,9 +163,8 @@ class UnLabeledTrainDataset(Dataset):
         
         selected_indices = []
         for i, prob in enumerate(all_prob):
-            if prob[0] >= self.prob_threshold:
+            if prob[0] >= prob_threshold:
                 selected_indices.append(i)
-        
         if len(selected_indices) == 0:
             all_loc = np.zeros((0, 3), dtype=np.float32)
             all_rad = np.zeros((0, 3), dtype=np.float32)
@@ -198,8 +179,28 @@ class UnLabeledTrainDataset(Dataset):
                 'all_cls': all_cls}
         return label
     
+    def update_labels(self):
+        dicom_paths = []
+        series_names = []
+        series_folders = []
+        labels = []
+        for folder, series_name in self.series_infos:
+            label_path = os.path.join(folder, 'pseudo_label', f'{series_name}.json')
+            label = self.read_labels(label_path, self.prob_threshold)
+            if len(label['all_loc']) == 0:
+                continue
+            
+            dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
+            dicom_paths.append(dicom_path)
+            series_names.append(series_name)
+            series_folders.append(folder)
+            labels.append(label)
+        self.dicom_paths = dicom_paths
+        self.series_names = series_names
+        self.series_folders = series_folders
+        self.labels = labels
+        
     def __getitem__(self, idx):
-        idx = self.selected_indices[idx]
         dicom_path = self.dicom_paths[idx]
         series_name = self.series_names[idx]
         label = self.labels[idx]
@@ -222,10 +223,10 @@ class UnLabeledTrainDataset(Dataset):
         for i in range(len(samples)):
             sample = samples[i]
             if self.transform_post:
+                sample['ctr_transform'] = []
                 sample = self.transform_post(sample)
             sample['image'] = (sample['image'] * 2.0 - 1.0) # normalized to -1 ~ 1
             random_samples.append(sample)
-        sample['ctr_transform'] = []
         return random_samples
 
 # class UnLabeledTrainDataset(Dataset):
@@ -390,6 +391,7 @@ class DetDatasetCSVRTest(Dataset):
         for folder, series_name in series_infos:
             dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
             self.dicom_paths.append(dicom_path)
+            self.series_names.append(series_name)
         self.splitcomb = SplitComb
         
     def __len__(self):
@@ -458,7 +460,7 @@ def unlabeled_infer_collate_fn_dict(batches):
     nzhws = np.stack(nzhws)
     num_splits = np.array(num_splits)
     
-    return {'split_images': torch.tensor(imgs), 
+    return {'split_images': torch.from_numpy(imgs),
             'num_splits': num_splits, 
             'nzhws': torch.tensor(nzhws), 
             'spacings': spacings, 

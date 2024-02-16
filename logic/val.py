@@ -76,7 +76,7 @@ def val(args,
     
     model.eval()
     split_comber = val_loader.dataset.splitcomb
-    batch_size = args.batch_size * args.num_samples
+    batch_size = args.unlabeled_batch_size * args.num_samples
     all_preds = []
     for sample in val_loader:
         data = sample['split_images'][0].to(device, non_blocking=True)

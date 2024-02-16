@@ -18,8 +18,9 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.train import train, write_metrics, save_states
+from logic.train import train
 from logic.val import val
+from logic.utils import write_metrics, save_states
 ### optimzer ###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
