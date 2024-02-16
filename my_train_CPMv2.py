@@ -2,7 +2,6 @@
 from __future__ import print_function
 import argparse
 import torch
-import math
 import os
 import logging
 import numpy as np
@@ -15,21 +14,18 @@ from dataload.my_dataset_crop import DetDatasetCSVR, DetDatasetCSVRTest, collate
 from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
-import torch.nn as nn
 import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
-###optimzer###
+### logic ###
+from logic.train import train, write_metrics, save_states
+from logic.val import val
+### optimzer ###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
-###postprocessing###
-from utils.box_utils import nms_3D
-from evaluationScript.detectionCADEvalutionIOU import nodule_evaluation
-
+### postprocessing ###
 from utils.logs import setup_logging
-from utils.average_meter import AverageMeter
-from utils.utils import init_seed, get_local_time_in_taiwan, get_progress_bar, write_yaml, load_yaml
-from utils.generate_annot_csv_from_series_list import generate_annot_csv
+from utils.utils import init_seed, get_local_time_in_taiwan, write_yaml, load_yaml
 
 SAVE_ROOT = './save'
 DEFAULT_CROP_SIZE = [64, 128, 128]
@@ -79,7 +75,7 @@ def get_args():
     parser.add_argument('--act_type', type=str, default='ReLU', metavar='N', help='act type of network')
     parser.add_argument('--se', action='store_true', default=False, help='use se block')
     # other
-    parser.add_argument('--metric', type=str, default='f1_score', metavar='str', help='metric for validation')
+    parser.add_argument('--metric', type=str, default='froc_2_recall', metavar='str', help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, metavar='N', help='how many batches to wait before logging training status')
@@ -213,226 +209,6 @@ def test_val_data_prepare(args):
     logger.info("Number of test batches: {}".format(len(test_loader)))
     return test_loader
 
-def train_one_step(args, model, sample, device):
-    image = sample['image'].to(device, non_blocking=True) # z, y, x
-    labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
-    
-    # Compute loss
-    cls_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
-    cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-    loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-    return loss, (cls_loss, shape_loss, offset_loss, iou_loss)
-
-def train(args,
-          model,
-          optimizer,
-          train_loader,
-          scheduler_warm,
-          device,
-          writer: SummaryWriter,
-          epoch: int,
-          exp_folder: str):
-    model.train()
-    scheduler_warm.step()
-    
-    avg_cls_loss = AverageMeter()
-    avg_shape_loss = AverageMeter()
-    avg_offset_loss = AverageMeter()
-    avg_iou_loss = AverageMeter()
-    avg_loss = AverageMeter()
-    
-    # mixed precision training
-    mixed_precision = args.mixed_precision
-    if mixed_precision:
-        scaler = torch.cuda.amp.GradScaler()
-        
-    # get_progress_bar
-    progress_bar = get_progress_bar('Train', len(train_loader))
-    for batch_idx, sample in enumerate(train_loader):
-        optimizer.zero_grad(set_to_none=True)
-        if mixed_precision:
-            with torch.cuda.amp.autocast():
-                loss, (cls_loss, shape_loss, offset_loss, iou_loss) = train_one_step(args, model, sample, device)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-        else:
-            loss, (cls_loss, shape_loss, offset_loss, iou_loss) = train_one_step(args, model, sample, device)
-            loss.backward()
-            optimizer.step()
-        
-        # Update history
-        avg_cls_loss.update(cls_loss.item() * args.lambda_cls)
-        avg_shape_loss.update(shape_loss.item() * args.lambda_shape)
-        avg_offset_loss.update(offset_loss.item() * args.lambda_offset)
-        avg_iou_loss.update(iou_loss.item() * args.lambda_iou)
-        avg_loss.update(loss.item())
-        
-        if progress_bar is not None:
-            progress_bar.set_postfix(loss = avg_loss.avg,
-                                    cls_Loss = avg_cls_loss.avg,
-                                    shape_loss = avg_shape_loss.avg,
-                                    offset_loss = avg_offset_loss.avg,
-                                    giou_loss = avg_iou_loss.avg)
-            progress_bar.update()
-
-    if progress_bar is not None:
-        progress_bar.close()
-
-    logger.info('====> Epoch: {} train_cls_loss: {:.4f}'.format(epoch, avg_cls_loss.avg))
-    logger.info('====> Epoch: {} train_shape_loss: {:.4f}'.format(epoch, avg_shape_loss.avg))
-    logger.info('====> Epoch: {} train_offset_loss: {:.4f}'.format(epoch, avg_offset_loss.avg))
-    logger.info('====> Epoch: {} train_iou_loss: {:.4f}'.format(epoch, avg_iou_loss.avg))
-    
-    metrics = {'loss': avg_loss.avg,
-                'cls_loss': avg_cls_loss.avg,
-                'shape_loss': avg_shape_loss.avg,
-                'offset_loss': avg_offset_loss.avg,
-                'iou_loss': avg_iou_loss.avg}
-    
-    write_metrics(metrics, epoch, 'train', writer)
-    
-    # Remove the checkpoint of epoch % save_model_interval != 0
-    model_save_folder = os.path.join(exp_folder, 'model')
-    os.makedirs(model_save_folder, exist_ok=True)
-    for i in range(epoch):
-        ckpt_path = os.path.join(model_save_folder, 'epoch_{}.pth'.format(i))
-        if (i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path):
-            os.remove(ckpt_path)
-    
-    # Save checkpoint    
-    ckpt_path = {'epoch': epoch,
-                 'state_dict': model.state_dict(),
-                 'optimizer': optimizer.state_dict(),
-                 'scheduler': scheduler_warm.state_dict()}
-    torch.save(ckpt_path, os.path.join(model_save_folder, 'epoch_{}.pth'.format(epoch)))    
-
-def val(model: nn.Module,
-        test_loader: DataLoader,
-        epoch: int,
-        exp_folder: str,
-        save_dir: str,
-        annot_path: str, 
-        seriesuids_path: str,
-        writer: SummaryWriter = None,
-        nms_keep_top_k: int = 40):
-    def convert_to_standard_output(output: np.ndarray, spacing: torch.Tensor, name: str) -> List[List[Any]]:
-        '''
-        convert [id, prob, ctr_z, ctr_y, ctr_x, d, h, w] to
-        ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
-        '''
-        preds = []
-        spacing = np.array([spacing[0].numpy(), spacing[1].numpy(), spacing[2].numpy()]).reshape(-1, 3)
-        for j in range(output.shape[0]):
-            preds.append([name, output[j, 4], output[j, 3], output[j, 2], output[j, 1], output[j, 7], output[j, 6], output[j, 5]])
-        return preds
-    
-    model.eval()
-    split_comber = test_loader.dataset.splitcomb
-    batch_size = args.batch_size * args.num_samples
-    all_preds = []
-    for sample in test_loader:
-        data = sample['split_images'][0].to(device, non_blocking=True)
-        nzhw = sample['nzhw']
-        name = sample['file_name'][0]
-        spacing = sample['spacing'][0]
-        outputlist = []
-        
-        for i in range(int(math.ceil(data.size(0) / batch_size))):
-            end = (i + 1) * batch_size
-            if end > data.size(0):
-                end = data.size(0)
-            input = data[i * batch_size:end]
-            with torch.no_grad():
-                output = model(input)
-                output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-            outputlist.append(output.data.cpu().numpy())
-            
-        output = np.concatenate(outputlist, 0)
-        output = split_comber.combine(output, nzhw=nzhw)
-        output = torch.from_numpy(output).view(-1, 8)
-        
-        # Remove the padding
-        object_ids = output[:, 0] != -1.0
-        output = output[object_ids]
-        
-        # NMS
-        if len(output) > 0:
-            keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
-            output = output[keep]
-        output = output.numpy()
-        
-        preds = convert_to_standard_output(output, spacing, name) # convert to ['seriesuid', 'coordX', 'coordY', 'coordZ', 'radius', 'probability']
-        all_preds.extend(preds)
-        
-    # Save the results to csv
-    header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
-    df = pd.DataFrame(all_preds, columns=header)
-    pred_results_path = os.path.join(save_dir, 'predict_epoch_{}.csv'.format(epoch))
-    df.to_csv(pred_results_path, index=False)
-    
-    outputDir = os.path.join(save_dir, pred_results_path.split('/')[-1].split('.')[0])
-    os.makedirs(outputDir, exist_ok=True)
-    FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    out_01, fiexed_out = nodule_evaluation(annot_path = annot_path,
-                                            seriesuids_path = seriesuids_path, 
-                                            pred_results_path = pred_results_path,
-                                            output_dir = outputDir,
-                                            iou_threshold = args.val_iou_threshold,
-                                            fixed_prob_threshold=args.val_fixed_prob_threshold)
-    frocs = out_01[-1]
-    logger.info('====> Epoch: {}'.format(epoch))
-    for i in range(len(frocs)):
-        logger.info('====> fps:{:.4f} iou 0.1 frocs:{:.4f}'.format(FP_ratios[i], frocs[i]))
-    logger.info('====> mean frocs:{:.4f}'.format(np.mean(np.array(frocs))))
-    
-    fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score = fiexed_out
-    metrics = {'tp': fixed_tp,
-                'fp': fixed_fp,
-                'fn': fixed_fn,
-                'recall': fixed_recall,
-                'precision': fixed_precision,
-                'f1_score': fixed_f1_score}
-    global best_metric
-    global best_epoch
-    if metrics[args.metric] >= best_metric:
-        best_metric = metrics[args.metric]
-        best_epoch = epoch
-        torch.save(model.state_dict(), os.path.join(exp_folder, 'best_model.pth'))
-        logger.info('====> Best model saved at epoch: {}'.format(epoch))
-        logger.info('====> Best metric {}: {:.4f}'.format(args.metric, best_metric))
-        with open(os.path.join(exp_folder, 'best_epoch.txt'), 'w') as f:
-            f.write('Epoch: {}\n'.format(best_epoch))
-            f.write('Metric: {}\n'.format(args.metric))
-            f.write('Value: {}\n'.format(best_metric))
-            f.write('-'*20 + '\n')
-            for key, value in metrics.items():
-                f.write('{}: {:.4f}\n'.format(key, value))
-    if writer is not None:
-        write_metrics(metrics, epoch, 'val', writer)
-
-def convert_to_standard_csv(csv_path, save_dir, state, spacing):
-    '''
-    convert [seriesuid	coordX	coordY	coordZ	w	h	d] to 
-    'seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm'
-    spacing:[z, y, x]
-    '''
-    column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd']
-    gt_list = []
-    csv_file = pd.read_csv(csv_path)
-    seriesuid = csv_file['seriesuid']
-    coordX, coordY, coordZ = csv_file['coordX'], csv_file['coordY'], csv_file['coordZ']
-    w, h, d = csv_file['w'], csv_file['h'], csv_file['d']
-    clean_seriesuid = []
-    for j in range(seriesuid.shape[0]):
-        if seriesuid[j] not in clean_seriesuid: 
-            clean_seriesuid.append(seriesuid[j])
-        gt_list.append([seriesuid[j], coordX[j], coordY[j], coordZ[j], w[j]/spacing[2], h[j]/spacing[1], d[j]/spacing[0]])
-    df = pd.DataFrame(gt_list, columns=column_order)
-    df.to_csv(os.path.join(save_dir, 'annotation_{}.csv'.format(state)), index=False)
-    df = pd.DataFrame(clean_seriesuid)
-    df.to_csv(os.path.join(save_dir, 'seriesuid_{}.csv'.format(state)), index=False, header=None)
-
 if __name__ == '__main__':
     args = get_args()
     
@@ -472,31 +248,48 @@ if __name__ == '__main__':
     train_loader = training_data_prepare(args)
     val_loader = test_val_data_prepare(args)
     
-    annot_dir = os.path.join(exp_folder, 'annotation')
-    state = 'validate'
-    origin_annot_path = os.path.join(annot_dir, 'origin_annotation_{}.csv'.format(state))
-    annot_path = os.path.join(annot_dir, 'annotation_{}.csv'.format(state))
-    generate_annot_csv(args.val_set, origin_annot_path, spacing=IMAGE_SPACING)
-    convert_to_standard_csv(csv_path = origin_annot_path, 
-                            save_dir = annot_dir, 
-                            state = state, 
-                            spacing = IMAGE_SPACING)
+    model_save_folder = os.path.join(exp_folder, 'model')
+    os.makedirs(model_save_folder, exist_ok=True)
     for epoch in range(start_epoch, args.epochs + 1):
-        train(args = args,
-              model = model,
-              optimizer = optimizer,
-              scheduler_warm = scheduler_warm,
-              train_loader = train_loader, 
-              device = device,
-              writer = writer,
-              epoch = epoch, 
-              exp_folder = exp_folder)
+        train_metrics = train(args = args,
+                            model = model,
+                            optimizer = optimizer,
+                            scheduler_warm = scheduler_warm,
+                            train_loader = train_loader, 
+                            device = device)
+        write_metrics(train_metrics, epoch, 'Train', writer)
+        for key, value in train_metrics.items():
+            logger.info('====> Epoch: {} loss: {:.4f}'.format(epoch, value))
+        # Remove the checkpoint of epoch % save_model_interval != 0
+        for i in range(epoch):
+            ckpt_path = os.path.join(model_save_folder, 'epoch_{}.pth'.format(i))
+            if (i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path):
+                os.remove(ckpt_path)
+        save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, f'epoch_{epoch}.pth'))
+        
         if epoch >= args.start_val_epoch: 
-            val(epoch = epoch,
-                test_loader = val_loader, 
-                save_dir = annot_dir,
-                exp_folder=exp_folder,
-                writer = writer,
-                annot_path = os.path.join(annot_dir, 'annotation_validate.csv'), 
-                seriesuids_path = os.path.join(annot_dir, 'seriesuid_validate.csv'), 
-                model = model)
+            metrics = val(args = args,
+                            model = model,
+                            detection_postprocess=detection_postprocess,
+                            val_loader = val_loader, 
+                            device = device,
+                            image_spacing = IMAGE_SPACING,
+                            series_list_path=args.val_set,
+                            exp_folder=exp_folder,
+                            epoch = epoch)
+            if metrics[args.metric] >= best_metric:
+                best_metric = metrics[args.metric]
+                best_epoch = epoch
+                
+                save_states(model, optimizer, scheduler_warm, os.path.join(model_save_folder, 'best.pth'))
+                logger.info('====> Best model saved at epoch: {}'.format(epoch))
+                logger.info('====> Best metric {}: {:.4f}'.format(args.metric, best_metric))
+                with open(os.path.join(exp_folder, 'best_epoch.txt'), 'w') as f:
+                    f.write('Epoch: {}\n'.format(best_epoch))
+                    f.write('Metric: {}\n'.format(args.metric))
+                    f.write('Value: {}\n'.format(best_metric))
+                    f.write('-'*20 + '\n')
+                    for key, value in metrics.items():
+                        f.write('{}: {:.4f}\n'.format(key, value))
+            if writer is not None:
+                write_metrics(metrics, epoch, 'val', writer)

@@ -6,7 +6,6 @@ import argparse
 from typing import List
 
 BBOXES = 'bboxes'
-# SPACING = [1.0, 0.8, 0.8] # (z, y, x)
 
 def get_args():
     parser = argparse.ArgumentParser()
@@ -14,6 +13,15 @@ def get_args():
     parser.add_argument('--save_path', type=str, default='./annotation.csv')
     args = parser.parse_args()
     return args
+
+def generate_series_uids_csv(series_list_path: str, save_path: str):
+    series_infos = load_series_list(series_list_path)
+    header = 'seriesuid\n'
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    with open(save_path, 'w') as f:
+        f.write(header)
+        for folder, series_name in series_infos:
+            f.write(series_name + '\n')
 
 def generate_annot_csv(series_list_path: str,
                        save_path: str,
@@ -50,17 +58,15 @@ def generate_annot_csv(series_list_path: str,
     with open(save_path, 'w') as f:
         f.write(','.join(column_order) + '\n')
         for series_i in range(len(series_infos)):
-            for i in range(len(all_locs[series_i])):
-                loc = all_locs[series_i][i]
-                rad = all_rads[series_i][i]
+            for loc, rad in zip(all_locs[series_i], all_rads[series_i]):
                 z, y, x = loc
                 d, h, w = rad
-                
-                row = [series_infos[series_i][1] + '_crop.npy']
-                for i in [x, y, z, w, h, d]:
-                    row.append('{:.2f}'.format(i))
+                series_name = series_infos[series_i][1]
+                row = [series_name]
+                for value in [x, y, z, w, h, d]:
+                    row.append('{:.2f}'.format(value))
                 f.write(','.join(row) + '\n')
-    
+
 if __name__ == '__main__':
     args = get_args()
     series_list_path = args.series_list_path

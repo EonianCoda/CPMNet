@@ -561,7 +561,7 @@ def collect(annot_path: str,
     return allNodules, seriesUIDs
     
 def nodule_evaluation(annot_path: str,
-                    seriesuids_path: str,
+                    series_uids_path: str,
                     pred_results_path: str,
                     output_dir: str,
                     iou_threshold: float,
@@ -576,7 +576,7 @@ def nodule_evaluation(annot_path: str,
         output_dir: output directory
         iou_threshold: iou threshold
     """
-    all_gt_nodules, seriesUIDs = collect(annot_path, seriesuids_path)
+    all_gt_nodules, seriesUIDs = collect(annot_path, series_uids_path)
     
     out, fixed_out = evaluateCAD(seriesUIDs = seriesUIDs, 
                                 results_path = pred_results_path, 
