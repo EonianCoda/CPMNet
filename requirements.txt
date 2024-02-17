@@ -1,0 +1,11 @@
+SimpleITK
+connected-components-3d
+tensorboard
+matplotlib
+rich
+tqdm
+scipy
+scikit-image
+scikit-learn
+pandas
+PyYAML

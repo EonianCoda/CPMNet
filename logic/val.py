@@ -124,7 +124,7 @@ def val(args,
             start_idx += n_split
             
         progress_bar.update(1)
-        
+    progress_bar.close()
     # Save the results to csv
     output_dir = os.path.join(annot_dir, f'epoch_{epoch}')
     os.makedirs(output_dir, exist_ok=True)

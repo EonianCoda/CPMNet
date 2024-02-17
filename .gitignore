@@ -10,7 +10,6 @@ __pycache__
 logs
 save
 bbox01_aneurysm
-*.txt
 *.csv
 *.ipynb
 *.npy
