@@ -233,7 +233,6 @@ def training_data_prepare(args, blank_side=0):
                                         collate_fn=unlabeled_infer_collate_fn_dict,
                                         num_workers=args.unlabeled_batch_size,
                                         pin_memory=args.pin_memory,
-                                        drop_last=True,
                                         persistent_workers=False)
 
     unlabeled_train_dataset = UnLabeledTrainDataset(series_list_path = args.unlabeled_train_set,
@@ -301,8 +300,9 @@ if __name__ == '__main__':
     model_save_folder = os.path.join(exp_folder, 'model')
     os.makedirs(model_save_folder, exist_ok=True)
     for epoch in range(start_epoch, args.epochs + 1):
-        generate_pseudo_labels(args, teacher_model, unlabeled_infer_loader, device, detection_postprocess, nms_keep_top_k = args.val_nms_keep_top_k)
-        unlabeled_train_dataset.update_labels()
+        if epoch == 0 or epoch % 4 == 0:
+            generate_pseudo_labels(args, teacher_model, unlabeled_infer_loader, device, detection_postprocess, nms_keep_top_k = args.val_nms_keep_top_k)
+            unlabeled_train_dataset.update_labels()
         if epoch == 0:
             unlabeled_train_loader = DataLoader(unlabeled_train_dataset,
                                                 batch_size=args.unlabeled_batch_size,

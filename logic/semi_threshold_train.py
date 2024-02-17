@@ -37,7 +37,7 @@ def generate_pseudo_labels(args,
     logger.info("Generating pseudo labels")
     model.eval()
     split_comber = dataloader.dataset.splitcomb
-    infer_batch_size = 2 * args.unlabeled_batch_size * args.num_samples
+    infer_batch_size = args.unlabeled_batch_size * args.num_samples
     
     for i, sample in enumerate(dataloader):
         # Generate pseudo labels
