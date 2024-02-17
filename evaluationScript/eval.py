@@ -8,7 +8,7 @@ from matplotlib.ticker import FixedFormatter
 import sklearn.metrics as skl_metrics
 import numpy as np
 
-from .NoduleFinding import NoduleFinding
+from .nodule_finding import NoduleFinding
 from .tools import csvTools
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ COORDZ = 'coordZ'
 WW = 'w'
 HH = 'h'
 DD = 'd'
+NODULE_TYPE = 'nodule_type'
 CADProbability_label = 'probability'
 
 # plot settings
@@ -207,11 +208,7 @@ def evaluateCAD(seriesUIDs: List[str],
     """
     function to evaluate a CAD algorithm
     """
-    nodule_output_file = open(os.path.join(output_dir,'CADAnalysis_{}.txt'.format(iou_threshold)),'w')
-    nodule_output_file.write("\n")
-    nodule_output_file.write((60 * "*") + "\n")
-    nodule_output_file.write((60 * "*") + "\n")
-    nodule_output_file.write("\n")
+    nodule_output_file = open(os.path.join(output_dir,'Analysis_{}.txt'.format(iou_threshold)),'w')
 
     pred_results = csvTools.readCSV(results_path)
     all_pred_cands = {}
@@ -245,7 +242,8 @@ def evaluateCAD(seriesUIDs: List[str],
         all_pred_cands[series_uid] = nodules  
         
     # open output files
-    FN_list_file = open(os.path.join(output_dir, "FN_{}.txt".format(iou_threshold)), 'w')
+    FN_list_file = open(os.path.join(output_dir, "FN_{}.csv".format(iou_threshold)), 'w')
+    FN_list_file.write("seriesuid,coordX,coordY,coordZ,w,h,d\n")
 
     # --- iterate over all cases (seriesUIDs) and determine how
     # often a nodule annotation is not covered by a candidate
@@ -253,7 +251,7 @@ def evaluateCAD(seriesUIDs: List[str],
     tp_count, fp_count, fn_count, tn_count = 0, 0, 0, 0
     total_num_of_cands, total_num_of_nodules = 0, 0
     duplicated_detection_count = 0
-    min_prob_value = -1000000000.0  # minimum value of a float
+    min_prob_value = -10000.0  # minimum value of a float
     FROC_is_pos_list = []
     FROC_prob_list = []
     FROC_series_uids = []
@@ -298,7 +296,9 @@ def evaluateCAD(seriesUIDs: List[str],
                 if iou >= iou_threshold:
                     nodule_matches.append(candidate)  
                     if cand_id not in pred_cands_copy.keys():
-                        logger.info('This is strange: There are two nodules overlapping with the same prediction, but one of them is already deleted. SeriesUID: %s, nodule Annot ID: %s' % (series_uid, str(gt_nodule.id)))
+                        logger.info('This is strange: There are two nodules overlapping with the same prediction, but one of them is already deleted')
+                        logger.info('series_uid: %s, coordX: %s, coordY: %s, coordZ: %s, w: %.2f, h: %.2f, d: %.2f' % (series_uid, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, gt_nodule.w, gt_nodule.h, gt_nodule.d))
+                        logger.info('cand_id: %s, coordX: %s, coordY: %s, coordZ: %s, w: %.2f, h: %.2f, d: %.2f' % (cand_id, candidate.coordX, candidate.coordY, candidate.coordZ, candidate.w, candidate.h, candidate.d))
                     else:
                         del pred_cands_copy[cand_id]
                         
@@ -322,7 +322,7 @@ def evaluateCAD(seriesUIDs: List[str],
                 
                 FROC_is_FN_list.append(True)  
                 # For FN
-                FN_list_file.write("%s,%s,%s,%s,%s,%.9f,%.9f,%.9f,%s\n" % (series_uid, gt_nodule.id, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d), str(-1)))
+                FN_list_file.write("%s, %s,%s,%s,%.1f,%.1f,%.1f\n" % (series_uid, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d)))
                 FN_diameter.append([w, h, d])
                 FN_seriesuid.append(series_uid)
         
@@ -348,12 +348,12 @@ def evaluateCAD(seriesUIDs: List[str],
     if int(total_num_of_nodules) == 0:
         nodule_output_file.write("    Sensitivity: 0.0\n")
     else:
-        nodule_output_file.write("    Sensitivity: %.9f\n" % (float(tp_count) / float(total_num_of_nodules)))
+        nodule_output_file.write("    Sensitivity: %.3f\n" % (float(tp_count) / float(total_num_of_nodules)))
     nodule_output_file.write("    Average number of candidates per scan: %.9f\n" % (float(total_num_of_cands) / float(len(seriesUIDs))))
     nodule_output_file.write(
         "    FN_diammeter:\n")
     for idx, whd in enumerate(FN_diameter):
-        nodule_output_file.write("    FN_%d: w:%.9f, h:%.9f, d:%.9f sericeuid:%s\n" % (idx+1, whd[0], whd[1], whd[2], FN_seriesuid[idx]))
+        nodule_output_file.write("    FN_%d: w:%.1f, h:%.1f, d:%.1f sericeuid: %s\n" % (idx+1, whd[0], whd[1], whd[2], FN_seriesuid[idx]))
     
     fixed_tp, fixed_fp, fixed_fn = 0, 0, 0
     
@@ -412,8 +412,9 @@ def evaluateCAD(seriesUIDs: List[str],
     
     # Write FROC vectors to disk as well
     with open(os.path.join(output_dir, "froc_gt_prob_vectors_{}.csv".format(iou_threshold)), 'w') as f:
+        f.write("is_pos, prob\n")
         for i in range(len(FROC_is_pos_list)):
-            f.write("%d,%.9f\n" % (FROC_is_pos_list[i], FROC_prob_list[i]))
+            f.write("%d,%.4f\n" % (FROC_is_pos_list[i], FROC_prob_list[i]))
 
     fps_itp = np.linspace(FROC_MINX, FROC_MAXX, num=10001)  # FROC横坐标范围
     
@@ -423,28 +424,24 @@ def evaluateCAD(seriesUIDs: List[str],
     sens_points = []
     prec_points = []
     
-    
     if PERFORMBOOTSTRAPPING: # True
         # Write mean, lower, and upper bound curves to disk
         with open(os.path.join(output_dir, "froc_bootstrapping_{}.csv".format(iou_threshold)), 'w') as f:
             f.write("FPrate,Sensivity[Mean],Sensivity[Lower bound],Sensivity[Upper bound]\n")
             for i in range(len(fps_bs_itp)):
-                f.write("%.9f,%.9f,%.9f,%.9f\n" % (fps_bs_itp[i], sens_bs_mean[i], sens_bs_lb[i], sens_bs_up[i]))
+                f.write("%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], sens_bs_lb[i], sens_bs_up[i]))
             FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
             total_sens = 0
+            nodule_output_file.write('-'*20 + '\n')
+            nodule_output_file.write("FP/Scan, Sensitivity, Precision\n")
             for fp_point in FPS:
                 index = np.argmin(abs(fps_bs_itp - fp_point))
-                nodule_output_file.write("\n")
-                nodule_output_file.write(str(index))
-                nodule_output_file.write(str(sens_bs_mean[index]))
+                nodule_output_file.write('{:.3f}, {:.3f}, {:.3f}\n'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
                 sens_points.append(sens_bs_mean[index])
                 prec_points.append(prec_bs_mean[index])
-                # logger.info('{} FP/Scans: sen = {:.2f}, prec = {:.2f}'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
                 total_sens += sens_bs_mean[index]
-            # logger.info('Froc_mean: {}'.format(total_sens / len(FPS)))
             nodule_output_file.write("\n")
-            nodule_output_file.write("Froc_mean")
-            nodule_output_file.write(str(total_sens / len(FPS)))
+            nodule_output_file.write("Froc_mean = {:.2f}\n".format(total_sens / len(FPS)))
     else:
         fps_bs_itp = None
         sens_bs_mean = None
@@ -453,7 +450,6 @@ def evaluateCAD(seriesUIDs: List[str],
 
     # create FROC graphs
     if int(total_num_of_nodules) > 0:
-        graphTitle = str("")
         fig1 = plt.figure()
         ax = plt.gca()
         clr = 'b'
@@ -469,11 +465,11 @@ def evaluateCAD(seriesUIDs: List[str],
         plt.ylim(0, 1)
         plt.xlabel('Average number of false positives per scan')
         plt.ylabel('Sensitivity')
-        # plt.legend(loc='lower right')
         plt.title('FROC performance')
         
         if bLogPlot:
             plt.xscale('log')
+            ax.xaxis.set_major_locator(plt.FixedLocator([0.125,0.25,0.5,1,2,4,8]))
             ax.xaxis.set_major_formatter(FixedFormatter([0.125,0.25,0.5,1,2,4,8]))
         
         # set your ticks manually
@@ -497,7 +493,10 @@ def get_nodule(annot: List[Any],
     nodule.h = float(annot[header.index(HH)])
     nodule.d = float(annot[header.index(DD)])
     
-    nodule.update_area()
+    if NODULE_TYPE in header:
+        nodule.nodule_type = annot[header.index(NODULE_TYPE)]
+    else:
+        nodule.auto_nodule_type()
     if CADProbability_label in header:
         nodule.CADprobability = annot[header.index(CADProbability_label)]
     
@@ -535,7 +534,7 @@ def collect_nodule_annotations(annotations: List[List[Any]],
         noduleCount += numberOfIncludedNodules
         noduleCountTotal += len(nodules)
     
-    logger.info('Total number of included nodule annotations: {}'.format(noduleCount))
+    # logger.info('Total number of included nodule annotations: {}'.format(noduleCount))
     logger.info('Total number of nodule annotations: {}'.format(noduleCountTotal))
     return allNodules
     
@@ -586,12 +585,3 @@ def nodule_evaluation(annot_path: str,
                                 fixed_prob_threshold=fixed_prob_threshold,
                                 iou_threshold = iou_threshold)
     return out, fixed_out
-
-if __name__ == '__main__':
-    annotations_filename          = './annotations/annotations.csv'
-    annotations_excluded_filename = './annotations/annotations_excluded.csv'
-    seriesuids_filename           = './annotations/seriesuids.csv'
-    results_filename              = './submission/sampleSubmission.csv'
-    outputDir                     = './result'
-
-    nodule_evaluation(annotations_filename,annotations_excluded_filename,seriesuids_filename,results_filename,outputDir)

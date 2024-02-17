@@ -1,1 +1,3 @@
-python my_train_CPMv2.py --train_set ./data/pretrained_train.txt --val_set ./data/pretrained_val.txt --batch-size 3 --num_workers 3 --se --pin_memory --num_samples 5 --mixed_precision
+python my_train_CPMv2.py --train_set ./data/pretrained_train.txt --val_set ./data/pretrained_val.txt --test_set ./data/all_client_test.txt --batch_size 3 --num_samples 5 --mixed_precision --val_mixed_precision --pretrained_model_path ./save/pretrained_model.pth --epochs 3 --start_val_epoch 0
+
+python my_train_CPMv2.py --train_set ./data/test_bug.txt --val_set ./data/test_bug.txt --test_set ./data/test_bug.txt --batch_size 3 --num_samples 5 --mixed_precision --val_mixed_precision --pretrained_model_path ./save/pretrained_model.pth --epochs 3 --start_val_epoch 0

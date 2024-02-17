@@ -23,6 +23,11 @@ def get_local_time_in_taiwan() -> datetime.datetime:
     taiwan_now = utc_now + datetime.timedelta(hours=8) # Taiwan in UTC+8
     return taiwan_now
 
+def get_local_time_str_in_taiwan() -> str:
+    cur_time = get_local_time_in_taiwan()
+    timestamp = "[%d-%02d-%02d-%02d%02d]" % (cur_time.year, cur_time.month, cur_time.day, cur_time.hour, cur_time.minute)
+    return timestamp
+
 def get_progress_bar(identifer: str, total_steps: int) -> tqdm:
     """Get the progress bar
     """

@@ -23,7 +23,7 @@ from sync_batchnorm import convert_model
 import optimizer.solver as solver
 ###postprocessing###
 from utils.box_utils import nms_3D
-from evaluationScript.detectionCADEvalutionIOU import nodule_evaluation
+from evaluationScript.eval import nodule_evaluation
 import pandas as pd
 
 parser = argparse.ArgumentParser(description='anchorfree_3D_aneurysm_refine')
