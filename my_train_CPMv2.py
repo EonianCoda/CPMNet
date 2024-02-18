@@ -206,13 +206,16 @@ if __name__ == '__main__':
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,
-                            scheduler = scheduler_warm,
                             dataloader = train_loader, 
                             device = device)
+        scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
         for key, value in train_metrics.items():
             logger.info('==> Epoch: {} {}: {:.4f}'.format(epoch, key, value))
-            
+        # add learning rate to tensorboard
+        logger.info('==> Epoch: {} lr: {:.4f}'.format(epoch, scheduler_warm.get_lr()[0]))
+        write_metrics({'lr': scheduler_warm.get_lr()[0]}, epoch, 'train', writer)
+        
         # Remove the checkpoint of epoch % save_model_interval != 0
         for i in range(epoch):
             ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
@@ -247,7 +250,7 @@ if __name__ == '__main__':
                         val_loader = test_loader,
                         device = device,
                         image_spacing = IMAGE_SPACING,
-                        series_list_path=args.val_set,
+                        series_list_path=args.test_set,
                         exp_folder=exp_folder,
                         epoch = 'test_best_{}'.format(target_metric))
         write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)

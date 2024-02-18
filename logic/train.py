@@ -25,10 +25,8 @@ def train(args,
           model: nn.modules,
           optimizer: torch.optim.Optimizer,
           dataloader: DataLoader,
-          scheduler: torch.optim.lr_scheduler,
           device: torch.device) -> Dict[str, float]:
     model.train()
-    scheduler.step()
     avg_cls_loss = AverageMeter()
     avg_shape_loss = AverageMeter()
     avg_offset_loss = AverageMeter()

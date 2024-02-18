@@ -55,7 +55,8 @@ class NoduleTyper:
 
 def generate_annot_csv(series_list_path: str,
                        save_path: str,
-                       spacing: List[float] = None):
+                       spacing: List[float] = None,
+                       min_d: float = 0):
     spacing = np.array(spacing)
     column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'nodule_type']
     
@@ -83,13 +84,26 @@ def generate_annot_csv(series_list_path: str,
 
         all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
         all_rad = all_rad[:, [2, 0, 1]] # (d, h, w)
+        
+        valid_mask = all_rad[:, 0] >= min_d
+        
         all_rad = all_rad * spacing
         
-        all_locs.append(all_loc)
-        all_rads.append(all_rad)
+        if np.sum(valid_mask) == 0:
+            all_locs.append([])
+            all_rads.append([])
+            all_types.append([])
+            continue
+        else:
+            all_loc = all_loc[valid_mask]
+            all_rad = all_rad[valid_mask]
+            nodule_sizes = info[NODULE_SIZE]
+            nodule_sizes = np.array(nodule_sizes)[valid_mask]
+            
+            all_locs.append(all_loc)
+            all_rads.append(all_rad)
 
-        nodule_sizes = info[NODULE_SIZE]
-        all_types.append([nodule_typer.get_nodule_type(nodule_size) for nodule_size in nodule_sizes])
+            all_types.append([nodule_typer.get_nodule_type(nodule_size) for nodule_size in nodule_sizes])
         
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, 'w') as f:
