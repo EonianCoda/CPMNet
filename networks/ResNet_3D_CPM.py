@@ -340,15 +340,21 @@ class DetectionLoss(nn.Module):
                  crop_size=[64, 128, 128], 
                  pos_target_topk = 7, 
                  pos_ignore_ratio = 3,
+                 cls_num_hard = 100,
+                 cls_fn_weight = 4.0,
+                 cls_fn_threshold = 0.8,
                  spacing=[2.0, 1.0, 1.0]):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
         self.pos_ignore_ratio = pos_ignore_ratio
         self.spacing = np.array(spacing)
-
+        
+        self.cls_num_hard = cls_num_hard
+        self.cls_fn_weight = cls_fn_weight
+        self.cls_fn_threshold = cls_fn_threshold
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
         """
         Args:
             pred: torch.Tensor
@@ -374,9 +380,9 @@ class DetectionLoss(nn.Module):
             cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
             record_targets = target_b.clone()
             if num_positive_pixels > 0:
-                FN_weights = 4.0  # 10.0  for ablation study
-                FN_index = torch.lt(cls_prob, 0.8) & (record_targets == 1)  # 0.9
-                cls_loss[FN_index == 1] = FN_weights * cls_loss[FN_index == 1]
+                # FN_weights = 4.0  # 10.0  for ablation study
+                FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
+                cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
                 
                 Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
@@ -497,16 +503,6 @@ class DetectionLoss(nn.Module):
             return iou - rho2 / c2  # DIoU
         return iou  # IoU
     
-    # @staticmethod
-    # def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
-    #     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
-    #     anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
-    #     Returns:
-    #         A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
-    #     """
-    #     c_zyx = (anchor_points + pred_offsets) * stride_tensor
-    #     return torch.cat((c_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
-    
     @staticmethod
     def get_pos_target(annotations: torch.Tensor,
                        anchor_points: torch.Tensor,
@@ -616,7 +612,7 @@ class DetectionLoss(nn.Module):
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         fg_mask = target_scores.squeeze(-1).bool()
-        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int())
+        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), num_hard=self.cls_num_hard, fn_weight=self.cls_fn_weight, fn_threshold=self.cls_fn_threshold)
         if fg_mask.sum() == 0:
             reg_losses = torch.tensor(0).float().to(device)
             offset_losses = torch.tensor(0).float().to(device)

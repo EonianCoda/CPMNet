@@ -62,7 +62,9 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
     parser.add_argument('--pos_target_topk', type=int, default=5, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
-    parser.add_argument('--num_samples', type=int, default=6, help='sampling batch number in per sample')
+    parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
+    parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
+    parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -87,8 +89,12 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
     # build model
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
-                                   spacing = IMAGE_SPACING, 
-                                   pos_ignore_ratio = args.pos_ignore_ratio)
+                                   pos_ignore_ratio = args.pos_ignore_ratio,
+                                   spacing = IMAGE_SPACING,
+                                   cls_num_hard=args.cls_num_hard,
+                                    cls_fn_weight=args.cls_fn_weight,
+                                    cls_fn_threshold=args.cls_fn_threshold)
+                                   
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
                      act_type = args.act_type, 
