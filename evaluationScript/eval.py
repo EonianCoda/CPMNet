@@ -13,6 +13,7 @@ from .tools import csvTools
 
 logger = logging.getLogger(__name__)
 
+DYNAMIC_RATIO = [0.7, 1.0, 1.0, 0.7]
 # Evaluation settings
 PERFORMBOOTSTRAPPING = True
 NUMBEROFBOOTSTRAPSAMPLES = 1000
@@ -57,6 +58,20 @@ def box_iou_union_3d(boxes1: List[float], boxes2: List[float], eps: float = 0.00
     inter = (max((x2 - x1), 0) * max((y2 - y1), 0) * max((z2 - z1), 0)) + eps
     union = (vol1 + vol2 - inter)
     return inter / union
+
+def dynamic_threshold_wrapper(dynamic_ratio: List[float], fixed_prob_threshold: float) -> float:
+    def dynamic_threshold(candidate: NoduleFinding) -> float:
+        if candidate == None:
+            return fixed_prob_threshold
+        if candidate.nodule_type == 'benign':
+            return fixed_prob_threshold * dynamic_ratio[0]
+        elif candidate.nodule_type == 'probably_benign':
+            return fixed_prob_threshold * dynamic_ratio[1]
+        elif candidate.nodule_type == 'probably_suspicious':
+            return fixed_prob_threshold * dynamic_ratio[2]
+        elif candidate.nodule_type == 'suspicious':
+            return fixed_prob_threshold * dynamic_ratio[3]
+    return dynamic_threshold
 
 def gen_bootstrap_set(scan_to_cands_dict: Dict[str, np.ndarray], seriesUIDs_np: np.ndarray) -> np.ndarray:
     """
@@ -257,6 +272,7 @@ def evaluateCAD(seriesUIDs: List[str],
     FROC_series_uids = []
     FROC_is_FN_list = []
     FROC_nodule_list = []
+    FROC_candidates_list = []
     # -- loop over the cases
     FN_diameter = []
     FN_seriesuid = []
@@ -312,9 +328,12 @@ def evaluateCAD(seriesUIDs: List[str],
             if len(nodule_matches) > 0: # at least one candidate overlaps with the ground truth nodule
                 tp_count += 1  
                 # append the sample with the highest probability for the FROC analysis
-                max_prob = max([float(candidate.CADprobability) for candidate in nodule_matches])
-                FROC_prob_list.append(float(max_prob))  
+                max_idx = np.argmax([float(candidate.CADprobability) for candidate in nodule_matches])
+                max_prob = nodule_matches[max_idx].CADprobability
+                FROC_prob_list.append(float(max_prob))
                 FROC_is_FN_list.append(False)
+                FROC_candidates_list.append(nodule_matches[max_idx])
+                
             else: # no candidate overlaps with the ground truth nodule
                 fn_count += 1
                 # append a positive sample with the lowest probability, such that this is added in the FROC analysis
@@ -325,6 +344,7 @@ def evaluateCAD(seriesUIDs: List[str],
                 FN_list_file.write("%s, %s,%s,%s,%.1f,%.1f,%.1f\n" % (series_uid, gt_nodule.coordX, gt_nodule.coordY, gt_nodule.coordZ, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d)))
                 FN_diameter.append([w, h, d])
                 FN_seriesuid.append(series_uid)
+                FROC_candidates_list.append(None)
         
         # add all false positives to the vectors
         for cand_id, candidate in pred_cands_copy.items(): # the remaining candidates are false positives
@@ -334,7 +354,7 @@ def evaluateCAD(seriesUIDs: List[str],
             FROC_series_uids.append(series_uid)
             FROC_is_FN_list.append(False)
             FROC_nodule_list.append(candidate)
-
+            FROC_candidates_list.append(candidate)
     # Statistics that are computed
     nodule_output_file.write("Candidate detection results:\n")
     nodule_output_file.write("    True positives: %d\n" % tp_count)
@@ -357,13 +377,15 @@ def evaluateCAD(seriesUIDs: List[str],
     
     fixed_tp, fixed_fp, fixed_fn = 0, 0, 0
     
-    
     classified_metrics = {'benign': [0 ,0, 0],
                         'probably_benign': [0 ,0, 0],
                         'probably_suspicious': [0 ,0, 0],
                         'suspicious': [0 ,0, 0]}
     
-    for is_pos, prob, is_fn, nodule in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, FROC_nodule_list):
+    logger.info('Fixed threshold: {}'.format(fixed_prob_threshold))
+    # dynamic_threshold = dynamic_threshold_wrapper(DYNAMIC_RATIO, fixed_prob_threshold)
+    for is_pos, prob, is_fn, nodule, cand in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, FROC_nodule_list, FROC_candidates_list):
+        # threshold = dynamic_threshold(cand)
         if is_fn or (is_pos == 1.0 and prob < fixed_prob_threshold):
             fixed_fn += 1
             classified_metrics[nodule.nodule_type][2] += 1
@@ -376,8 +398,7 @@ def evaluateCAD(seriesUIDs: List[str],
     
     fixed_recall = fixed_tp / max(fixed_tp + fixed_fn, 1e-6)
     fixed_precision = fixed_tp / max(fixed_tp + fixed_fp, 1e-6)
-    fixed_f1_score = 2 * fixed_precision * fixed_recall / (fixed_precision + fixed_recall)
-    logger.info('Fixed threshold: {}'.format(fixed_prob_threshold))
+    fixed_f1_score = (2 * fixed_precision * fixed_recall) / max(fixed_precision + fixed_recall, 1e-6)
     
     template = '{:20s}: Recall={:.3f}, Precision={:.3f}, F1={:.3f}, TP={:4d}, FP={:4d}, FN={:4d}'
     for nodule_type, metrics in classified_metrics.items():

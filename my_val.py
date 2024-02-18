@@ -35,7 +35,7 @@ def get_args():
     parser.add_argument('--crop_size', nargs='+', type=int, default=DEFAULT_CROP_SIZE, help='crop size')
     parser.add_argument('--model_path', type=str, default='')
     # data
-    parser.add_argument('--val_set', type=str, required=True,help='val_list')
+    parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
     # hyper-parameters
     parser.add_argument('--num_samples', type=int, default=5, help='sampling batch number in per sample')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
@@ -100,6 +100,7 @@ if __name__ == '__main__':
     
     write_yaml(os.path.join(exp_folder, 'val_config.yaml'), args)
     logger.info('Save validation results to "{}"'.format(exp_folder))
+    logger.info('Val set: "{}"'.format(args.val_set))
     metrics = val(args = args,
                 model = model,
                 detection_postprocess=detection_postprocess,

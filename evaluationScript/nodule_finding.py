@@ -54,33 +54,9 @@ class NoduleFinding(object):
         self.d = d
         self.candidateID = None
         self.seriesuid = seriesInstanceUID
-
         self.nodule_type = nodule_type
-        self.volume_method = 5
         
     def auto_nodule_type(self):
         nodule_typer = NoduleTyperRect()
-        
-        dhw = np.array([self.d, self.h, self.w])
-        
-        if self.volume_method == 0:
-            self.volume = self.w * self.h * self.d
-        elif self.volume_method == 1:
-            r = max(self.w, self.h, self.d) / 2
-            self.volume = 4/3 * math.pi * r**3
-        elif self.volume_method == 2:
-            r = (self.w + self.h + self.d) / 6.0
-            self.volume = 4/3 * math.pi * r**3
-        elif self.volume_method == 3:
-            r = min(self.w, self.h, self.d) / 2
-            self.volume = 4/3 * math.pi * r**3
-        elif self.volume_method == 4:
-            _, rs = np.sort(dhw)
-            median = rs[1]
-            self.volume = 4/3 * math.pi * (median/2)**3
-        elif self.volume_method == 5:
-            max_r = max(self.w, self.h)
-            area = math.pi * (max_r/2)**2
-            self.volume = area * self.d
-            
+        self.volume = 4/3 * math.pi * ((self.w * self.h * self.d) / 8)  # volume of an ellipsoid
         self.nodule_type = nodule_typer.get_nodule_type(self.volume)
