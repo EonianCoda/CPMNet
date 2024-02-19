@@ -58,5 +58,5 @@ class NoduleFinding(object):
         
     def auto_nodule_type(self):
         nodule_typer = NoduleTyperRect()
-        self.volume = 4/3 * math.pi * ((self.w * self.h * self.d) / 8)  # volume of an ellipsoid
+        self.volume = 4/3 * math.pi * ((self.w * self.h * self.d) / 6)  # volume of an ellipsoid
         self.nodule_type = nodule_typer.get_nodule_type(self.volume)
