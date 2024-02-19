@@ -4,9 +4,8 @@ import argparse
 import torch
 import os
 import logging
-from typing import List, Tuple, Any, Dict
 
-from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
+from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess
 ### data ###
 from dataload.my_dataset_crop import DetDataset
 from dataload.collate import infer_collate_fn
@@ -51,6 +50,7 @@ def get_args():
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
     parser.add_argument('--no_se', action='store_true', default=False, help='not use se')
+    parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     # other
     args = parser.parse_args()
     return args
@@ -62,6 +62,7 @@ def prepare_validation(args, device):
                      act_type = args.act_type, 
                      first_stride = (1, 2, 2), 
                      se = not args.no_se,
+                     aspp = args.aspp,
                      device = device)
     detection_postprocess = DetectionPostprocess(topk=args.det_topk, 
                                                  threshold=args.det_threshold, 

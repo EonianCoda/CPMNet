@@ -78,6 +78,7 @@ def get_args():
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
     parser.add_argument('--no_se', action='store_true', default=False, help='not use se block')
+    parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     # other
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
@@ -100,6 +101,7 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
                      head_norm = args.head_norm, 
                      act_type = args.act_type, 
                      se = not args.no_se, 
+                     aspp = args.aspp,
                      detection_loss = detection_loss,
                      device = device)
     detection_postprocess = DetectionPostprocess(topk = args.det_topk, 

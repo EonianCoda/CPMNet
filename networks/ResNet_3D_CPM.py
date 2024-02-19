@@ -230,7 +230,7 @@ class ClsRegHead(nn.Module):
 
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
-                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=False, first_stride=(2, 2, 2), detection_loss=None, device=None):
+                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=False, aspp=False, first_stride=(2, 2, 2), detection_loss=None, device=None):
         super(Resnet18, self).__init__()
         self.detection_loss = detection_loss
         self.device = device
@@ -247,7 +247,10 @@ class Resnet18(nn.Module):
         self.block3 = LayerBasic(n_blocks[2], n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
         self.block3_dw = DownsamplingConvBlock(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
 
-        self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
+        if aspp:
+            self.block4 = ASPP(n_blocks[3], norm_type=norm_type, act_type=act_type, se=se)
+        else:
+            self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
 
         self.block33_up = UpsamplingDeconvBlock(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
         self.block33_res = LayerBasic(1, n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
