@@ -59,6 +59,11 @@ def get_args():
     parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
     parser.add_argument('--lr', type=float, default=1e-4, help='the learning rate')
+    parser.add_argument('--warmup_epochs', type=int, default=2, help='warmup epochs')
+    parser.add_argument('--warmup_factor', type=float, default=10, help='warmup factor')
+    parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
+    parser.add_argument('--decay_gamma', type=float, default=0.01, help='decay gamma')
+    
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
     parser.add_argument('--pos_target_topk', type=int, default=5, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
@@ -117,8 +122,11 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
     model.to(device)
     # build optimizer and scheduler
     optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-    scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
+    
+    T_max = args.epochs // args.decay_cycle
+    scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=args.lr * args.decay_gamma)
+    scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=args.warmup_factor, total_epoch=args.warmup_epochs, after_scheduler=scheduler_reduce)
+    logger.info('Warmup for {} epochs and then reduce learning rate by cosine annealing with {} cycles'.format(args.warmup_epochs, args.decay_cycle))
 
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
