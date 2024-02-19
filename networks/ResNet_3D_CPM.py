@@ -248,7 +248,7 @@ class Resnet18(nn.Module):
         self.block3_dw = DownsamplingConvBlock(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
 
         if aspp:
-            self.block4 = ASPP(n_blocks[3], norm_type=norm_type, act_type=act_type, se=se)
+            self.block4 = ASPP(n_filters[3], norm_type=norm_type, act_type=act_type)
         else:
             self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
 
