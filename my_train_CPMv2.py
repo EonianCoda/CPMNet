@@ -79,6 +79,8 @@ def get_args():
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
     parser.add_argument('--no_se', action='store_true', default=False, help='not use se block')
     parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
+    parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
+    parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     # other
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
@@ -102,6 +104,8 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
                      act_type = args.act_type, 
                      se = not args.no_se, 
                      aspp = args.aspp,
+                     dw_type = args.dw_type,
+                     up_type = args.up_type,
                      detection_loss = detection_loss,
                      device = device)
     detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
@@ -222,7 +226,7 @@ if __name__ == '__main__':
         for key, value in train_metrics.items():
             logger.info('==> Epoch: {} {}: {:.4f}'.format(epoch, key, value))
         # add learning rate to tensorboard
-        logger.info('==> Epoch: {} lr: {:.4f}'.format(epoch, scheduler_warm.get_lr()[0]))
+        logger.info('==> Epoch: {} lr: {:.6f}'.format(epoch, scheduler_warm.get_lr()[0]))
         write_metrics({'lr': scheduler_warm.get_lr()[0]}, epoch, 'train', writer)
         
         # Remove the checkpoint of epoch % save_model_interval != 0

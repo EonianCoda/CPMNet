@@ -9,14 +9,6 @@ import torch.nn.functional as F
 from utils.box_utils import nms_3D
 from .modules import SELayer, Identity, ConvBlock, act_layer, norm_layer3d
 
-def crack(integer):
-    start = int(np.sqrt(integer))
-    factor = integer / start
-    while int(factor) != factor:
-        start += 1
-        factor = integer / start
-    return int(factor), start
-
 def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
     anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
@@ -36,7 +28,6 @@ def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_sh
     return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
 
 class BasicBlockNew(nn.Module):
-
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):
         super(BasicBlockNew, self).__init__()
 
@@ -230,35 +221,44 @@ class ClsRegHead(nn.Module):
 
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
-                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=False, aspp=False, first_stride=(2, 2, 2), detection_loss=None, device=None):
+                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=False, aspp=False, dw_type='conv', up_type='deconv',
+                 first_stride=(2, 2, 2), detection_loss=None, device=None):
         super(Resnet18, self).__init__()
         self.detection_loss = detection_loss
         self.device = device
 
+        # Stem
         self.in_conv = ConvBlock(n_channels, stem_filters, stride=1, norm_type=norm_type, act_type=act_type)
         self.in_dw = ConvBlock(stem_filters, n_filters[0], stride=first_stride, norm_type=norm_type, act_type=act_type)
-
+        
+        # Encoder
         self.block1 = LayerBasic(n_blocks[0], n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
-        self.block1_dw = DownsamplingConvBlock(n_filters[0], n_filters[1], norm_type=norm_type, act_type=act_type)
+        
+        dw_block = DownsamplingConvBlock if dw_type == 'conv' else DownsamplingBlock
+        self.block1_dw = dw_block(n_filters[0], n_filters[1], norm_type=norm_type, act_type=act_type)
 
         self.block2 = LayerBasic(n_blocks[1], n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        self.block2_dw = DownsamplingConvBlock(n_filters[1], n_filters[2], norm_type=norm_type, act_type=act_type)
+        self.block2_dw = dw_block(n_filters[1], n_filters[2], norm_type=norm_type, act_type=act_type)
 
         self.block3 = LayerBasic(n_blocks[2], n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
-        self.block3_dw = DownsamplingConvBlock(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
+        self.block3_dw = dw_block(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
 
         if aspp:
             self.block4 = ASPP(n_filters[3], norm_type=norm_type, act_type=act_type)
         else:
             self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
 
-        self.block33_up = UpsamplingDeconvBlock(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
+        # Decoder
+        up_block = UpsamplingDeconvBlock if up_type == 'deconv' else UpsamplingBlock
+        self.block33_up = up_block(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
         self.block33_res = LayerBasic(1, n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
         self.block33 = LayerBasic(2, n_filters[2] * 2, n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
 
-        self.block22_up = UpsamplingDeconvBlock(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
+        self.block22_up = up_block(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
         self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         self.block22 = LayerBasic(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
+        
+        # Head
         self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
         self._init_weight()
 
