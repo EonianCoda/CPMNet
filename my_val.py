@@ -20,7 +20,6 @@ from utils.logs import setup_logging
 from utils.utils import init_seed, write_yaml
 
 SAVE_ROOT = './save'
-DEFAULT_CROP_SIZE = [64, 128, 128]
 OVERLAY_RATIO = 0.25
 IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
@@ -28,10 +27,10 @@ logger = logging.getLogger(__name__)
 def get_args():
     parser = argparse.ArgumentParser()
     # training settings
-    parser.add_argument('--seed', type=int, default=0, help='random seed (default: 1)')
+    parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--batch_size', type=int, default=2, help='input batch size for training (default: 2)')
-    parser.add_argument('--crop_size', nargs='+', type=int, default=DEFAULT_CROP_SIZE, help='crop size')
+    parser.add_argument('--crop_size', nargs='+', type=int, default=[64, 128, 128], help='crop size')
     parser.add_argument('--model_path', type=str, default='')
     # data
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
@@ -49,6 +48,11 @@ def get_args():
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
+    parser.add_argument('--first_stride', nargs='+', type=int, default=[1, 2, 2], help='stride of the first layer')
+    parser.add_argument('--n_blocks', nargs='+', type=int, default=[2, 3, 3, 3], help='number of blocks in each layer')
+    parser.add_argument('--n_filters', nargs='+', type=int, default=[64, 96, 128, 160], help='number of filters in each layer')
+    parser.add_argument('--stem_filters', type=int, default=32, help='number of filters in stem layer')
+    parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
     parser.add_argument('--no_se', action='store_true', default=False, help='not use se')
     parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
@@ -62,9 +66,14 @@ def prepare_validation(args, device):
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
                      act_type = args.act_type, 
-                     first_stride = (1, 2, 2), 
+                     first_stride = args.first_stride,
                      se = not args.no_se,
                      aspp = args.aspp,
+                     first_stride=args.first_stride,
+                     n_blocks=args.n_blocks,
+                     n_filters=args.n_filters,
+                     stem_filters=args.stem_filters,
+                     dropout=args.dropout,
                      dw_type = args.dw_type,
                      up_type = args.up_type,
                      device = device)

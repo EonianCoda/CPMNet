@@ -29,7 +29,6 @@ from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, loa
 from logic.early_stopping_save import EarlyStoppingSave
 
 SAVE_ROOT = './save'
-DEFAULT_CROP_SIZE = [64, 128, 128]
 OVERLAY_RATIO = 0.25
 IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
@@ -45,7 +44,7 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=3, help='input batch size for training (default: 3)')
     parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 1)')
     parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train (default: 250)')
-    parser.add_argument('--crop_size', nargs='+', type=int, default=DEFAULT_CROP_SIZE)
+    parser.add_argument('--crop_size', nargs='+', type=int, default=[64, 128, 128], help='crop size')
     # Resume
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
@@ -53,18 +52,19 @@ def get_args():
     parser.add_argument('--train_set', type=str, required=True, help='train_list')
     parser.add_argument('--val_set', type=str, required=True,help='val_list')
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
-    # Train hyper-parameters
-    parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of seg')
-    parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
-    parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
-    parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
+    # Learning rate
     parser.add_argument('--lr', type=float, default=1e-4, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=2, help='warmup epochs')
     parser.add_argument('--warmup_factor', type=float, default=10, help='warmup factor')
     parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
     parser.add_argument('--decay_gamma', type=float, default=0.01, help='decay gamma')
-    
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
+    # Loss hyper-parameters
+    parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of seg')
+    parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
+    parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
+    parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
+    # Train hyper-parameters
     parser.add_argument('--pos_target_topk', type=int, default=5, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
@@ -78,10 +78,15 @@ def get_args():
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.7, help='fixed probability threshold for validation')
-    # network
+    # Network
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
+    parser.add_argument('--first_stride', nargs='+', type=int, default=[1, 2, 2], help='stride of the first layer')
+    parser.add_argument('--n_blocks', nargs='+', type=int, default=[2, 3, 3, 3], help='number of blocks in each layer')
+    parser.add_argument('--n_filters', nargs='+', type=int, default=[64, 96, 128, 160], help='number of filters in each layer')
+    parser.add_argument('--stem_filters', type=int, default=32, help='number of filters in stem layer')
+    parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
     parser.add_argument('--no_se', action='store_true', default=False, help='not use se block')
     parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
@@ -90,7 +95,7 @@ def get_args():
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
-    parser.add_argument('--save_model_interval', type=int, default=10, metavar='N', help='how many batches to wait before logging training status')
+    parser.add_argument('--save_model_interval', type=int, default=10, help='how many batches to wait before logging training status')
     args = parser.parse_args()
     return args
 
@@ -109,6 +114,11 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
                      act_type = args.act_type, 
                      se = not args.no_se, 
                      aspp = args.aspp,
+                     first_stride=args.first_stride,
+                     n_blocks=args.n_blocks,
+                     n_filters=args.n_filters,
+                     stem_filters=args.stem_filters,
+                     dropout=args.dropout,
                      dw_type = args.dw_type,
                      up_type = args.up_type,
                      detection_loss = detection_loss,
@@ -126,7 +136,7 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
     T_max = args.epochs // args.decay_cycle
     scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=args.lr * args.decay_gamma)
     scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=args.warmup_factor, total_epoch=args.warmup_epochs, after_scheduler=scheduler_reduce)
-    logger.info('Warmup for {} epochs and then reduce learning rate by cosine annealing with {} cycles'.format(args.warmup_epochs, args.decay_cycle))
+    logger.info('Warmup learning rate from {:.1e} to {:.1e} for {} epochs and then reduce learning rate from {:.1e} to {:.1e} by cosine annealing with {} cycles'.format(args.lr / args.warmup_factor, args.lr, args.warmup_epochs, args.lr, args.lr * args.decay_gamma, args.decay_cycle))
 
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
@@ -240,7 +250,7 @@ if __name__ == '__main__':
         # Remove the checkpoint of epoch % save_model_interval != 0
         for i in range(epoch):
             ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
-            if (i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path):
+            if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
                 os.remove(ckpt_path)
         save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model, optimizer, scheduler_warm)
         

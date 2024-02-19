@@ -221,9 +221,11 @@ class ClsRegHead(nn.Module):
 
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
-                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=False, aspp=False, dw_type='conv', up_type='deconv',
+                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=False, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
                  first_stride=(2, 2, 2), detection_loss=None, device=None):
         super(Resnet18, self).__init__()
+        assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
+        assert len(n_filters) == 4, 'The length of n_filters should be 4'
         self.detection_loss = detection_loss
         self.device = device
 
@@ -248,6 +250,12 @@ class Resnet18(nn.Module):
         else:
             self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
 
+        # Dropout
+        if dropout > 0:
+            self.dropout = nn.Dropout3d(dropout)
+        else:
+            self.dropout = None
+            
         # Decoder
         up_block = UpsamplingDeconvBlock if up_type == 'deconv' else UpsamplingBlock
         self.block33_up = up_block(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
@@ -277,8 +285,14 @@ class Resnet18(nn.Module):
         x2 = self.block2(x)
         x = self.block2_dw(x2)
 
+        if self.dropout is not None:
+            x2 = self.dropout(x2)
+
         x3 = self.block3(x)
         x = self.block3_dw(x3)
+
+        if self.dropout is not None:
+            x3 = self.dropout(x3)
 
         x = self.block4(x)
 
