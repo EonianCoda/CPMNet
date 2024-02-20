@@ -158,7 +158,7 @@ def prepare_training(args):
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
+        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, warmup_epochs=2, after_scheduler=scheduler_reduce)
 
         state_dict = torch.load(model_path, map_location=device)
         model.load_state_dict(state_dict['model_state_dict'])
@@ -181,14 +181,14 @@ def prepare_training(args):
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
+        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, warmup_epochs=2, after_scheduler=scheduler_reduce)
     else:
         teacher_model.to(device)
         model.to(device)
         # build optimizer
         optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, total_epoch=2, after_scheduler=scheduler_reduce)
+        scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=10, warmup_epochs=2, after_scheduler=scheduler_reduce)
     
     return start_epoch, teacher_model, model, optimizer, scheduler_warm, detection_postprocess
 

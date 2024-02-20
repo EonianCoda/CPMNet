@@ -54,8 +54,8 @@ def get_args():
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-4, help='the learning rate')
-    parser.add_argument('--warmup_epochs', type=int, default=2, help='warmup epochs')
-    parser.add_argument('--warmup_factor', type=float, default=10, help='warmup factor')
+    parser.add_argument('--warmup_epochs', type=int, default=3, help='warmup epochs')
+    parser.add_argument('--warmup_gamma', type=float, default=0.1, help='warmup gamma')
     parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
     parser.add_argument('--decay_gamma', type=float, default=0.01, help='decay gamma')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
@@ -135,8 +135,8 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
     
     T_max = args.epochs // args.decay_cycle
     scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=args.lr * args.decay_gamma)
-    scheduler_warm = GradualWarmupScheduler(optimizer, multiplier=args.warmup_factor, total_epoch=args.warmup_epochs, after_scheduler=scheduler_reduce)
-    logger.info('Warmup learning rate from {:.1e} to {:.1e} for {} epochs and then reduce learning rate from {:.1e} to {:.1e} by cosine annealing with {} cycles'.format(args.lr / args.warmup_factor, args.lr, args.warmup_epochs, args.lr, args.lr * args.decay_gamma, args.decay_cycle))
+    scheduler_warm = GradualWarmupScheduler(optimizer, gamma=args.warmup_gamma, warmup_epochs=args.warmup_epochs, after_scheduler=scheduler_reduce)
+    logger.info('Warmup learning rate from {:.1e} to {:.1e} for {} epochs and then reduce learning rate from {:.1e} to {:.1e} by cosine annealing with {} cycles'.format(args.lr * args.warmup_gamma, args.lr, args.warmup_epochs, args.lr, args.lr * args.decay_gamma, args.decay_cycle))
 
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
@@ -272,7 +272,7 @@ if __name__ == '__main__':
     logger.info('Test the best model')
     test_save_dir = os.path.join(exp_folder, 'test')
     os.makedirs(test_save_dir, exist_ok=True)
-    for target_metric, model_path in early_stopping.get_best_model_paths().items():
+    for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
         logger.info('Load best model from "{}"'.format(model_path))
         load_states(model_path, device, model)
         test_metrics = val(args = args,
@@ -286,6 +286,7 @@ if __name__ == '__main__':
                         epoch = 'test_best_{}'.format(target_metric))
         write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
         with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
+            f.write('Best epoch: {}\n'.format(best_epoch))
             for key, value in test_metrics.items():
                 f.write('{}: {:.4f}\n'.format(key, value))
     writer.close()

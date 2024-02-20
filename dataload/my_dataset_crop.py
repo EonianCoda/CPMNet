@@ -1,65 +1,52 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
 
-import os
-import json
 import numpy as np
 from typing import List
-from .utils import load_series_list, load_image
+from .utils import load_series_list, load_image, load_label, ALL_RAD, ALL_LOC, ALL_CLS, gen_dicom_path, gen_label_path
 from torch.utils.data import Dataset
-
-BBOXES = 'bboxes'
-USE_BG = False
 
 class TrainDataset(Dataset):
     """Dataset for loading numpy images with dimension order [D, H, W]
 
     Arguments:
-        roots (list): list of dirs of the dataset
-        transform_post: transform object after cropping
-        crop_fn: cropping function
+        series_list_path (str): Path to the series list file.
+        image_spacing (List[float]): Spacing of the image in the order [z, y, x].
+        transform_post (optional): Transform object to be applied after cropping.
+        crop_fn (optional): Cropping function.
+        use_bg (bool, optional): Flag indicating whether to use background or not.
+
+    Attributes:
+        labels (List): List of labels.
+        dicom_paths (List): List of DICOM file paths.
+        series_list_path (str): Path to the series list file.
+        series_names (List): List of series names.
+        image_spacing (ndarray): Spacing of the image in the order [z, y, x].
+        transform_post (optional): Transform object to be applied after cropping.
+        crop_fn (optional): Cropping function.
+
+    Methods:
+        __len__(): Returns the length of the dataset.
+        __getitem__(idx): Returns the item at the given index.
+
     """
-    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None):
+    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False):
         self.labels = []
         self.dicom_paths = []
         self.series_list_path = series_list_path
-        self.series_names = []
+        # self.series_names = []
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         
-        series_infos = load_series_list(series_list_path)
-        for folder, series_name in series_infos:
-            label_path = os.path.join(folder, 'mask', f'{series_name}_nodule_count_crop.json')
-            dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
+        self.series_infos = load_series_list(series_list_path)
+        for folder, series_name in self.series_infos:
+            label_path = gen_label_path(folder, series_name)
+            dicom_path = gen_dicom_path(folder, series_name)
+           
+            label = load_label(label_path, self.image_spacing)
+            if label[ALL_LOC].shape[0] == 0 and not use_bg:
+                continue
             
-            with open(label_path, 'r') as f:
-                info = json.load(f)
-                
-            bboxes = info[BBOXES]
-            bboxes = np.array(bboxes)
-
-            if len(bboxes) == 0:
-                if not USE_BG:
-                    continue
-                self.dicom_paths.append(dicom_path)
-                self.series_names.append(series_name)
-                label = {'all_loc': np.zeros((0, 3), dtype=np.float32),
-                        'all_rad': np.zeros((0, 3), dtype=np.float32),
-                        'all_cls': np.zeros((0,), dtype=np.int32)}
-            else:
-                self.dicom_paths.append(dicom_path)
-                self.series_names.append(series_name)
-                # calculate center of bboxes
-                all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
-                all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
-
-                all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
-                all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
-                all_rad = all_rad * self.image_spacing # (z, y, x)
-                all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
-                
-                label = {'all_loc': all_loc, 
-                        'all_rad': all_rad,
-                        'all_cls': all_cls}
+            self.dicom_paths.append(dicom_path)
             self.labels.append(label)
 
         self.transform_post = transform_post
@@ -70,7 +57,8 @@ class TrainDataset(Dataset):
     
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
-        series_name = self.series_names[idx]
+        series_folder = self.series_infos[idx][0]
+        series_name = self.series_infos[idx][1]
         label = self.labels[idx]
 
         image_spacing = self.image_spacing.copy() # z, y, x
@@ -98,21 +86,17 @@ class TrainDataset(Dataset):
 class DetDataset(Dataset):
     """Detection dataset for inference
     """
-
     def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb):
+        self.series_list_path = series_list_path
+        
         self.labels = []
         self.dicom_paths = []
-        self.series_list_path = series_list_path
-        self.series_names = []
-        self.series_folders = []
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
+        self.series_infos = load_series_list(series_list_path)
         
-        series_infos = load_series_list(series_list_path)
-        for folder, series_name in series_infos:
-            dicom_path = os.path.join(folder, 'npy', f'{series_name}_crop.npy')
+        for folder, series_name in self.series_infos:
+            dicom_path = gen_dicom_path(folder, series_name)
             self.dicom_paths.append(dicom_path)
-            self.series_names.append(series_name)
-            self.series_folders.append(folder)
         self.splitcomb = SplitComb
         
     def __len__(self):
@@ -120,8 +104,9 @@ class DetDataset(Dataset):
     
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
-        series_name = self.series_names[idx]
-        series_folder = self.series_folders[idx]
+        series_folder = self.series_infos[idx][0]
+        series_name = self.series_infos[idx][1]
+        
         image_spacing = self.image_spacing.copy() # z, y, x
         image = load_image(dicom_path) # z, y, x
 
