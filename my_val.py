@@ -69,7 +69,6 @@ def prepare_validation(args, device):
                      first_stride = args.first_stride,
                      se = not args.no_se,
                      aspp = args.aspp,
-                     first_stride=args.first_stride,
                      n_blocks=args.n_blocks,
                      n_filters=args.n_filters,
                      stem_filters=args.stem_filters,

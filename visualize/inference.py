@@ -37,7 +37,7 @@ class Inference:
         self.model.eval()
         
         self.overlap_size = [int(s * overlap_ratio) for s in crop_size]
-        self.split_comber = SplitComb(crop_size, overlap_ratio)
+        self.split_comber = SplitComb(self.crop_size, self.overlap_size, pad_value=-1)
 
         self.detection_postprocess = DetectionPostprocess(topk=60, threshold=det_threshold, nms_threshold=0.05, nms_topk=20, crop_size=self.crop_size)
         
