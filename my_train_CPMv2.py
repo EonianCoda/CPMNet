@@ -285,7 +285,8 @@ if __name__ == '__main__':
                         image_spacing = IMAGE_SPACING,
                         series_list_path=args.test_set,
                         exp_folder=exp_folder,
-                        epoch = 'test_best_{}'.format(target_metric))
+                        epoch = 'test_best_{}'.format(target_metric),
+                        min_d=args.min_d)
         write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
         with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
             f.write('Best epoch: {}\n'.format(best_epoch))

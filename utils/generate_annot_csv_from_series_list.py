@@ -67,9 +67,6 @@ def generate_annot_csv(series_list_path: str,
         
         label_path = gen_label_path(folder, series_name)
         label = load_label(label_path, spacing, min_d)
-        if label[ALL_LOC].shape[0] == 0:
-            continue
-        
         all_locs.append(label[ALL_LOC].tolist())
         all_rads.append(label[ALL_RAD].tolist())
         all_types.append([nodule_typer.get_nodule_type(s) for s in label[NODULE_SIZE]])
