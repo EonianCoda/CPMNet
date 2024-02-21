@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
-
+import logging
 import numpy as np
 from typing import List
 from .utils import load_series_list, load_image, load_label, ALL_RAD, ALL_LOC, ALL_CLS, gen_dicom_path, gen_label_path
 from torch.utils.data import Dataset
+
+logger = logging.getLogger(__name__)
 
 class TrainDataset(Dataset):
     """Dataset for loading numpy images with dimension order [D, H, W]
@@ -30,19 +32,22 @@ class TrainDataset(Dataset):
         __getitem__(idx): Returns the item at the given index.
 
     """
-    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False):
+    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False, min_d=0):
         self.labels = []
         self.dicom_paths = []
         self.series_list_path = series_list_path
-        # self.series_names = []
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
+        self.min_d = int(min_d)
         
+        if self.min_d > 0:
+            logger.info('When training, ignore nodules with depth less than {}'.format(min_d))
+            
         self.series_infos = load_series_list(series_list_path)
         for folder, series_name in self.series_infos:
             label_path = gen_label_path(folder, series_name)
             dicom_path = gen_dicom_path(folder, series_name)
            
-            label = load_label(label_path, self.image_spacing)
+            label = load_label(label_path, self.image_spacing, min_d)
             if label[ALL_LOC].shape[0] == 0 and not use_bg:
                 continue
             

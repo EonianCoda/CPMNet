@@ -34,6 +34,7 @@ def get_args():
     parser.add_argument('--model_path', type=str, default='')
     # data
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
+    parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
     # hyper-parameters
     parser.add_argument('--num_samples', type=int, default=5, help='sampling batch number in per sample')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
@@ -121,7 +122,8 @@ if __name__ == '__main__':
                 device = device,
                 image_spacing = IMAGE_SPACING,
                 series_list_path=args.val_set,
-                exp_folder=exp_folder)
+                exp_folder=exp_folder,
+                min_d=args.min_d)
     
     with open(os.path.join(exp_folder, 'val_metrics.txt'), 'w') as f:
         for k, v in metrics.items():

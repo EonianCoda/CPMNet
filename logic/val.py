@@ -60,7 +60,8 @@ def val(args,
         exp_folder: str,
         epoch: int = 0,
         batch_size: int = 16,
-        nms_keep_top_k: int = 40) -> Dict[str, float]:
+        nms_keep_top_k: int = 40,
+        min_d: int = 0) -> Dict[str, float]:
     
     annot_dir = os.path.join(exp_folder, 'annotation')
     os.makedirs(annot_dir, exist_ok=True)
@@ -68,7 +69,9 @@ def val(args,
     origin_annot_path = os.path.join(annot_dir, 'origin_annotation_{}.csv'.format(state))
     annot_path = os.path.join(annot_dir, 'annotation_{}.csv'.format(state))
     series_uids_path = os.path.join(annot_dir, 'seriesuid_{}.csv'.format(state))
-    generate_annot_csv(series_list_path, origin_annot_path, spacing=image_spacing)
+    if min_d != 0:
+        logger.info('When validating, ignore nodules with depth less than {}'.format(min_d))
+    generate_annot_csv(series_list_path, origin_annot_path, spacing=image_spacing, min_d=min_d)
     convert_to_standard_csv(csv_path = origin_annot_path, 
                             annot_save_path=annot_path,
                             series_uids_save_path=series_uids_path,

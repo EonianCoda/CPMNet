@@ -52,6 +52,7 @@ def get_args():
     parser.add_argument('--train_set', type=str, required=True, help='train_list')
     parser.add_argument('--val_set', type=str, required=True,help='val_list')
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
+    parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-4, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=3, help='warmup epochs')
@@ -176,7 +177,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                  blank_side=blank_side, instance_crop=True)
 
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train,
-                                   image_spacing=IMAGE_SPACING, transform_post = train_transform)
+                                   image_spacing=IMAGE_SPACING, transform_post = train_transform, min_d=args.min_d)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 
@@ -256,14 +257,15 @@ if __name__ == '__main__':
         
         if epoch >= args.start_val_epoch: 
             val_metrics = val(args = args,
-                        model = model,
-                        detection_postprocess=detection_postprocess,
-                        val_loader = val_loader, 
-                        device = device,
-                        image_spacing = IMAGE_SPACING,
-                        series_list_path=args.val_set,
-                        exp_folder=exp_folder,
-                        epoch = epoch)
+                            model = model,
+                            detection_postprocess=detection_postprocess,
+                            val_loader = val_loader, 
+                            device = device,
+                            image_spacing = IMAGE_SPACING,
+                            series_list_path=args.val_set,
+                            exp_folder=exp_folder,
+                            epoch = epoch,
+                            min_d=args.min_d)
             
             early_stopping.step(val_metrics, epoch)
             write_metrics(val_metrics, epoch, 'val', writer)

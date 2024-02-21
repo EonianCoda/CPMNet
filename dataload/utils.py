@@ -6,6 +6,7 @@ from typing import Dict, List
 
 HU_MIN, HU_MAX = -1000, 400
 BBOXES = 'bboxes'
+NODULE_SIZE = 'nodule_size'
 ALL_LOC = 'all_loc'
 ALL_RAD = 'all_rad'
 ALL_CLS = 'all_cls'
@@ -49,19 +50,22 @@ def load_image(dicom_path: str) -> np.ndarray:
     image = normalize(image)
     return image
 
-def load_label(label_path: str, image_spacing: np.ndarray) -> Dict[str, np.ndarray]:
+def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0) -> Dict[str, np.ndarray]:
     """
     Return:
         A dictionary with keys 'all_loc', 'all_rad', 'all_cls'
     """
+    min_d = int(min_d)
     with open(label_path, 'r') as f:
         info = json.load(f)
     
     bboxes = np.array(info[BBOXES]) # (n, 2, 3)
+    nodule_sizes = np.array(info[NODULE_SIZE]) # (n, 1)
     if len(bboxes) == 0:
         label = {ALL_LOC: np.zeros((0, 3), dtype=np.float32),
                 ALL_CLS: np.zeros((0, 3), dtype=np.float32),
-                ALL_RAD: np.zeros((0,), dtype=np.int32)}
+                ALL_RAD: np.zeros((0,), dtype=np.int32),
+                NODULE_SIZE: np.zeros((0,), dtype=np.int32)}
     else:
         bboxes[:, 0, :] = np.maximum(bboxes[:, 0, :], 0) # clip to 0
         if (bboxes < 0).any():
@@ -72,10 +76,24 @@ def load_label(label_path: str, image_spacing: np.ndarray) -> Dict[str, np.ndarr
         
         all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
         all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
+        
+        valid_mask = all_rad[:, 0] >= min_d
+        
         all_rad = all_rad * image_spacing # (z, y, x)
         all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
-        
-        label = {ALL_LOC: all_loc, 
-                ALL_RAD: all_rad,
-                ALL_CLS: all_cls}
+
+        if np.sum(valid_mask) == 0:
+            label = {ALL_LOC: np.zeros((0, 3), dtype=np.float32),
+                    ALL_CLS: np.zeros((0, 3), dtype=np.float32),
+                    ALL_RAD: np.zeros((0,), dtype=np.int32),
+                    NODULE_SIZE: np.zeros((0,), dtype=np.int32)}
+        else:
+            all_loc = all_loc[valid_mask]
+            all_rad = all_rad[valid_mask]
+            all_cls = all_cls[valid_mask]
+            nodule_sizes = nodule_sizes[valid_mask]
+            label = {ALL_LOC: all_loc, 
+                    ALL_RAD: all_rad,
+                    ALL_CLS: all_cls,
+                    NODULE_SIZE: nodule_sizes}
     return label
