@@ -35,6 +35,7 @@ def get_args():
     # data
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
+    parser.add_argument('--data_norm_method', type=str, default='scale', help='normalize method, mean_std or scale or none')
     # hyper-parameters
     parser.add_argument('--num_samples', type=int, default=5, help='sampling batch number in per sample')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
@@ -93,8 +94,12 @@ def val_data_prepare(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
     
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=-1)
-    test_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
+    if args.data_norm_method == 'none':
+        pad_value = 0
+    else:
+        pad_value = -1
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    test_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.batch_size, collate_fn=infer_collate_fn, pin_memory=True)
     logger.info("There are {} samples in the val set".format(len(val_loader.dataset)))
     return val_loader

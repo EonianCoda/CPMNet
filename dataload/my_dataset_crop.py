@@ -3,7 +3,7 @@ from __future__ import print_function, division
 import logging
 import numpy as np
 from typing import List
-from .utils import load_series_list, load_image, load_label, ALL_RAD, ALL_LOC, ALL_CLS, gen_dicom_path, gen_label_path
+from .utils import load_series_list, load_image, load_label, ALL_RAD, ALL_LOC, ALL_CLS, gen_dicom_path, gen_label_path, normalize_processed_image
 from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
@@ -32,16 +32,24 @@ class TrainDataset(Dataset):
         __getitem__(idx): Returns the item at the given index.
 
     """
-    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False, min_d=0):
+    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False, min_d=0, norm_method='scale'):
         self.labels = []
         self.dicom_paths = []
         self.series_list_path = series_list_path
+        self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         self.min_d = int(min_d)
         
         if self.min_d > 0:
             logger.info('When training, ignore nodules with depth less than {}'.format(min_d))
-            
+        
+        if self.norm_method == 'mean_std':
+            logger.info('Normalize image to have mean 0 and std 1, and then scale to -1 to 1')
+        elif self.norm_method == 'scale':
+            logger.info('Normalize image to have value ranged from -1 to 1')
+        elif self.norm_method == 'none':
+            logger.info('Normalize image to have value ranged from 0 to 1')
+        
         self.series_infos = load_series_list(series_list_path)
         for folder, series_name in self.series_infos:
             label_path = gen_label_path(folder, series_name)
@@ -83,7 +91,7 @@ class TrainDataset(Dataset):
             if self.transform_post:
                 sample['ctr_transform'] = []
                 sample = self.transform_post(sample)
-            sample['image'] = (sample['image'] * 2.0 - 1.0) # normalized to -1 ~ 1
+            sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             random_samples.append(sample)
 
         return random_samples
@@ -91,11 +99,12 @@ class TrainDataset(Dataset):
 class DetDataset(Dataset):
     """Detection dataset for inference
     """
-    def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb):
+    def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb, norm_method='scale'):
         self.series_list_path = series_list_path
         
         self.labels = []
         self.dicom_paths = []
+        self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         self.series_infos = load_series_list(series_list_path)
         
@@ -103,7 +112,10 @@ class DetDataset(Dataset):
             dicom_path = gen_dicom_path(folder, series_name)
             self.dicom_paths.append(dicom_path)
         self.splitcomb = SplitComb
-        
+        if self.norm_method == 'none' and self.splitcomb.pad_value != 0:
+            logger.warning('SplitComb pad_value should be 0 when norm_method is none, and it is set to 0 now')
+            self.splitcomb.pad_value = 0.0
+            
     def __len__(self):
         return len(self.dicom_paths)
     
@@ -114,10 +126,9 @@ class DetDataset(Dataset):
         
         image_spacing = self.image_spacing.copy() # z, y, x
         image = load_image(dicom_path) # z, y, x
+        image = normalize_processed_image(image, self.norm_method)
 
         data = {}
-        # convert to -1 ~ 1  note ste pad_value to -1 for SplitComb
-        image = image * 2.0 - 1.0
         # split_images [N, 1, crop_z, crop_y, crop_x]
         split_images, nzhw = self.splitcomb.split(image)
         data['split_images'] = np.ascontiguousarray(split_images)

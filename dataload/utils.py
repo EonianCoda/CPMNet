@@ -34,10 +34,32 @@ def load_series_list(series_list_path: str) -> List[List[str]]:
         series_list.append([series_folder, file_name])
     return series_list
 
-def normalize(image: np.ndarray) -> np.ndarray: 
+def normalize_raw_image(image: np.ndarray) -> np.ndarray: 
     image = np.clip(image, HU_MIN, HU_MAX)
     image = image - HU_MIN
     image = image.astype(np.float32) / (HU_MAX - HU_MIN)
+    return image
+
+def normalize_processed_image(image: np.ndarray, method: str = 'scale') -> np.ndarray:
+    """
+    Args:
+        image: 3D numpy array with dimension order [D, H, W] (z, y, x) whose value is ranged from 0 to 1
+        method: 'mean_std' or 'scale' or 'none'
+    Return:
+        Normalized image
+        1) 'mean_std': the image is normalized to have mean 0 and std 1
+        2)  'scale': the image is normalized to have value ranged from -1 to 1
+        3) 'none': the image is not normalized
+    """
+    if method == 'mean_std':
+        image = (image - np.mean(image)) / np.std(image)
+        # min max scale to -1 to 1
+        min_val, max_val = np.min(image), np.max(image)
+        image = (image - min_val) / (max_val - min_val) * 2.0 - 1.0
+    elif method == 'scale':
+        image = image * 2.0 - 1.0
+    elif method == 'none':
+        pass
     return image
 
 def load_image(dicom_path: str) -> np.ndarray:
@@ -47,7 +69,7 @@ def load_image(dicom_path: str) -> np.ndarray:
     """
     image = np.load(dicom_path)
     image = np.transpose(image, (2, 0, 1))
-    image = normalize(image)
+    image = normalize_raw_image(image)
     return image
 
 def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0) -> Dict[str, np.ndarray]:

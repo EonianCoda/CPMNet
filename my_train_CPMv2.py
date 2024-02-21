@@ -53,6 +53,7 @@ def get_args():
     parser.add_argument('--val_set', type=str, required=True,help='val_list')
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
+    parser.add_argument('--data_norm_method', type=str, default='scale', help='normalize method, mean_std or scale or none')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-4, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=3, help='warmup epochs')
@@ -176,8 +177,8 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                  rand_rot=[20, 0, 0], rand_space=[0.9, 1.2],sample_num=args.num_samples,
                                  blank_side=blank_side, instance_crop=True)
 
-    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train,
-                                   image_spacing=IMAGE_SPACING, transform_post = train_transform, min_d=args.min_d)
+    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
+                                 transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 
@@ -195,11 +196,15 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
     num_workers = min(args.val_batch_size, 4)
     
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=-1)
-    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
+    if args.data_norm_method == 'none':
+        pad_value = 0
+    else:
+        pad_value = -1
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
 
-    test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING)
+    test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
