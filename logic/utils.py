@@ -41,3 +41,21 @@ def load_states(load_path: str, device: torch.device, model: nn.Module, optimize
         if key not in checkpoint:
             logger.warning(f'Key {key} not found in checkpoint')
         kwargs[key].load_state_dict(checkpoint[key])
+        
+def load_model(load_path: str):
+    checkpoint = torch.load(load_path)
+    
+    # Build model
+    if 'model_structure' in checkpoint:
+        model = checkpoint['model_structure']
+    else:
+        from networks.ResNet_3D_CPM import Resnet18
+        model = Resnet18()
+        
+    # Load state dict
+    if 'state_dict' not in checkpoint and 'model_state_dict' not in checkpoint:
+        model.load_state_dict(checkpoint)
+    else:
+        model.load_state_dict(checkpoint['model_state_dict'])
+        
+    return model

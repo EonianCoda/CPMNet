@@ -63,10 +63,13 @@ def load_label(label_path: str, image_spacing: np.ndarray) -> Dict[str, np.ndarr
                 ALL_CLS: np.zeros((0, 3), dtype=np.float32),
                 ALL_RAD: np.zeros((0,), dtype=np.int32)}
     else:
+        bboxes[:, 0, :] = np.maximum(bboxes[:, 0, :], 0) # clip to 0
+        if (bboxes < 0).any():
+            print(f'Warning: {label_path} has negative values')
         # calculate center of bboxes
         all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
         all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
-
+        
         all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
         all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
         all_rad = all_rad * image_spacing # (z, y, x)

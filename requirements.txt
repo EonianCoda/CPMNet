@@ -9,3 +9,4 @@ scikit-image
 scikit-learn
 pandas
 PyYAML
+opencv-python # for drawing
