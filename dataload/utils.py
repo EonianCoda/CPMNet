@@ -4,7 +4,9 @@ import numpy as np
 
 from typing import Dict, List
 
-HU_MIN, HU_MAX = -1000, 400
+DEFAULT_WINDOW_LEVEL = -300
+DEFAULT_WINDOW_WIDTH = 1400
+
 BBOXES = 'bboxes'
 NODULE_SIZE = 'nodule_size'
 ALL_LOC = 'all_loc'
@@ -34,10 +36,16 @@ def load_series_list(series_list_path: str) -> List[List[str]]:
         series_list.append([series_folder, file_name])
     return series_list
 
-def normalize_raw_image(image: np.ndarray) -> np.ndarray: 
-    image = np.clip(image, HU_MIN, HU_MAX)
-    image = image - HU_MIN
-    image = image.astype(np.float32) / (HU_MAX - HU_MIN)
+def get_HU_MIN_MAX(window_level: int, window_width: int):
+    hu_min = window_level - window_width // 2
+    hu_max = window_level + window_width // 2
+    return hu_min, hu_max
+
+def normalize_raw_image(image: np.ndarray, window_level: int, window_width: int) -> np.ndarray:
+    hu_min, hu_max = get_HU_MIN_MAX(window_level, window_width)    
+    image = np.clip(image, hu_min, hu_max)
+    image = image - hu_min
+    image = image.astype(np.float32) / (hu_max - hu_min)
     return image
 
 def normalize_processed_image(image: np.ndarray, method: str = 'scale') -> np.ndarray:
@@ -62,14 +70,14 @@ def normalize_processed_image(image: np.ndarray, method: str = 'scale') -> np.nd
         pass
     return image
 
-def load_image(dicom_path: str) -> np.ndarray:
+def load_image(dicom_path: str, window_level: int = DEFAULT_WINDOW_LEVEL, window_width: int = DEFAULT_WINDOW_WIDTH) -> np.ndarray:
     """
     Return:
         A 3D numpy array with dimension order [D, H, W] (z, y, x)
     """
     image = np.load(dicom_path)
     image = np.transpose(image, (2, 0, 1))
-    image = normalize_raw_image(image)
+    image = normalize_raw_image(image, window_level, window_width)
     return image
 
 def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0) -> Dict[str, np.ndarray]:
