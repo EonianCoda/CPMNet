@@ -33,7 +33,7 @@ class TrainDataset(Dataset):
 
     """
     def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, 
-                 crop_fn=None, use_bg=False, min_d=0, norm_method='scale', window_levels: List[int] = [-300, 1400], window_widths: List[int] = [-600, 1500]):
+                 crop_fn=None, use_bg=False, min_d=0, norm_method='scale', window_levels: List[int] = [-300, -600], window_widths: List[int] = [1400, 1500]):
         self.labels = []
         self.dicom_paths = []
         self.series_list_path = series_list_path
