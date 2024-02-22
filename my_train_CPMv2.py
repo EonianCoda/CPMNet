@@ -55,9 +55,9 @@ def get_args():
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='scale', help='normalize method, mean_std or scale or none')
     # Learning rate
-    parser.add_argument('--lr', type=float, default=1e-4, help='the learning rate')
-    parser.add_argument('--warmup_epochs', type=int, default=3, help='warmup epochs')
-    parser.add_argument('--warmup_gamma', type=float, default=0.1, help='warmup gamma')
+    parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
+    parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
+    parser.add_argument('--warmup_gamma', type=float, default=0.01, help='warmup gamma')
     parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
     parser.add_argument('--decay_gamma', type=float, default=0.01, help='decay gamma')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
