@@ -107,9 +107,9 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
                                    spacing = IMAGE_SPACING,
-                                   cls_num_hard=args.cls_num_hard,
-                                    cls_fn_weight=args.cls_fn_weight,
-                                    cls_fn_threshold=args.cls_fn_threshold)
+                                   cls_num_hard = args.cls_num_hard,
+                                   cls_fn_weight = args.cls_fn_weight,
+                                   cls_fn_threshold = args.cls_fn_threshold)
                                    
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
@@ -201,6 +201,7 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     else:
         pad_value = -1
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
 
@@ -283,18 +284,20 @@ if __name__ == '__main__':
         logger.info('Load best model from "{}"'.format(model_path))
         load_states(model_path, device, model)
         test_metrics = val(args = args,
-                        model = model,
-                        detection_postprocess=detection_postprocess,
-                        val_loader = test_loader,
-                        device = device,
-                        image_spacing = IMAGE_SPACING,
-                        series_list_path=args.test_set,
-                        exp_folder=exp_folder,
-                        epoch = 'test_best_{}'.format(target_metric),
-                        min_d=args.min_d)
+                            model = model,
+                            detection_postprocess=detection_postprocess,
+                            val_loader = test_loader,
+                            device = device,
+                            image_spacing = IMAGE_SPACING,
+                            series_list_path=args.test_set,
+                            exp_folder=exp_folder,
+                            epoch = 'test_best_{}'.format(target_metric),
+                            min_d=args.min_d)
         write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
         with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
             f.write('Best epoch: {}\n'.format(best_epoch))
+            f.write('-' * 30 + '\n')
+            max_length = max([len(key) for key in test_metrics.keys()])
             for key, value in test_metrics.items():
-                f.write('{}: {:.4f}\n'.format(key, value))
+                f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
     writer.close()

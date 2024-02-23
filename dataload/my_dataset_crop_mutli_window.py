@@ -106,7 +106,7 @@ class DetDataset(Dataset):
     """Detection dataset for inference
     """
     def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb, norm_method='scale',
-                 window_levels: List[int] = [-300, 1400], window_widths: List[int] = [-600, 1500]):
+                 window_levels: List[int] = [-300, -600], window_widths: List[int] = [1400, 1500]):
         self.series_list_path = series_list_path
         self.window_levels = window_levels
         self.window_widths = window_widths
