@@ -133,15 +133,14 @@ class RandomCrop(AbstractTransform):
         crop_min = ((input_shape - crop_shape) / 2).astype(np.int32)
         crop_max = crop_min + crop_shape
         crop_image[:, crop_min[0]:crop_max[0], crop_min[1]:crop_max[1], crop_min[2]:crop_max[2]] = \
-            image[:, bb_min[0]:bb_max[0], bb_min[1]:bb_max[1], bb_min[2]:bb_max[2]]
+            image[:, bb_min[0]:bb_max[0], bb_min[1]:bb_max[1], bb_min[2]:bb_max[2]].copy()
+        sample['image'] = crop_image
         # Update the center
         if 'ctr' in sample and len(sample['ctr']) > 0:
             sample['ctr'] = sample['ctr'].copy() - bb_min[np.newaxis, :] + crop_min[np.newaxis, :]
             sample['ctr_transform'].append(OffsetPlusCTR(-bb_min + crop_min))
             
         return sample
-
-
 
 class RandomMaskCrop(object):
     """Randomly crop the input image (shape [C, D, H, W] or [C, H, W])

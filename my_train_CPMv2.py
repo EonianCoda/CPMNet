@@ -176,9 +176,9 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         trans_zy = False
         
     transform_list_train = [transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
+                            transform.RandomCrop(p=0.3, crop_ratio=0.9, ctr_margin=10, padding_value=pad_value),
                             transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=trans_zx, trans_zy=trans_zy),
                             transform.Pad(output_size=crop_size),
-                            transform.RandomCrop(p=0.5, crop_ratio=0.8, ctr_margin=10, padding_value=pad_value),
                             transform.CoordToAnnot(blank_side=blank_side)]
     
     train_transform = torchvision.transforms.Compose(transform_list_train)

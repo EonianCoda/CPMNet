@@ -129,10 +129,10 @@ class RandomTranspose(AbstractTransform):
                 ctr_t[:, 1] = temp[:, transpose[2] - 1]
                 ctr_t[:, 2] = temp[:, transpose[3] - 1]
                 image_t = np.transpose(image_t, transpose)
+                sample['ctr_transform'].append(TransposeCTR(transpose))
 
             sample['image'] = image_t
             sample['ctr'] = ctr_t
-            sample['ctr_transform'].append(TransposeCTR(transpose))
         return sample
 
 

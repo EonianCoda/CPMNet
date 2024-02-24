@@ -72,7 +72,7 @@ def normalize_processed_image(image: np.ndarray, method: str = 'scale') -> np.nd
 
 def get_image_padding_value(method: str = 'scale') -> float:
     if method == 'mean_std':
-        return 0.0
+        return -1.0
     elif method == 'scale':
         return -1.0
     elif method == 'none':
