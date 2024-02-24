@@ -33,39 +33,49 @@ def train(args,
     avg_iou_loss = AverageMeter()
     avg_loss = AverageMeter()
     
+    iters_to_accumulate = args.iters_to_accumulate
     # mixed precision training
     mixed_precision = args.mixed_precision
     if mixed_precision:
         scaler = torch.cuda.amp.GradScaler()
         
-    # get_progress_bar
-    progress_bar = get_progress_bar('Train', len(dataloader))
-    for batch_idx, sample in enumerate(dataloader):
-        optimizer.zero_grad(set_to_none=True)
+    total_num_steps = len(dataloader)
+    progress_bar = get_progress_bar('Train', (total_num_steps - 1) // iters_to_accumulate + 1)
+    optimizer.zero_grad()
+    for iter_i, sample in enumerate(dataloader):
         if mixed_precision:
             with torch.cuda.amp.autocast():
                 loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
+            loss = loss / iters_to_accumulate
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            
         else:
             loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
+            loss = loss / iters_to_accumulate
             loss.backward()
-            optimizer.step()
         
         # Update history
         avg_cls_loss.update(cls_loss.item() * args.lambda_cls)
         avg_shape_loss.update(shape_loss.item() * args.lambda_shape)
         avg_offset_loss.update(offset_loss.item() * args.lambda_offset)
         avg_iou_loss.update(iou_loss.item() * args.lambda_iou)
-        avg_loss.update(loss.item())
+        avg_loss.update(loss.item() * iters_to_accumulate)
         
-        progress_bar.set_postfix(loss = avg_loss.avg,
-                                cls_Loss = avg_cls_loss.avg,
-                                shape_loss = avg_shape_loss.avg,
-                                offset_loss = avg_offset_loss.avg,
-                                giou_loss = avg_iou_loss.avg)
-        progress_bar.update()
+        # Update model
+        if (iter_i + 1) % iters_to_accumulate == 0 or iter_i == total_num_steps - 1:
+            if mixed_precision:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+        
+            progress_bar.set_postfix(loss = avg_loss.avg,
+                                    cls_Loss = avg_cls_loss.avg,
+                                    shape_loss = avg_shape_loss.avg,
+                                    offset_loss = avg_offset_loss.avg,
+                                    giou_loss = avg_iou_loss.avg)
+            progress_bar.update()
     
     progress_bar.close()
 

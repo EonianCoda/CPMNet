@@ -9,6 +9,7 @@ from typing import Tuple
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
 from dataload.my_dataset_crop import TrainDataset, DetDataset
+from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
 from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
@@ -70,6 +71,7 @@ def get_args():
     parser.add_argument('--pos_target_topk', type=int, default=5, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
+    parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
     parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
@@ -165,10 +167,18 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
 
 def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
+    pad_value = get_image_padding_value(args.data_norm_method)
+    if crop_size[0] == crop_size[1] == crop_size[2]:
+        trans_zx = True
+        trans_zy = True
+    else:
+        trans_zx = False
+        trans_zy = False
+        
     transform_list_train = [transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
-                            transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=False, trans_zy=False),
+                            transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=trans_zx, trans_zy=trans_zy),
                             transform.Pad(output_size=crop_size),
-                            transform.RandomCrop(output_size=crop_size, pos_ratio=0.9),
+                            transform.RandomCrop(p=0.5, crop_ratio=0.8, ctr_margin=10, padding_value=pad_value),
                             transform.CoordToAnnot(blank_side=blank_side)]
     
     train_transform = torchvision.transforms.Compose(transform_list_train)
@@ -196,10 +206,7 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
     num_workers = min(args.val_batch_size, 4)
     
-    if args.data_norm_method == 'none':
-        pad_value = 0
-    else:
-        pad_value = -1
+    pad_value = get_image_padding_value(args.data_norm_method)
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
@@ -239,7 +246,6 @@ if __name__ == '__main__':
     
     if early_stopping is None:
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model)
-        
     for epoch in range(start_epoch, args.epochs + 1):
         train_metrics = train(args = args,
                             model = model,
