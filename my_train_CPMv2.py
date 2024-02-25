@@ -30,7 +30,7 @@ from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, loa
 from logic.early_stopping_save import EarlyStoppingSave
 
 SAVE_ROOT = './save'
-OVERLAY_RATIO = 0.25
+DEFAULT_OVERLAY_RATIO = 0.25
 IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
 
@@ -103,6 +103,9 @@ def get_args():
     args = parser.parse_args()
     return args
 
+def get_overlap_size(crop_size, overlay_ratio=DEFAULT_OVERLAY_RATIO):
+    return [int(crop_size[i] * overlay_ratio) for i in range(len(crop_size))]
+
 def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
     # build model
     detection_loss = DetectionLoss(crop_size = args.crop_size,
@@ -167,6 +170,9 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
 
 def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
+    overlap_size = get_overlap_size(crop_size)
+    logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
+    
     pad_value = get_image_padding_value(args.data_norm_method)
     if crop_size[0] == crop_size[1] == crop_size[2]:
         trans_zx = True
@@ -175,17 +181,16 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         trans_zx = False
         trans_zy = False
         
-    transform_list_train = [transform.RandomFlip(flip_depth=True, flip_height=True, flip_width=True, p=0.5),
-                            transform.RandomCrop(p=0.3, crop_ratio=0.9, ctr_margin=10, padding_value=pad_value),
+    transform_list_train = [transform.Pad(output_size=crop_size),
+                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True),
+                            # transform.RandomCrop(p=0.3, crop_ratio=0.9, ctr_margin=10, padding_value=pad_value),
                             transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=trans_zx, trans_zy=trans_zy),
-                            transform.Pad(output_size=crop_size),
                             transform.CoordToAnnot(blank_side=blank_side)]
     
     train_transform = torchvision.transforms.Compose(transform_list_train)
 
-    crop_fn_train = InstanceCrop(crop_size=crop_size, tp_ratio=0.75, rand_trans=[10, 20, 20], 
-                                 rand_rot=[20, 0, 0], rand_space=[0.9, 1.2],sample_num=args.num_samples,
-                                 blank_side=blank_side, instance_crop=True)
+    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=0.75, rand_trans=[10, 20, 20], 
+                                 rand_rot=[20, 0, 0], sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
 
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
                                  transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method)
@@ -203,7 +208,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 
 def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
-    overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
+    overlap_size = get_overlap_size(crop_size)
     num_workers = min(args.val_batch_size, 4)
     
     pad_value = get_image_padding_value(args.data_norm_method)

@@ -48,7 +48,6 @@ def train(args,
                 loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
             loss = loss / iters_to_accumulate
             scaler.scale(loss).backward()
-            
         else:
             loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
             loss = loss / iters_to_accumulate
