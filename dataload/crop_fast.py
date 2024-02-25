@@ -25,12 +25,15 @@ class InstanceCrop(object):
             blank_side:  labels within blank_side pixels near patch border is set to ignored.
 
         """
-        self.crop_size = crop_size
+        self.sample_cls = sample_cls
+        self.crop_size = np.array(crop_size, dtype=np.int32)
+        self.overlap_size = np.array(overlap_size, dtype=np.int32)
+        self.stride_size = self.crop_size - self.overlap_size
+        
         self.tp_ratio = tp_ratio
         self.sample_num = sample_num
         self.blank_side = blank_side
         self.instance_crop = instance_crop
-        self.overlap_size = overlap_size
 
         if rand_trans == None:
             self.rand_trans = None
@@ -47,9 +50,21 @@ class InstanceCrop(object):
         else:
             self.rand_space = np.array(rand_space)
 
-        self.sample_cls = sample_cls
-        assert isinstance(self.crop_size, (list, tuple))
-
+    def get_crop_centers(self, shape, dim: int):
+        crop = self.crop_size[dim]
+        overlap = self.overlap_size[dim]
+        stride = self.stride_size[dim]
+        shape = shape[dim]
+        
+        crop_centers = np.arange(0, shape - overlap, stride) + crop / 2
+        crop_centers = np.clip(crop_centers, a_max=shape - crop / 2, a_min=None)
+        
+        # Add final center
+        crop_centers = np.append(crop_centers, shape - crop / 2)
+        crop_centers = np.unique(crop_centers)
+        
+        return crop_centers
+    
     def __call__(self, sample, image_spacing: np.ndarray):
         image = sample['image'].astype('float32')
         all_loc = sample['all_loc']
@@ -62,29 +77,18 @@ class InstanceCrop(object):
         instance_loc = all_loc[np.sum([all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
 
         image_itk = sitk.GetImageFromArray(image)
-        # shadow = np.zeros(image.shape)
-        # shadow_itk = sitk.GetImageFromArray(shadow)
         shape = image.shape
-
         crop_size = np.array(self.crop_size)
-        overlap = self.overlap_size
+        overlap_size = self.overlap_size
 
-        z_stride = crop_size[0] - overlap[0]
-        y_stride = crop_size[1] - overlap[1]
-        x_stride = crop_size[2] - overlap[2]
-
-        z_range = np.arange(0, shape[0] - overlap[0], z_stride) + crop_size[0] / 2
-        y_range = np.arange(0, shape[1] - overlap[1], y_stride) + crop_size[1] / 2
-        x_range = np.arange(0, shape[2] - overlap[2], x_stride) + crop_size[2] / 2
-
-        z_range = np.clip(z_range, a_max=shape[0] - crop_size[0] / 2, a_min=None)
-        y_range = np.clip(y_range, a_max=shape[1] - crop_size[1] / 2, a_min=None)
-        x_range = np.clip(x_range, a_max=shape[2] - crop_size[2] / 2, a_min=None)
-
+        z_crop_centers = self.get_crop_centers(shape, 0)
+        y_crop_centers = self.get_crop_centers(shape, 1)
+        x_crop_centers = self.get_crop_centers(shape, 2)
+        
         crop_centers = []
-        for z in z_range:
-            for y in y_range:
-                for x in x_range:
+        for z in z_crop_centers:
+            for y in y_crop_centers:
+                for x in x_crop_centers:
                     crop_centers.append(np.array([z, y, x]))
 
         if self.instance_crop and len(instance_loc) > 0:

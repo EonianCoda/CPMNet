@@ -75,6 +75,8 @@ def get_args():
     parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
+    # Train Data Augmentation
+    parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -171,15 +173,17 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
 def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
     overlap_size = get_overlap_size(crop_size)
-    logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
     
     pad_value = get_image_padding_value(args.data_norm_method)
     if crop_size[0] == crop_size[1] == crop_size[2]:
-        trans_zx = True
         trans_zy = True
+        trans_zx = True
     else:
-        trans_zx = False
         trans_zy = False
+        trans_zx = False
+    rand_trans = [int(s * 2/3) for s in overlap_size]
+    logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
+    logger.info('Augmentation: random translation: {}, random transpose: {}'.format(rand_trans, [True, trans_zy, trans_zx]))
         
     transform_list_train = [transform.Pad(output_size=crop_size),
                             transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True),
@@ -189,7 +193,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     train_transform = torchvision.transforms.Compose(transform_list_train)
 
-    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=0.75, rand_trans=[10, 20, 20], 
+    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                  rand_rot=[20, 0, 0], sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
 
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
