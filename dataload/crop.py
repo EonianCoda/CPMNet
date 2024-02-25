@@ -8,7 +8,7 @@ class InstanceCrop(object):
     """Randomly crop the input image (shape [C, D, H, W]
     """
 
-    def __init__(self, crop_size, rand_trans=None, rand_rot=None, rand_space=None, instance_crop=True, overlap=[16, 32, 32], tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0]):
+    def __init__(self, crop_size, rand_trans=None, rand_rot=None, rand_space=None, instance_crop=True, overlap_size=[16, 32, 32], tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0]):
         """This is crop function with spatial augmentation for training Lesion Detection.
 
         Arguments:
@@ -19,7 +19,7 @@ class InstanceCrop(object):
             instance_crop: additional sampling with instance around center
             spacing: output patch spacing, [z,y,x]
             base_spacing: spacing of the numpy image.
-            overlap: overlap of sliding window
+            overlap_size: overlap_size of sliding window
             tp_ratio: sampling rate for a patch containing at least one leision
             sample_num: patch number per CT
             blank_side:  labels within blank_side pixels near patch border is set to ignored.
@@ -30,7 +30,7 @@ class InstanceCrop(object):
         self.sample_num = sample_num
         self.blank_side = blank_side
         self.instance_crop = instance_crop
-        self.overlap = overlap
+        self.overlap_size = overlap_size
 
         if rand_trans == None:
             self.rand_trans = None
@@ -63,15 +63,15 @@ class InstanceCrop(object):
         shape = image.shape
 
         crop_size = np.array(self.crop_size)
-        overlap = self.overlap
+        overlap_size = self.overlap_size
 
-        z_stride = crop_size[0] - overlap[0]
-        y_stride = crop_size[1] - overlap[1]
-        x_stride = crop_size[2] - overlap[2]
+        z_stride = crop_size[0] - overlap_size[0]
+        y_stride = crop_size[1] - overlap_size[1]
+        x_stride = crop_size[2] - overlap_size[2]
 
-        z_range = np.arange(0, shape[0] - overlap[0], z_stride) + crop_size[0] / 2
-        y_range = np.arange(0, shape[1] - overlap[1], y_stride) + crop_size[1] / 2
-        x_range = np.arange(0, shape[2] - overlap[2], x_stride) + crop_size[2] / 2
+        z_range = np.arange(0, shape[0] - overlap_size[0], z_stride) + crop_size[0] / 2
+        y_range = np.arange(0, shape[1] - overlap_size[1], y_stride) + crop_size[1] / 2
+        x_range = np.arange(0, shape[2] - overlap_size[2], x_stride) + crop_size[2] / 2
 
         z_range = np.clip(z_range, a_max=shape[0] - crop_size[0] / 2, a_min=None)
         y_range = np.clip(y_range, a_max=shape[1] - crop_size[1] / 2, a_min=None)
