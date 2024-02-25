@@ -57,7 +57,7 @@ class RandomCrop(AbstractTransform):
                  p: float = 0.5,
                  crop_ratio: Union[Tuple[float], float] = 0.9, 
                  ctr_margin: Union[Tuple[int], int] = 10,
-                 crop_z: bool = False,
+                 crop_z: bool = True,
                  crop_y: bool = True,
                  crop_x: bool = True,
                  padding_value: int = 0):
@@ -125,8 +125,7 @@ class RandomCrop(AbstractTransform):
             ctr_max = np.minimum(ctr_max, input_shape)
             
             # If the ctr is not within the crop region, then we do not crop the image
-            if (not np.all(ctr_min < bb_max)) or (not np.all(ctr > bb_min)) or\
-                (not np.all(ctr_max > bb_min)) or (not np.all(ctr < bb_max)):
+            if (not np.all(ctr_min > bb_min)) or (not np.all(ctr_max < bb_max)):
                 return sample
         # Crop the image
         crop_image = np.ones_like(image) * self.padding_value
