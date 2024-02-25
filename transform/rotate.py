@@ -114,25 +114,21 @@ class RandomTranspose(AbstractTransform):
         transpose_list = []
 
         if self.trans_zy and random.random() < self.p:
-            transpose_list.append((0, 2, 1, 3))
+            transpose_list.append(np.array([0, 2, 1, 3]))
         if self.trans_xy and random.random() < self.p:
-            transpose_list.append((0, 1, 3, 2))
+            transpose_list.append(np.array([0, 1, 3, 2]))
         if self.trans_zx and random.random() < self.p:
-            transpose_list.append((0, 3, 2, 1))
+            transpose_list.append(np.array([0, 3, 2, 1]))
 
         if len(transpose_list) > 0:
-            ctr_t = sample['ctr'].copy()
-            image_t = sample['image']
+            transpose_order = np.array([0, 1, 2, 3])
             for transpose in transpose_list:
-                temp = ctr_t.copy()
-                ctr_t[:, 0] = temp[:, transpose[1] - 1]
-                ctr_t[:, 1] = temp[:, transpose[2] - 1]
-                ctr_t[:, 2] = temp[:, transpose[3] - 1]
-                image_t = np.transpose(image_t, transpose)
-                sample['ctr_transform'].append(TransposeCTR(transpose))
-
-            sample['image'] = image_t
-            sample['ctr'] = ctr_t
+                transpose_order = transpose_order[transpose]
+            sample['image'] = np.transpose(sample['image'], transpose_order)
+            
+            sample['ctr'] = sample['ctr'][:, transpose_order[1:] - 1]
+            sample['rad'] = sample['rad'][:, transpose_order[1:] - 1]
+            sample['ctr_transform'].append(TransposeCTR(transpose_order))
         return sample
 
 
