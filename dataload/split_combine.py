@@ -4,7 +4,9 @@ import numpy as np
 
 class SplitComb():
     def __init__(self, crop_size: List[int]=[64, 128, 128], overlap_size:List[int]=[16, 32, 32], pad_value:float=0):
-        self.side_len = [crop_size[0]-overlap_size[0], crop_size[1]-overlap_size[1], crop_size[2]-overlap_size[2]]
+        self.stride_size = [crop_size[0]-overlap_size[0], 
+                            crop_size[1]-overlap_size[1], 
+                            crop_size[2]-overlap_size[2]]
         self.overlap = overlap_size
         self.pad_value = pad_value
 
@@ -13,42 +15,42 @@ class SplitComb():
         d, h, w = data.shape
 
         # Number of splits in each dimension
-        nz = int(np.ceil(float(d) / self.side_len[0]))
-        nh = int(np.ceil(float(h) / self.side_len[1]))
-        nw = int(np.ceil(float(w) / self.side_len[2]))
+        nz = int(np.ceil(float(d) / self.stride_size[0]))
+        ny = int(np.ceil(float(h) / self.stride_size[1]))
+        nx = int(np.ceil(float(w) / self.stride_size[2]))
 
-        nzhw = [nz, nh, nw]
-        pad = [[0, int(nz * self.side_len[0] + self.overlap[0] - d)],
-                [0, int(nh * self.side_len[1] + self.overlap[1] - h)],
-                [0, int(nw * self.side_len[2] + self.overlap[2] - w)]]
+        nzyx = [nz, ny, nx]
+        pad = [[0, int(nz * self.stride_size[0] + self.overlap[0] - d)],
+                [0, int(ny * self.stride_size[1] + self.overlap[1] - h)],
+                [0, int(nx * self.stride_size[2] + self.overlap[2] - w)]]
 
         data = np.pad(data, pad, 'constant', constant_values=self.pad_value)  
 
         for iz in range(nz):
-            for ih in range(nh):
-                for iw in range(nw):
-                    sz = int(iz * self.side_len[0])
-                    ez = int((iz + 1) * self.side_len[0] + self.overlap[0])
-                    sh = int(ih * self.side_len[1])
-                    eh = int((ih + 1) * self.side_len[1] + self.overlap[1])
-                    sw = int(iw * self.side_len[2])
-                    ew = int((iw + 1) * self.side_len[2] + self.overlap[2])
+            for iy in range(ny):
+                for ix in range(nx):
+                    start_z = int(iz * self.stride_size[0])
+                    end_z = int((iz + 1) * self.stride_size[0] + self.overlap[0])
+                    start_y = int(iy * self.stride_size[1])
+                    end_y = int((iy + 1) * self.stride_size[1] + self.overlap[1])
+                    start_x = int(ix * self.stride_size[2])
+                    end_x = int((ix + 1) * self.stride_size[2] + self.overlap[2])
 
-                    split = data[np.newaxis, np.newaxis, sz:ez, sh:eh, sw:ew]
+                    split = data[np.newaxis, np.newaxis, start_z:end_z, start_y:end_y, start_x:end_x]
                     splits.append(split)
 
         splits = np.concatenate(splits, 0)
-        return splits, nzhw
+        return splits, nzyx
 
     def combine(self, output, nzhw):
         nz, nh, nw = nzhw
         idx = 0
-        for iz in range(nz):
+        for iz in range(nz): 
             for ih in range(nh):
                 for iw in range(nw):
-                    sz = int(iz * self.side_len[0])
-                    sh = int(ih * self.side_len[1])
-                    sw = int(iw * self.side_len[2])
+                    sz = int(iz * self.stride_size[0])
+                    sh = int(ih * self.stride_size[1])
+                    sw = int(iw * self.stride_size[2])
                     # [N, 8]
                     # 8-> id, prob, z_min, y_min, x_min, d, h, w 
                     output[idx][:, 2] += sz

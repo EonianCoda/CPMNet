@@ -35,9 +35,9 @@ class InstanceCrop(object):
         if rand_trans == None:
             self.rand_trans = None
         else:
-            self.rand_trans = np.array(rand_trans)
+            self.rand_trans = np.array(rand_trans, dtype=np.int32)
 
-        if rand_rot == None:
+        if isinstance(rand_rot, None) or (list(rand_rot) == [0, 0, 0]):
             self.rand_rot = None
         else:
             self.rand_rot = np.array(rand_rot)
