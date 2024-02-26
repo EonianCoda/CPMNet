@@ -46,14 +46,16 @@ class RandomRotate90(AbstractTransform):
             rot_image = sample['image']
             rot_ctr = sample['ctr']
             rot_rad = sample['rad']
+            rot_spacing = sample['spacing']
             for rot_axes, rot_angle in zip(all_rot_axes, rot_angles):
                 rot_image = self.rotate_3d_image(rot_image, rot_axes, rot_angle)
                 if len(rot_ctr) != 0:
-                    rot_ctr, rot_rad = self.rotate_3d_bbox(rot_ctr, rot_rad, image_shape, rot_axes, rot_angle)
+                    rot_ctr, rot_rad, rot_spacing = self.rotate_3d_bbox(rot_ctr, rot_rad, rot_spacing, image_shape, rot_axes, rot_angle)
                 sample['ctr_transform'].append(RotateCTR(rot_angle, rot_axes, image_shape))
             sample['image'] = rot_image
             sample['ctr'] = rot_ctr
             sample['rad'] = rot_rad
+            sample['spacing'] = rot_spacing
         return sample
     
     @staticmethod
@@ -70,7 +72,7 @@ class RandomRotate90(AbstractTransform):
         return rotated_data
 
     @staticmethod
-    def rotate_3d_bbox(ctrs: np.ndarray, bbox_shapes: np.ndarray, image_shape: np.ndarray, rot_axes: Tuple[int], angle: int):
+    def rotate_3d_bbox(ctrs: np.ndarray, bbox_shapes: np.ndarray, image_spacing: np.ndarray, image_shape: np.ndarray, rot_axes: Tuple[int], angle: int):
         """
         Args:
             ctrs: 3D bounding box centers with shape (N, 3).
@@ -88,10 +90,13 @@ class RandomRotate90(AbstractTransform):
         new_ctr_zyx[:, rot_axes[1]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * sin + (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * cos + img_center[rot_axes[1]]
         
         new_shape_dhw = bbox_shapes.copy()
+        new_image_spacing = image_spacing.copy()
         if angle == 90 or angle == 270:
             new_shape_dhw[:, rot_axes[0]] = bbox_shapes[:, rot_axes[1]] 
             new_shape_dhw[:, rot_axes[1]] = bbox_shapes[:, rot_axes[0]]
-        return new_ctr_zyx, new_shape_dhw
+            new_image_spacing[rot_axes[0]] = image_spacing[rot_axes[1]]
+            new_image_spacing[rot_axes[1]] = image_spacing[rot_axes[0]]
+        return new_ctr_zyx, new_shape_dhw, new_image_spacing
 
 class RandomRotate(AbstractTransform):
     """
@@ -175,7 +180,6 @@ class RandomRotate(AbstractTransform):
 
         return sample
 
-
 class RandomTranspose(AbstractTransform):
     """
     random rotate the image (shape [C, D, H, W] or [C, H, W])
@@ -202,13 +206,11 @@ class RandomTranspose(AbstractTransform):
             for transpose in transpose_list:
                 transpose_order = transpose_order[transpose]
             sample['image'] = np.transpose(sample['image'], transpose_order)
-            
             sample['ctr'] = sample['ctr'][:, transpose_order[1:] - 1]
             sample['rad'] = sample['rad'][:, transpose_order[1:] - 1]
+            sample['spacing'] = sample['spacing'][transpose_order[1:] - 1]
             sample['ctr_transform'].append(TransposeCTR(transpose_order))
         return sample
-
-
 
 class RandomMaskTranspose(AbstractTransform):
     """
@@ -242,7 +244,6 @@ class RandomMaskTranspose(AbstractTransform):
             sample['mask'] = mask_t
 
         return sample
-
 
 class RandomMaskRotate(AbstractTransform):
     """

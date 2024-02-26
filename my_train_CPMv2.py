@@ -111,7 +111,6 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
-                                   spacing = IMAGE_SPACING,
                                    cls_num_hard = args.cls_num_hard,
                                    cls_fn_weight = args.cls_fn_weight,
                                    cls_fn_threshold = args.cls_fn_threshold)

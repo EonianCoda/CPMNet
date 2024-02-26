@@ -98,6 +98,7 @@ class TrainDataset(Dataset):
         for i in range(len(samples)):
             sample = samples[i]
             sample['image'] = normalize_raw_image(sample['image'], DEFAULT_WINDOW_LEVEL, DEFAULT_WINDOW_WIDTH)
+            sample['spacing'] = image_spacing
             if self.transform_post:
                 sample['ctr_transform'] = []
                 sample = self.transform_post(sample)

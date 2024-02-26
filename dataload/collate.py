@@ -16,12 +16,12 @@ def train_collate_fn(batches) -> Dict[str, torch.Tensor]:
     max_num_annots = max(annot.shape[0] for annot in annots)
 
     if max_num_annots > 0:
-        annot_padded = np.ones((len(annots), max_num_annots, 7), dtype='float32') * -1
+        annot_padded = np.ones((len(annots), max_num_annots, 10), dtype='float32') * -1
         for idx, annot in enumerate(annots):
             if annot.shape[0] > 0:
                 annot_padded[idx, :annot.shape[0], :] = annot
     else:
-        annot_padded = np.ones((len(annots), 1, 7), dtype='float32') * -1
+        annot_padded = np.ones((len(annots), 1, 10), dtype='float32') * -1
 
     return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded)}
 
@@ -72,12 +72,12 @@ def semi_unlabeled_train_collate_fn_dict(batches):
 
     ctr_transforms = [s['ctr_transform'] for s in batch]
     if max_num_annots > 0:
-        annot_padded = np.ones((len(annots), max_num_annots, 7), dtype='float32') * -1
+        annot_padded = np.ones((len(annots), max_num_annots, 10), dtype='float32') * -1
         for idx, annot in enumerate(annots):
             if annot.shape[0] > 0:
                 annot_padded[idx, :annot.shape[0], :] = annot
     else:
-        annot_padded = np.ones((len(annots), 1, 7), dtype='float32') * -1
+        annot_padded = np.ones((len(annots), 1, 10), dtype='float32') * -1
     
     return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded), 'ctr_transform': ctr_transforms}
 
@@ -124,13 +124,13 @@ def semi_labeled_collate_fn_dict(batches) -> Dict[str, torch.Tensor]:
 
     ctr_transforms = [s['ctr_transform'] for s in batch]
     if max_num_annots > 0:
-        annot_padded = np.ones((len(annots), max_num_annots, 7), dtype='float32') * -1
+        annot_padded = np.ones((len(annots), max_num_annots, 10), dtype='float32') * -1
 
         if max_num_annots > 0:
             for idx, annot in enumerate(annots):
                 if annot.shape[0] > 0:
                     annot_padded[idx, :annot.shape[0], :] = annot
     else:
-        annot_padded = np.ones((len(annots), 1, 7), dtype='float32') * -1
+        annot_padded = np.ones((len(annots), 1, 10), dtype='float32') * -1
 
     return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded), 'ctr_transform': ctr_transforms}

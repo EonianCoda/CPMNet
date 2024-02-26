@@ -16,8 +16,12 @@ class CoordToAnnot(AbstractTransform):
         ctr = sample['ctr']
         rad = sample['rad']
         cls = sample['cls']
-    
-        annot = np.concatenate([ctr, rad.reshape(-1, 3), cls.reshape(-1, 1)], axis=-1).astype('float32')
+        # copy
+        spacing = sample['spacing']
+        n = ctr.shape[0]
+        spacing = np.tile(spacing, (n, 1))
+        
+        annot = np.concatenate([ctr, rad.reshape(-1, 3), spacing.reshape(-1, 3), cls.reshape(-1, 1)], axis=-1).astype('float32') # (n, 7)
 
         sample['annot'] = annot
 

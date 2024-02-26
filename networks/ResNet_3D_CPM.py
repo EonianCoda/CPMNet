@@ -359,13 +359,11 @@ class DetectionLoss(nn.Module):
                  pos_ignore_ratio = 3,
                  cls_num_hard = 100,
                  cls_fn_weight = 4.0,
-                 cls_fn_threshold = 0.8,
-                 spacing=[2.0, 1.0, 1.0]):
+                 cls_fn_threshold = 0.8):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
         self.pos_ignore_ratio = pos_ignore_ratio
-        self.spacing = np.array(spacing)
         
         self.cls_num_hard = cls_num_hard
         self.cls_fn_weight = cls_fn_weight
@@ -435,8 +433,8 @@ class DetectionLoss(nn.Module):
         
         Args:
             annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format:
-                (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1). The last index -1 means the annotation is ignored.
+                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
+                (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
             device: torch.device, the device of the model.
             input_size: List[int]
                 A list of length 3 containing the (z, y, x) dimensions of the input.
@@ -445,8 +443,8 @@ class DetectionLoss(nn.Module):
         Returns: 
             A tuple of two tensors:
                 (1) annotations_new: torch.Tensor
-                    A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format:
-                    (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1). The last index -1 means the annotation is ignored.
+                    A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
+                    (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
                 (2) mask_ignore: torch.Tensor
                     A tensor of shape (batch_size, 1, z, y, x) to store the mask ignore.
         """
@@ -457,9 +455,9 @@ class DetectionLoss(nn.Module):
             gt_bboxes = annots[annots[:, -1] > -1] # -1 means ignore, it is used to make each sample has same number of bbox (pad with -1)
             bbox_annotation_target = []
             
-            crop_box = torch.tensor([0., 0., 0., input_size[0], input_size[1], input_size[2]]).to(device) # (z_ctr, y_ctr, x_ctr, d, h, w)
+            crop_box = torch.tensor([0., 0., 0., input_size[0], input_size[1], input_size[2]]).to(device)
             for s in range(len(gt_bboxes)):
-                each_label = gt_bboxes[s] # (z_ctr, y_ctr, x_ctr, d, h, w)
+                each_label = gt_bboxes[s] # (z_ctr, y_ctr, x_ctr, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1)
                 # coordinate convert zmin, ymin, xmin, d, h, w
                 z1 = (torch.max(each_label[0] - each_label[3]/2., crop_box[0]))
                 y1 = (torch.max(each_label[1] - each_label[4]/2., crop_box[1]))
@@ -476,8 +474,9 @@ class DetectionLoss(nn.Module):
                     continue
                 percent = nw * nh * nd / (each_label[3] * each_label[4] * each_label[5])
                 if (percent > 0.1) and (nw*nh*nd >= 15):
-                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), 0])).to(device)
-                    bbox_annotation_target.append(bbox.view(1, 7))
+                    spacing_z, spacing_y, spacing_x = each_label[6:9]
+                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
+                    bbox_annotation_target.append(bbox.view(1, 10))
                 else:
                     mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
             if len(bbox_annotation_target) > 0:
@@ -524,7 +523,6 @@ class DetectionLoss(nn.Module):
     def get_pos_target(annotations: torch.Tensor,
                        anchor_points: torch.Tensor,
                        stride: torch.Tensor,
-                       spacing: np.ndarray,
                        pos_target_topk = 7, 
                        ignore_ratio = 3):# larger the ignore_ratio, the more GPU memory is used
         """Get the positive targets for the network.
@@ -533,13 +531,11 @@ class DetectionLoss(nn.Module):
             2. Find the top k anchor points with the smallest distance for each annotation.
         Args:
             annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format: (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1)
+                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format: (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1).
             anchor_points: torch.Tensor
                 A tensor of shape (num_of_point, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
             stride: torch.Tensor
                 A tensor of shape (1,1,3) containing the strides of each dimension in format (z, y, x).
-            spacing: np.Array
-                A ndarray of shape (3,) containing the spacing of each dimension in format (z, y, x).
         """
         batchsize, num_of_annots, _ = annotations.size()
         # -1 means ignore, larger than 0 means positive
@@ -551,7 +547,8 @@ class DetectionLoss(nn.Module):
         ctr_gt_boxes = annotations[:, :, :3] / stride # z0, y0, x0
         shape = annotations[:, :, 3:6] / 2 # half d h w
         
-        sp = torch.from_numpy(spacing).to(ctr_gt_boxes.device).view(1, 1, 1, 3)
+        sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
+        sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
         
         # distance (b, n_max_object, anchors)
         distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1))
@@ -578,7 +575,7 @@ class DetectionLoss(nn.Module):
         target_offset = target_ctr - anchor_points
         target_shape = shape.view(-1, 3)[gt_idx]
         
-        target_bboxes = annotations[:, :, :-1].view(-1, 6)[gt_idx] # zyxdhw
+        target_bboxes = annotations[:, :, :6].view(-1, 6)[gt_idx] # zyxdhw
         target_scores, _ = torch.max(mask_pos, 1) # shape = (b, num_of_points), the value is 1 or 0, 1 means the point is assigned to positive
         mask_ignore, _ = torch.min(mask_ignore, 1) # shape = (b, num_of_points), the value is -1 or 0, -1 means the point is ignored
         del target_ctr, distance, mask_topk
@@ -592,8 +589,8 @@ class DetectionLoss(nn.Module):
         Args:
             output: Dict[str, torch.Tensor], the output of the model.
             annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format:
-                (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1). The last index -1 means the annotation is ignored.
+                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
+                (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
             device: torch.device, the device of the model.
         """
         Cls = output['Cls']
@@ -623,7 +620,6 @@ class DetectionLoss(nn.Module):
         target_offset, target_shape, target_bboxes, target_scores, mask_ignore = self.get_pos_target(annotations = process_annotations,
                                                                                                      anchor_points = anchor_points,
                                                                                                      stride = stride_tensor[0].view(1, 1, 3), 
-                                                                                                     spacing = self.spacing, 
                                                                                                      pos_target_topk = self.pos_target_topk,
                                                                                                      ignore_ratio = self.pos_ignore_ratio)
         # merge mask ignore
