@@ -431,7 +431,7 @@ def evaluateCAD(seriesUIDs: List[str],
         # Write FROC curve
         with open(os.path.join(output_dir, "froc_{}.txt".format(iou_threshold)), 'w') as f:
             f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
-            for i in range(len(sens)):
+            for i in range(len(fps_bs_itp)):
                 f.write("%.5f,%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], prec_bs_mean[i], f1_score_mean[i], thresholds_mean[i]))
         
     # Write FROC vectors to disk as well
