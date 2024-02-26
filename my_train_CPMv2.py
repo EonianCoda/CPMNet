@@ -43,7 +43,7 @@ def get_args():
     parser.add_argument('--mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--batch_size', type=int, default=3, help='input batch size for training (default: 3)')
-    parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 1)')
+    parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
     parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train (default: 250)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[64, 128, 128], help='crop size')
     # Resume

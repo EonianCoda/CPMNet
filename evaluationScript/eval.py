@@ -140,14 +140,17 @@ def compute_FROC_bootstrap(FROC_gt_list: List[float],
     # Then interpolate all FROC curves at this points
     interp_sens = np.zeros((numberOfBootstrapSamples, len(all_fp_scans)), dtype = 'float32')
     interp_precisions = np.zeros((numberOfBootstrapSamples, len(all_fp_scans)), dtype = 'float32')
+    interp_thresholds = np.zeros((numberOfBootstrapSamples, len(all_fp_scans)), dtype = 'float32')
     for i in range(numberOfBootstrapSamples):
         interp_sens[i,:] = np.interp(all_fp_scans, fp_scans_list[i], sens_list[i])
         interp_precisions[i,:] = np.interp(all_fp_scans, fp_scans_list[i], precision_list[i])
+        interp_thresholds[i,:] = np.interp(all_fp_scans, fp_scans_list[i], thresholds_list[i])
     # compute mean and CI
     sens_mean, sens_lb, sens_up = compute_mean_ci(interp_sens, confidence = confidence)
     prec_mean, prec_lb, prec_up = compute_mean_ci(interp_precisions, confidence = confidence)
+    thresholds_mean, thresholds_lb, thresholds_up = compute_mean_ci(interp_thresholds, confidence = confidence)
     
-    return all_fp_scans, (sens_mean, sens_lb, sens_up), (prec_mean, prec_lb, prec_up)
+    return (all_fp_scans, thresholds_mean), (sens_mean, sens_lb, sens_up), (prec_mean, prec_lb, prec_up)
 
 def compute_mean_ci(interp_sens, confidence = 0.95):
     sens_mean = np.zeros((interp_sens.shape[1]), dtype = 'float32')
@@ -415,7 +418,7 @@ def evaluateCAD(seriesUIDs: List[str],
                                                     FROC_is_FN_list = FROC_is_FN_list)
     
     if PERFORMBOOTSTRAPPING:  # True
-        fps_bs_itp, senstitivity_info, precision_info = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
+        (fps_bs_itp, thresholds_mean), senstitivity_info, precision_info = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
                                                                                 FROC_prob_list = FROC_prob_list,
                                                                                 FROC_series_uids = FROC_series_uids,
                                                                                 seriesUIDs = seriesUIDs,
@@ -425,12 +428,12 @@ def evaluateCAD(seriesUIDs: List[str],
         sens_bs_mean, sens_bs_lb, sens_bs_up = senstitivity_info
         prec_bs_mean, prec_bs_lb, prec_bs_up = precision_info
         f1_score_mean = 2 * prec_bs_mean * sens_bs_mean / np.maximum(1e-6, prec_bs_mean + sens_bs_mean)
-    # Write FROC curve
-    with open(os.path.join(output_dir, "froc_{}.txt".format(iou_threshold)), 'w') as f:
-        f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
-        for i in range(len(sens)):
-            f.write("%.5f,%.5f,%.5f,%.5f,%.5f\n" % (fps[i], sens[i], precisions[i], f1_score_mean[i], thresholds[i]))
-    
+        # Write FROC curve
+        with open(os.path.join(output_dir, "froc_{}.txt".format(iou_threshold)), 'w') as f:
+            f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
+            for i in range(len(sens)):
+                f.write("%.5f,%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], prec_bs_mean[i], f1_score_mean[i], thresholds_mean[i]))
+        
     # Write FROC vectors to disk as well
     with open(os.path.join(output_dir, "froc_gt_prob_vectors_{}.csv".format(iou_threshold)), 'w') as f:
         f.write("is_pos, prob\n")
