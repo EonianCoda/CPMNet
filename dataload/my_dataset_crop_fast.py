@@ -148,3 +148,48 @@ class DetDataset(Dataset):
         data['series_name'] = series_name
         data['series_folder'] = series_folder
         return data
+    
+class AugDetDataset(Dataset):
+    """Detection dataset for inference
+    """
+    def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb, norm_method='scale'):
+        self.series_list_path = series_list_path
+        
+        self.labels = []
+        self.dicom_paths = []
+        self.norm_method = norm_method
+        self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
+        self.series_infos = load_series_list(series_list_path)
+        
+        for folder, series_name in self.series_infos:
+            dicom_path = gen_dicom_path(folder, series_name)
+            self.dicom_paths.append(dicom_path)
+        self.splitcomb = SplitComb
+        if self.norm_method == 'none' and self.splitcomb.pad_value != 0:
+            logger.warning('SplitComb pad_value should be 0 when norm_method is none, and it is set to 0 now')
+            self.splitcomb.pad_value = 0.0
+            
+    def __len__(self):
+        return len(self.dicom_paths)
+    
+    def __getitem__(self, idx):
+        dicom_path = self.dicom_paths[idx]
+        series_folder = self.series_infos[idx][0]
+        series_name = self.series_infos[idx][1]
+        
+        image_spacing = self.image_spacing.copy() # z, y, x
+        image = load_image(dicom_path) # z, y, x
+        image = normalize_processed_image(image, self.norm_method)
+
+        data = {}
+        # split_images [N, 1, crop_z, crop_y, crop_x]
+        split_images, splits_flip_axes, splits_start_zyx, original_shape = self.splitcomb.split(image)
+        
+        data['split_images'] = np.ascontiguousarray(split_images)
+        data['splits_flip_axes'] = splits_flip_axes
+        data['splits_start_zyx'] = splits_start_zyx
+        data['original_shape'] = original_shape
+        data['spacing'] = image_spacing
+        data['series_name'] = series_name
+        data['series_folder'] = series_folder
+        return data

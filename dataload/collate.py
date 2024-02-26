@@ -52,6 +52,41 @@ def infer_collate_fn(batches) -> Dict[str, torch.Tensor]:
             'series_names': series_names,
             'series_folders': series_folders}
 
+def aug_infer_collate_fn(batches) -> Dict[str, torch.Tensor]:
+    num_splits = []
+    imgs = []
+    spacings = []
+    series_names = []
+    series_folders = []
+    all_splits_flip_axes = []
+    all_splits_start_zyx = []
+    original_shapes = []
+
+    for b in batches:
+        imgs.append(b['split_images'])
+        num_splits.append(b['split_images'].shape[0])
+        all_splits_flip_axes.append(b['splits_flip_axes'])
+        all_splits_start_zyx.append(b['splits_start_zyx'])
+        original_shapes.append(b['original_shape'])
+        spacings.append(b['spacing'])
+        series_names.append(b['series_name'])
+        series_folders.append(b['series_folder'])
+        
+    imgs = np.concatenate(imgs, axis=0)
+    # all_splits_flip_axes = np.concatenate(all_splits_flip_axes, axis=0)
+    # all_splits_start_zyx = np.concatenate(all_splits_start_zyx, axis=0)
+    # original_shapes = np.stack(original_shapes)
+    num_splits = np.array(num_splits)
+    
+    return {'split_images': torch.from_numpy(imgs),
+            'all_splits_flip_axes': all_splits_flip_axes,
+            'all_splits_start_zyx': all_splits_start_zyx,
+            'original_shapes': original_shapes,
+            'num_splits': num_splits, 
+            'spacings': spacings, 
+            'series_names': series_names,
+            'series_folders': series_folders}
+
 def semi_unlabeled_train_collate_fn_dict(batches):
     batch = []
     for b in batches:
