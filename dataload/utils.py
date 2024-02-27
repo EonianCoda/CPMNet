@@ -109,7 +109,7 @@ def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0) -> Dict[st
         if (bboxes < 0).any():
             print(f'Warning: {label_path} has negative values')
         # calculate center of bboxes
-        all_loc = ((bboxes[:, 0] + bboxes[:, 1] - 1) / 2).astype(np.float32) # (y, x, z)
+        all_loc = ((bboxes[:, 0] + bboxes[:, 1]) / 2).astype(np.float32) # (y, x, z)
         all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float32) # (y, x, z)
         
         all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
