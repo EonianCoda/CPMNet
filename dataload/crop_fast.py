@@ -3,6 +3,7 @@ from __future__ import print_function, division
 import SimpleITK as sitk
 import numpy as np
 import random
+from itertools import product
 
 def compute_bbox3d_intersection_volume(box1: np.ndarray, box2: np.ndarray):
     """ 
@@ -89,11 +90,7 @@ class InstanceCrop(object):
         x_crop_centers = self.get_crop_centers(shape, 2)
         
         # Generate crop centers
-        crop_centers = []
-        for z in z_crop_centers:
-            for y in y_crop_centers:
-                for x in x_crop_centers:
-                    crop_centers.append([z, y, x])
+        crop_centers = [*product(z_crop_centers, y_crop_centers, x_crop_centers)]
         crop_centers = np.array(crop_centers)
         
         if self.instance_crop and len(instance_loc) > 0:

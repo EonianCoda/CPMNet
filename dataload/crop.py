@@ -3,6 +3,7 @@ from __future__ import print_function, division
 import SimpleITK as sitk
 import numpy as np
 import random
+from itertools import product
 
 class InstanceCrop(object):
     """Randomly crop the input image (shape [C, D, H, W]
@@ -84,12 +85,9 @@ class InstanceCrop(object):
         y_crop_centers = self.get_crop_centers(shape, 1)
         x_crop_centers = self.get_crop_centers(shape, 2)
         
-        crop_centers = []
-        for z in z_crop_centers:
-            for y in y_crop_centers:
-                for x in x_crop_centers:
-                    crop_centers.append(np.array([z, y, x]))
-
+        crop_centers = [*product(z_crop_centers, y_crop_centers, x_crop_centers)]
+        crop_centers = np.array(crop_centers)
+        
         if self.instance_crop and len(instance_loc) > 0:
             if self.rand_trans is not None:
                 instance_crop = instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(instance_loc), 3))
