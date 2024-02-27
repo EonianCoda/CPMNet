@@ -24,6 +24,7 @@ from logic.utils import write_metrics, save_states, load_states
 ### optimzer ###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
+from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
@@ -53,7 +54,7 @@ def get_args():
     parser.add_argument('--train_set', type=str, required=True, help='train_list')
     parser.add_argument('--val_set', type=str, required=True,help='val_list')
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
-    parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
+    parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--data_norm_method', type=str, default='scale', help='normalize method, mean_std or scale or none')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
@@ -62,6 +63,8 @@ def get_args():
     parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
     parser.add_argument('--decay_gamma', type=float, default=0.01, help='decay gamma')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
+    parser.add_argument('--apply_ema', action='store_true', default=False, help='apply ema')
+    parser.add_argument('--ema_decay', type=float, default=0.9999, help='ema decay')
     # Loss hyper-parameters
     parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of seg')
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
@@ -107,10 +110,25 @@ def get_args():
     args = parser.parse_args()
     return args
 
+def add_weight_decay(net, weight_decay):
+    """no weight decay on bias and normalization layer
+    """
+    decay, no_decay = [], []
+    for name, param in net.named_parameters():
+        if not param.requires_grad:
+            continue  # skip frozen weights
+        # skip bias and bn layer
+        if ".norm" in name:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+    return [{"params": no_decay, "weight_decay": 0.0},
+            {"params": decay, "weight_decay": weight_decay}]
+
 def get_overlap_size(crop_size, overlay_ratio=DEFAULT_OVERLAY_RATIO):
     return [int(crop_size[i] * overlay_ratio) for i in range(len(crop_size))]
 
-def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
+def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
     # build model
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
@@ -141,12 +159,22 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
     start_epoch = 0
     model.to(device)
     # build optimizer and scheduler
-    optimizer = AdamW(params=model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    params = add_weight_decay(model, args.weight_decay)
+    optimizer = AdamW(params=params, lr=args.lr, weight_decay=args.weight_decay)
     
     T_max = args.epochs // args.decay_cycle
     scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=args.lr * args.decay_gamma)
     scheduler_warm = GradualWarmupScheduler(optimizer, gamma=args.warmup_gamma, warmup_epochs=args.warmup_epochs, after_scheduler=scheduler_reduce)
     logger.info('Warmup learning rate from {:.1e} to {:.1e} for {} epochs and then reduce learning rate from {:.1e} to {:.1e} by cosine annealing with {} cycles'.format(args.lr * args.warmup_gamma, args.lr, args.warmup_epochs, args.lr, args.lr * args.decay_gamma, args.decay_cycle))
+
+    # Build EMA
+    if args.apply_ema:
+        ema_warmup_steps = 2 * args.warmup_epochs * num_training_steps
+        logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_decay, ema_warmup_steps))
+        ema = EMA(model, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
+        ema.register()
+    else:
+        ema = None
 
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
@@ -159,7 +187,7 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
         ckpt_path = os.path.join(model_folder, f'epoch_{start_epoch}.pth')
         logger.info('Load checkpoint from "{}"'.format(ckpt_path))
 
-        load_states(ckpt_path, device, model, optimizer, scheduler_warm)
+        load_states(ckpt_path, device, model, optimizer, scheduler_warm, ema)
     
         # Resume best metric
         global early_stopping
@@ -169,7 +197,7 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model)
         
-    return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
+    return start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], overlap_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
@@ -259,8 +287,8 @@ if __name__ == '__main__':
     model_save_dir = os.path.join(exp_folder, 'model')
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    start_epoch, model, optimizer, scheduler_warm, detection_postprocess = prepare_training(args, device)
     train_loader = get_train_dataloder(args)
+    start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
@@ -269,7 +297,8 @@ if __name__ == '__main__':
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,
-                            dataloader = train_loader, 
+                            dataloader = train_loader,
+                            ema = ema, 
                             device = device)
         scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
@@ -284,9 +313,13 @@ if __name__ == '__main__':
             ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
             if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
                 os.remove(ckpt_path)
-        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model, optimizer, scheduler_warm)
+        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model, optimizer, scheduler_warm, ema)
         
         if epoch >= args.start_val_epoch: 
+            # Use Shadow model to validate and save model
+            if ema is not None:
+                ema.apply_shadow()
+            
             val_metrics = val(args = args,
                             model = model,
                             detection_postprocess=detection_postprocess,
@@ -300,7 +333,10 @@ if __name__ == '__main__':
             
             early_stopping.step(val_metrics, epoch)
             write_metrics(val_metrics, epoch, 'val', writer)
-    
+
+            # Restore model
+            if ema is not None:
+                ema.restore()
     # Test
     logger.info('Test the best model')
     test_save_dir = os.path.join(exp_folder, 'test')

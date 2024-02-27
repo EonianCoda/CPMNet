@@ -12,19 +12,22 @@ def write_metrics(metrics: Dict[str, float], epoch: int, prefix: str, writer: Su
         writer.add_scalar(f'{prefix}/{metric}', value, global_step = epoch)
     writer.flush()
 
-def save_states(save_path: str, model: nn.Module, optimizer: torch.optim.Optimizer = None, scheduler: torch.optim.lr_scheduler = None, **kwargs):
+def save_states(save_path: str, model: nn.Module, optimizer: torch.optim.Optimizer = None, scheduler: torch.optim.lr_scheduler = None, ema = None, **kwargs):
     save_dict = {'model_state_dict': model.state_dict(), 'model_structure': model}
     if optimizer is not None:
         save_dict['optimizer_state_dict'] = optimizer.state_dict()
     if scheduler is not None:
         save_dict['scheduler_state_dict'] = scheduler.state_dict()
+    if ema is not None:
+        save_dict['ema_state_dict'] = ema.state_dict()
+    
     for key, value in kwargs.items():
         save_dict[key] = value
     
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(save_dict, save_path)
     
-def load_states(load_path: str, device: torch.device, model: nn.Module, optimizer: torch.optim.Optimizer = None, scheduler: torch.optim.lr_scheduler = None, **kwargs):
+def load_states(load_path: str, device: torch.device, model: nn.Module, optimizer: torch.optim.Optimizer = None, scheduler: torch.optim.lr_scheduler = None, ema = None, **kwargs):
     checkpoint = torch.load(load_path, map_location=device)
     
     if 'state_dict' not in checkpoint and 'model_state_dict' not in checkpoint:
@@ -37,6 +40,9 @@ def load_states(load_path: str, device: torch.device, model: nn.Module, optimize
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     
+    if ema is not None:
+        ema.load_state_dict(checkpoint['ema_state_dict'])
+        
     for key, value in kwargs.items():
         if key not in checkpoint:
             logger.warning(f'Key {key} not found in checkpoint')

@@ -25,7 +25,8 @@ def train(args,
           model: nn.modules,
           optimizer: torch.optim.Optimizer,
           dataloader: DataLoader,
-          device: torch.device) -> Dict[str, float]:
+          device: torch.device,
+          ema = None,) -> Dict[str, float]:
     model.train()
     avg_cls_loss = AverageMeter()
     avg_shape_loss = AverageMeter()
@@ -68,7 +69,11 @@ def train(args,
             else:
                 optimizer.step()
             optimizer.zero_grad(set_to_none=True)
-        
+            
+            # Update EMA
+            if ema is not None:
+                ema.update()
+            
             progress_bar.set_postfix(loss = avg_loss.avg,
                                     cls_Loss = avg_cls_loss.avg,
                                     shape_loss = avg_shape_loss.avg,
