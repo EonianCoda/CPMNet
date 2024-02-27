@@ -8,10 +8,10 @@ import numpy as np
 from typing import Tuple
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
-from dataload.my_dataset_crop_fast import TrainDataset, DetDataset
+from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
-from dataload.crop_fast import InstanceCrop
+from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
@@ -43,7 +43,7 @@ def get_args():
     parser.add_argument('--mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--batch_size', type=int, default=3, help='input batch size for training (default: 3)')
-    parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 1)')
+    parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
     parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train (default: 250)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[64, 128, 128], help='crop size')
     # Resume
@@ -77,6 +77,8 @@ def get_args():
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Train Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
+    parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
+    parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -169,32 +171,41 @@ def prepare_training(args, device) -> Tuple[int, Resnet18, AdamW, GradualWarmupS
         
     return start_epoch, model, optimizer, scheduler_warm, detection_postprocess
 
+def build_train_augmentation(args, crop_size: Tuple[int, int, int], overlap_size: Tuple[int, int, int], pad_value: int, blank_side: int):
+    if crop_size[0] == crop_size[1] == crop_size[2]:
+        rot_yz = True
+        rot_xz = True
+    else:
+        rot_yz = False
+        rot_xz = False
+        
+    transform_list_train = [transform.Pad(output_size=crop_size),
+                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    if args.rot_aug == 'rot90':
+        transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
+    elif args.rot_aug == 'transpose':
+        transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+        
+    if args.use_crop:
+        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
+        
+    transform_list_train.append(transform.CoordToAnnot(blank_side=blank_side))
+                            
+    logger.info('Augmentation: random flip: True, random rotate: {}{}, random crop: {}'.format(args.rot_aug, [True, rot_yz, rot_xz], args.use_crop))
+    train_transform = torchvision.transforms.Compose(transform_list_train)
+    return train_transform
+
 def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
     overlap_size = get_overlap_size(crop_size)
-    
     pad_value = get_image_padding_value(args.data_norm_method)
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        trans_zy = True
-        trans_zx = True
-    else:
-        trans_zy = False
-        trans_zx = False
     rand_trans = [int(s * 2/3) for s in overlap_size]
-    logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
-    logger.info('Augmentation: random translation: {}, random transpose: {}'.format(rand_trans, [True, trans_zy, trans_zx]))
-        
-    transform_list_train = [transform.Pad(output_size=crop_size),
-                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True),
-                            # transform.RandomCrop(p=0.3, crop_ratio=0.9, ctr_margin=10, padding_value=pad_value),
-                            transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=trans_zx, trans_zy=trans_zy),
-                            transform.CoordToAnnot(blank_side=blank_side)]
     
-    train_transform = torchvision.transforms.Compose(transform_list_train)
-
+    logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
     crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                  rand_rot=[20, 0, 0], sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
 
+    train_transform = build_train_augmentation(args, crop_size, overlap_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
                                  transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method)
     

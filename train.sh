@@ -1,0 +1,2 @@
+python train.py --train_set ./data/pretrained_train.txt --val_set ./data/pretrained_val.txt --test_set ./data/all_client_test.txt --batch_size 3 --num_samples 5 --mixed_precision --val_mixed_precision
+python train.py --train_set ./data/test_bug.txt --val_set ./data/test_bug.txt --test_set ./data/test_bug.txt --batch_size 6 --num_samples 5 --mixed_precision --val_mixed_precision --crop_size 96 96 96 --first_stride 2 2 2 --pos_target_topk 7

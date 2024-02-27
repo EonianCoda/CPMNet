@@ -7,7 +7,8 @@ import logging
 
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess
 ### data ###
-from dataload.my_dataset_crop import DetDataset
+from dataload.dataset import DetDataset
+from dataload.utils import get_image_padding_value
 from dataload.collate import infer_collate_fn
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
@@ -94,10 +95,7 @@ def val_data_prepare(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
     
-    if args.data_norm_method == 'none':
-        pad_value = 0
-    else:
-        pad_value = -1
+    pad_value = get_image_padding_value(args.data_norm_method)
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     test_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.batch_size, collate_fn=infer_collate_fn, pin_memory=True)
@@ -115,7 +113,6 @@ if __name__ == '__main__':
     init_seed(args.seed)
     
     val_loader = val_data_prepare(args)
-    
     
     write_yaml(os.path.join(exp_folder, 'val_config.yaml'), args)
     logger.info('Save validation results to "{}"'.format(exp_folder))

@@ -1,187 +1,150 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
-
-import os
-import torch
-import pandas as pd
+import logging
 import numpy as np
-import SimpleITK as sitk
+from typing import List
+from .utils import load_series_list, load_image, load_label, ALL_RAD, ALL_LOC, ALL_CLS, gen_dicom_path, gen_label_path, normalize_processed_image, normalize_raw_image, DEFAULT_WINDOW_LEVEL, DEFAULT_WINDOW_WIDTH
 from torch.utils.data import Dataset
 
-lesion_label_default = ['aneurysm']
+logger = logging.getLogger(__name__)
 
-class DetDatasetCSVR(Dataset):
+class TrainDataset(Dataset):
     """Dataset for loading numpy images with dimension order [D, H, W]
 
     Arguments:
-        roots (list): list of dirs of the dataset
-        transform_post: transform object after cropping
-        crop_fn: cropping function
-        lesion_label (list): label names of lesion, such as ['Aneurysm']
+        series_list_path (str): Path to the series list file.
+        image_spacing (List[float]): Spacing of the image in the order [z, y, x].
+        transform_post (optional): Transform object to be applied after cropping.
+        crop_fn (optional): Cropping function.
+        use_bg (bool, optional): Flag indicating whether to use background or not.
+
+    Attributes:
+        labels (List): List of labels.
+        dicom_paths (List): List of DICOM file paths.
+        series_list_path (str): Path to the series list file.
+        series_names (List): List of series names.
+        image_spacing (ndarray): Spacing of the image in the order [z, y, x].
+        transform_post (optional): Transform object to be applied after cropping.
+        crop_fn (optional): Cropping function.
+
+    Methods:
+        __len__(): Returns the length of the dataset.
+        __getitem__(idx): Returns the item at the given index.
 
     """
-
-    def __init__(self, roots, transform_post=None, crop_fn=None, lesion_label=None, csv_file='./train.csv'):
-
-        if lesion_label is None:
-            self.lesion_label = lesion_label_default
-        else:
-            self.lesion_label = lesion_label
-
-        self.ct_list = []
-        self.csv_list = []
-        self.csv_file = np.array(pd.read_csv(csv_file))
-        for root in roots:
-            id_list = os.listdir(root)
-            ct_list = [os.path.join(root, id) for id in id_list]
-            csv_list = [self.csv_file[self.csv_file[:, 0] == id, 1:] for id in id_list]
-            self.ct_list.extend(ct_list)
-            self.csv_list.extend(csv_list)
+    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False, min_d=0, norm_method='scale'):
+        self.labels = []
+        self.dicom_paths = []
+        self.series_list_path = series_list_path
+        self.norm_method = norm_method
+        self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
+        self.min_d = int(min_d)
+        
+        if self.min_d > 0:
+            logger.info('When training, ignore nodules with depth less than {}'.format(min_d))
+        
+        if self.norm_method == 'mean_std':
+            logger.info('Normalize image to have mean 0 and std 1, and then scale to -1 to 1')
+        elif self.norm_method == 'scale':
+            logger.info('Normalize image to have value ranged from -1 to 1')
+        elif self.norm_method == 'none':
+            logger.info('Normalize image to have value ranged from 0 to 1')
+        
+        self.series_infos = load_series_list(series_list_path)
+        for folder, series_name in self.series_infos:
+            label_path = gen_label_path(folder, series_name)
+            dicom_path = gen_dicom_path(folder, series_name)
+           
+            label = load_label(label_path, self.image_spacing, min_d)
+            if label[ALL_LOC].shape[0] == 0 and not use_bg:
+                continue
+            
+            self.dicom_paths.append(dicom_path)
+            self.labels.append(label)
 
         self.transform_post = transform_post
         self.crop_fn = crop_fn
 
     def __len__(self):
-        return len(self.ct_list)
+        return len(self.labels)
     
-    def __norm__(self, data):
-        max_value = np.percentile(data, 99)
-        min_value = 0.
-        data[data>max_value] = max_value
-        data[data<min_value] = min_value
-        data = data/max_value
-        return data
-
+    def load_image(self, dicom_path: str) -> np.ndarray:
+        """
+        Return:
+            A 3D numpy array with dimension order [D, H, W] (z, y, x)
+        """
+        image = np.load(dicom_path)
+        image = np.transpose(image, (2, 0, 1))
+        return image
+    
     def __getitem__(self, idx):
-        ct_dir = self.ct_list[idx]
-        # print('ct dir:', ct_dir)
-        # inputImage = sitk.ReadImage(ct_dir)
-        image = sitk.ReadImage(ct_dir)
-        # N4 bias Field Correction
-        # maskImage = sitk.OtsuThreshold(inputImage,0,1,200)
-        # inputImage = sitk.Cast(inputImage,sitk.sitkFloat32)
-        # corrector = sitk.N4BiasFieldCorrectionImageFilter()
-        # image = corrector.Execute(inputImage,maskImage)
+        dicom_path = self.dicom_paths[idx]
+        series_folder = self.series_infos[idx][0]
+        series_name = self.series_infos[idx][1]
+        label = self.labels[idx]
 
-        image_spacing = image.GetSpacing()[::-1] # z, y, x
-        image = sitk.GetArrayFromImage(image).astype('float32')# z, y, x
-        image = self.__norm__(image) # normalized
-        csv_label = self.csv_list[idx]
-        all_loc = csv_label[:, 0:3].astype('float32') # x,y,z
-        all_loc = all_loc[:,::-1] # convert z,y,x
-        all_rad = csv_label[:, 3:6].astype('float32') # w,h,d
-        all_rad = all_rad[:,::-1] # convert d,h,w
-        lesion_index = np.sum([csv_label[:, -1] == label for label in self.lesion_label], axis=0, dtype='bool')
-        all_cls = np.ones(shape=(all_loc.shape[0]), dtype='int8') * (-1)
-        all_cls[lesion_index] = 0
-
+        image_spacing = self.image_spacing.copy() # z, y, x
+        image = self.load_image(dicom_path) # z, y, x
+        
         data = {}
         data['image'] = image
-        data['all_loc'] = all_loc
-        data['all_rad'] = all_rad
-        data['all_cls'] = all_cls
-        data['file_name'] = self.ct_list[idx]
+        data['all_loc'] = label['all_loc'] # z, y, x
+        data['all_rad'] = label['all_rad'] # d, h, w
+        data['all_cls'] = label['all_cls']
+        data['file_name'] = series_name
         samples = self.crop_fn(data, image_spacing)
         random_samples = []
 
         for i in range(len(samples)):
             sample = samples[i]
+            sample['image'] = normalize_raw_image(sample['image'], DEFAULT_WINDOW_LEVEL, DEFAULT_WINDOW_WIDTH)
+            sample['spacing'] = image_spacing
             if self.transform_post:
+                sample['ctr_transform'] = []
                 sample = self.transform_post(sample)
-            sample['image'] = (sample['image'] * 2.0 - 1.0) # normalized to -1 ~ 1
+            sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             random_samples.append(sample)
 
         return random_samples
 
-
-
-class DetDatasetCSVRTest(Dataset):
-    """Dataset for loading numpy images with dimension order [D, H, W]
+class DetDataset(Dataset):
+    """Detection dataset for inference
     """
-
-    def __init__(self, roots, SplitComb, csv_file='./val.csv', lesion_label=None):
-        if lesion_label is None:
-            self.lesion_label = lesion_label_default
-        else:
-            self.lesion_label = lesion_label
-        self.ct_list = []
-        self.csv_list = []
+    def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb, norm_method='scale'):
+        self.series_list_path = series_list_path
+        
+        self.labels = []
+        self.dicom_paths = []
+        self.norm_method = norm_method
+        self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
+        self.series_infos = load_series_list(series_list_path)
+        
+        for folder, series_name in self.series_infos:
+            dicom_path = gen_dicom_path(folder, series_name)
+            self.dicom_paths.append(dicom_path)
         self.splitcomb = SplitComb
-        self.csv_file = np.array(pd.read_csv(csv_file))
-        for root in roots:
-            id_list = os.listdir(root)
-            ct_list = [os.path.join(root, id) for id in id_list]
-            csv_list = [self.csv_file[self.csv_file[:, 0] == id, 1:] for id in id_list]
-            self.ct_list.extend(ct_list)
-            self.csv_list.extend(csv_list)
-
+        if self.norm_method == 'none' and self.splitcomb.pad_value != 0:
+            logger.warning('SplitComb pad_value should be 0 when norm_method is none, and it is set to 0 now')
+            self.splitcomb.pad_value = 0.0
+            
     def __len__(self):
-        return len(self.ct_list)
+        return len(self.dicom_paths)
     
-    def __norm__(self, data):
-        max_value = np.percentile(data, 99)
-        min_value = 0.
-        data[data>max_value] = max_value
-        data[data<min_value] = min_value
-        data = data/max_value
-        return data
-
     def __getitem__(self, idx):
-        ct_dir = self.ct_list[idx]
-        image = sitk.ReadImage(ct_dir)
-        # inputImage = sitk.ReadImage(ct_dir)
-        # # N4 bias Field Correction
-        # maskImage = sitk.OtsuThreshold(inputImage,0,1,200)
-        # inputImage = sitk.Cast(inputImage,sitk.sitkFloat32)
-        # corrector = sitk.N4BiasFieldCorrectionImageFilter()
-        # image = corrector.Execute(inputImage,maskImage)
-
-        image_spacing = image.GetSpacing()[::-1] # z, y, x
-        image = sitk.GetArrayFromImage(image).astype('float32')# z, y, x
-        image = self.__norm__(image) # normalized
-        csv_label = self.csv_list[idx]
-        all_loc = csv_label[:, 0:3].astype('float32') # x,y,z
-        all_loc = all_loc[:,::-1] # convert z,y,x
-        all_rad = csv_label[:, 3:6].astype('float32') # w,h,d
-        all_rad = all_rad[:,::-1] # convert d,h,w
-        lesion_index = np.sum([csv_label[:, -1] == label for label in self.lesion_label], axis=0, dtype='bool')
-
-        all_cls = np.ones(shape=(all_loc.shape[0]), dtype='int8') * (-1)
-        all_cls[lesion_index] = 0
+        dicom_path = self.dicom_paths[idx]
+        series_folder = self.series_infos[idx][0]
+        series_name = self.series_infos[idx][1]
+        
+        image_spacing = self.image_spacing.copy() # z, y, x
+        image = load_image(dicom_path) # z, y, x
+        image = normalize_processed_image(image, self.norm_method)
 
         data = {}
-        # convert to -1 ~ 1  note ste pad_value to -1 for SplitComb
-        image = image * 2.0 - 1.0
         # split_images [N, 1, crop_z, crop_y, crop_x]
         split_images, nzhw = self.splitcomb.split(image)
         data['split_images'] = np.ascontiguousarray(split_images)
-        # data['all_loc'] = np.ascontiguousarray(all_loc) # index z, y, x
-        # data['all_rad'] = np.ascontiguousarray(all_rad) # mm    d, h, w
-        # data['all_cls'] = np.ascontiguousarray(all_cls)
-        data['file_name'] = self.ct_list[idx].split('/')[-1]
         data['nzhw'] = nzhw
         data['spacing'] = image_spacing
-
+        data['series_name'] = series_name
+        data['series_folder'] = series_folder
         return data
-
-
-
-def collate_fn_dict(batches):
-    batch = []
-    [batch.extend(b) for b in batches]
-    imgs = [s['image'] for s in batch]
-    imgs = np.stack(imgs)
-    annots = [s['annot'] for s in batch]
-    max_num_annots = max(annot.shape[0] for annot in annots)
-
-    if max_num_annots > 0:
-        annot_padded = np.ones((len(annots), max_num_annots, 7), dtype='float32') * -1
-
-        if max_num_annots > 0:
-            for idx, annot in enumerate(annots):
-                if annot.shape[0] > 0:
-                    annot_padded[idx, :annot.shape[0], :] = annot
-    else:
-        annot_padded = np.ones((len(annots), 1, 7), dtype='float32') * -1
-
-    return {'image': torch.tensor(imgs), 'annot': torch.tensor(annot_padded)}
