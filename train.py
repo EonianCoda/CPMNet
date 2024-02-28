@@ -31,7 +31,7 @@ from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, loa
 from logic.early_stopping_save import EarlyStoppingSave
 
 SAVE_ROOT = './save'
-DEFAULT_OVERLAY_RATIO = 0.25
+DEFAULT_OVERLAP_RATIO = 0.25
 IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
 
@@ -47,6 +47,7 @@ def get_args():
     parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
     parser.add_argument('--epochs', type=int, default=250, help='number of epochs to train (default: 250)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[64, 128, 128], help='crop size')
+    parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
     # Resume
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
@@ -55,7 +56,7 @@ def get_args():
     parser.add_argument('--val_set', type=str, required=True,help='val_list')
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be` ignored")
-    parser.add_argument('--data_norm_method', type=str, default='scale', help='normalize method, mean_std or scale or none')
+    parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -64,7 +65,7 @@ def get_args():
     parser.add_argument('--decay_gamma', type=float, default=0.01, help='decay gamma')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
     parser.add_argument('--apply_ema', action='store_true', default=False, help='apply ema')
-    parser.add_argument('--ema_decay', type=float, default=0.9999, help='ema decay')
+    parser.add_argument('--ema_decay', type=float, default=0.999, help='ema decay')
     # Loss hyper-parameters
     parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of seg')
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
@@ -88,7 +89,7 @@ def get_args():
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
-    parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.7, help='fixed probability threshold for validation')
+    parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # Network
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
@@ -125,8 +126,8 @@ def add_weight_decay(net, weight_decay):
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
 
-def get_overlap_size(crop_size, overlay_ratio=DEFAULT_OVERLAY_RATIO):
-    return [int(crop_size[i] * overlay_ratio) for i in range(len(crop_size))]
+def get_overlap_size(crop_size, overlap_ratio: float) -> Tuple[int, int, int]:
+    return [int(crop_size[i] * overlap_ratio) for i in range(len(crop_size))]
 
 def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
     # build model
@@ -169,7 +170,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
 
     # Build EMA
     if args.apply_ema:
-        ema_warmup_steps = 2 * args.warmup_epochs * num_training_steps
+        ema_warmup_steps = int(args.start_val_epoch * num_training_steps * 1.2 + 1)
         logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_decay, ema_warmup_steps))
         ema = EMA(model, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
         ema.register()
@@ -225,7 +226,7 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], overlap_size
 
 def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
-    overlap_size = get_overlap_size(crop_size)
+    overlap_size = get_overlap_size(crop_size, args.overlap_ratio)
     pad_value = get_image_padding_value(args.data_norm_method)
     rand_trans = [int(s * 2/3) for s in overlap_size]
     
@@ -250,7 +251,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 
 def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
-    overlap_size = get_overlap_size(crop_size)
+    overlap_size = get_overlap_size(crop_size, args.overlap_ratio)
     num_workers = min(args.val_batch_size, 4)
     
     pad_value = get_image_padding_value(args.data_norm_method)

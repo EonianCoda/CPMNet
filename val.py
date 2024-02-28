@@ -21,7 +21,7 @@ from utils.logs import setup_logging
 from utils.utils import init_seed, write_yaml
 
 SAVE_ROOT = './save'
-OVERLAY_RATIO = 0.25
+DEFAULT_OVERLAP_RATIO = 0.25
 IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,7 @@ def get_args():
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--batch_size', type=int, default=2, help='input batch size for training (default: 2)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[64, 128, 128], help='crop size')
+    parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
     parser.add_argument('--model_path', type=str, default='')
     # data
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
@@ -93,8 +94,9 @@ def prepare_validation(args, device):
 
 def val_data_prepare(args):
     crop_size = args.crop_size
-    overlap_size = [int(crop_size[i] * OVERLAY_RATIO) for i in range(len(crop_size))]
+    overlap_size = [int(crop_size[i] * args.overlap_ratio) for i in range(len(crop_size))]
     
+    logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
     pad_value = get_image_padding_value(args.data_norm_method)
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     test_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)

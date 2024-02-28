@@ -22,7 +22,7 @@ def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.
             image[z] = cv2.rectangle(image[z].copy(), (x1, y1), (x2, y2), color, 1)
     return image
 
-def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.ndarray:
+def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), half_image = True, axis_off = True) -> None:
     """
     Args:
         image: a 3D image with shape [Z, Y, X, 3]
@@ -38,10 +38,11 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
         bboxed_image = draw_bbox(image.copy(), bbox[np.newaxis, ...], color)
         
         # Crop image to save drawing time and space
-        if center_x < image.shape[2] / 2: # left
-            bboxed_image = bboxed_image[:, :, :bboxed_image.shape[2] // 2]
-        else: # right
-            bboxed_image = bboxed_image[:, :, bboxed_image.shape[2] // 2:]
+        if half_image:
+            if center_x < image.shape[2] / 2: # left
+                bboxed_image = bboxed_image[:, :, :bboxed_image.shape[2] // 2]
+            else: # right
+                bboxed_image = bboxed_image[:, :, bboxed_image.shape[2] // 2:]
         
         if (z2 - z1) > MAX_IMAGE_IN_ROW:
             zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
@@ -54,7 +55,8 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             ax = plt.subplot(1, len(zs), i+1)
             ax.imshow(bboxed_image[z], cmap='gray')
             ax.set_title(f'z={z}')
-            ax.axis('off')
+            if axis_off:
+                ax.axis('off')
         plt.tight_layout()
         
 def draw_bbox_on_image_with_label(img_path: str, label_path: str, color = (255, 0, 0)) -> np.ndarray:

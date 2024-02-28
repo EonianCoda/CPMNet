@@ -4,7 +4,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class EMA:
-    def __init__(self, model: nn.Module, decay: float = 0.9999, warmup_steps: int = 0):
+    def __init__(self, model: nn.Module, decay: float = 0.999, warmup_steps: int = 0):
         self.model = model
         self.decay = decay
         self.warmup_steps = warmup_steps
