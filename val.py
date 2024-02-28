@@ -41,7 +41,7 @@ def get_args():
     # hyper-parameters
     parser.add_argument('--num_samples', type=int, default=5, help='sampling batch number in per sample')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
-    parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.7, help='fixed probability threshold for validation')
+    parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     
     # detection-hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
