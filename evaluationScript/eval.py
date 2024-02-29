@@ -428,12 +428,18 @@ def evaluateCAD(seriesUIDs: List[str],
         sens_bs_mean, sens_bs_lb, sens_bs_up = senstitivity_info
         prec_bs_mean, prec_bs_lb, prec_bs_up = precision_info
         f1_score_mean = 2 * prec_bs_mean * sens_bs_mean / np.maximum(1e-6, prec_bs_mean + sens_bs_mean)
+        
+        best_f1_index = np.argmax(f1_score_mean)
+        best_f1_threshold = thresholds_mean[best_f1_index]
+        best_f1_sens = sens_bs_mean[best_f1_index]
+        best_f1_prec = prec_bs_mean[best_f1_index]
+        best_f1_f1_score = f1_score_mean[best_f1_index]
+        logger.info('Best F1 score: {:.4f} at threshold: {:.3f}, Sens: {:.3f}, Prec: {:.3f}'.format(best_f1_f1_score, best_f1_threshold, best_f1_sens, best_f1_prec))
         # Write FROC curve
         with open(os.path.join(output_dir, "froc_{}.txt".format(iou_threshold)), 'w') as f:
             f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
             for i in range(len(fps_bs_itp)):
                 f.write("%.5f,%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], prec_bs_mean[i], f1_score_mean[i], thresholds_mean[i]))
-        
     # Write FROC vectors to disk as well
     with open(os.path.join(output_dir, "froc_gt_prob_vectors_{}.csv".format(iou_threshold)), 'w') as f:
         f.write("is_pos, prob\n")
