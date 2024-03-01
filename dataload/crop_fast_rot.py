@@ -4,8 +4,10 @@ import SimpleITK as sitk
 import numpy as np
 import random
 import math
-import scipy
+import torch
+from scipy import ndimage as nd
 from itertools import product
+from .utils import get_HU_MIN_MAX, DEFAULT_WINDOW_LEVEL, DEFAULT_WINDOW_WIDTH
 
 def compute_bbox3d_intersection_volume(box1: np.ndarray, box2: np.ndarray):
     """ 
@@ -61,6 +63,9 @@ class InstanceCrop(object):
             self.rand_rot = np.array(rand_rot)
             self.rot_crop_size = ((np.sqrt(2) * self.crop_size).astype(np.int32) - 1) // 2 * 2 # round to even
 
+        self.use_gpu = torch.cuda.is_available()
+        self.hu_min = get_HU_MIN_MAX(DEFAULT_WINDOW_LEVEL, DEFAULT_WINDOW_WIDTH)[0]
+        
     def get_crop_centers(self, shape, dim: int):
         crop = self.crop_size[dim]
         overlap = self.overlap_size[dim]
@@ -182,7 +187,6 @@ class InstanceCrop(object):
             new_refine_offset = np.zeros_like(refine_offset)
             new_refine_offset[larger_indices[..., 0], larger_indices[..., 1], larger_indices[..., 2]] = refine_offset[larger_indices[..., 0], larger_indices[..., 1], larger_indices[..., 2]]
             new_refine_offset *= np.expand_dims(np.maximum(np.minimum(aspect_ratio, 2), 1), axis=2)
-            # refine_offset[larger_indices[..., 0], larger_indices[..., 1], larger_indices[..., 2]] *= np.maximum(np.minimum(aspect_ratio, 2), 1)
             
             all_rot_nodule_bb_min[..., 1:] = all_rot_nodule_bb_min[..., 1:] + new_refine_offset
             all_rot_nodule_bb_max[..., 1:] = all_rot_nodule_bb_max[..., 1:] - new_refine_offset
@@ -227,7 +231,7 @@ class InstanceCrop(object):
         probs[neg_indices] = (1. - probs.sum()) / neg_indices.sum() if neg_indices.sum() > 0 else 0
         probs = probs / probs.sum() # normalize
         sample_indices = np.random.choice(np.arange(len(all_crop_bb_min)), size=self.sample_num, p=probs, replace=False)
-            
+        
         # Crop patches
         samples = []
         for sample_i in sample_indices:
@@ -238,9 +242,19 @@ class InstanceCrop(object):
                                 crop_bb_min[2]: crop_bb_max[2]]
             if self.rand_rot is not None:
                 angle = all_rot_angles[sample_i][0]
-                image_crop = scipy.ndimage.rotate(image_crop, angle, axes=(1, 2), reshape=False, order=3, mode='constant', cval=-1500)
-                image_crop = image_crop[valid_range[0, 0]: valid_range[1, 0], 
-                                        valid_range[0, 1]: valid_range[1, 1], 
+                if self.use_gpu:
+                    import cupy as cp
+                    from cupyx.scipy import ndimage as cupy_nd
+                    image_crop = cp.array(image_crop)
+                    image_crop = cupy_nd.rotate(image_crop, angle, axes=(1, 2), reshape=False, order=3, mode='constant', cval=self.hu_min)
+                    image_crop = image_crop[valid_range[0, 0]: valid_range[1, 0],
+                                            valid_range[0, 1]: valid_range[1, 1],
+                                            valid_range[0, 2]: valid_range[1, 2]]
+                    image_crop = cp.asnumpy(image_crop)
+                else:
+                    image_crop = nd.rotate(image_crop, angle, axes=(1, 2), reshape=False, order=3, mode='constant', cval=self.hu_min)
+                    image_crop = image_crop[valid_range[0, 0]: valid_range[1, 0],
+                                        valid_range[0, 1]: valid_range[1, 1],
                                         valid_range[0, 2]: valid_range[1, 2]]
             image_crop = np.expand_dims(image_crop, axis=0)
             
