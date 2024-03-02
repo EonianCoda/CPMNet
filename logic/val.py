@@ -138,12 +138,12 @@ def val(args,
     
     
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    froc_out, fixed_out = nodule_evaluation(annot_path = annot_path,
-                                            series_uids_path = series_uids_path, 
-                                            pred_results_path = pred_results_path,
-                                            output_dir = output_dir,
-                                            iou_threshold = args.val_iou_threshold,
-                                            fixed_prob_threshold=args.val_fixed_prob_threshold)
+    froc_out, fixed_out, (best_f1_score, best_f1_threshold) = nodule_evaluation(annot_path = annot_path,
+                                                                                series_uids_path = series_uids_path, 
+                                                                                pred_results_path = pred_results_path,
+                                                                                output_dir = output_dir,
+                                                                                iou_threshold = args.val_iou_threshold,
+                                                                                fixed_prob_threshold=args.val_fixed_prob_threshold)
     fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points = froc_out
     
     logger.info('==> Epoch: {}'.format(epoch))
@@ -157,7 +157,9 @@ def val(args,
                 'fn': fixed_fn,
                 'recall': fixed_recall,
                 'precision': fixed_precision,
-                'f1_score': fixed_f1_score}
+                'f1_score': fixed_f1_score,
+                'best_f1_score': best_f1_score,
+                'best_f1_threshold': best_f1_threshold}
     for fp_ratio, sens_p in zip(FP_ratios, sens_points):
         metrics['froc_{}_recall'.format(str(fp_ratio))] = sens_p
     

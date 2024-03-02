@@ -433,8 +433,8 @@ def evaluateCAD(seriesUIDs: List[str],
         best_f1_threshold = thresholds_mean[best_f1_index]
         best_f1_sens = sens_bs_mean[best_f1_index]
         best_f1_prec = prec_bs_mean[best_f1_index]
-        best_f1_f1_score = f1_score_mean[best_f1_index]
-        logger.info('Best F1 score: {:.4f} at threshold: {:.3f}, Sens: {:.3f}, Prec: {:.3f}'.format(best_f1_f1_score, best_f1_threshold, best_f1_sens, best_f1_prec))
+        best_f1_score = f1_score_mean[best_f1_index]
+        logger.info('Best F1 score: {:.4f} at threshold: {:.3f}, Sens: {:.3f}, Prec: {:.3f}'.format(best_f1_score, best_f1_threshold, best_f1_sens, best_f1_prec))
         # Write FROC curve
         with open(os.path.join(output_dir, "froc_{}.txt".format(iou_threshold)), 'w') as f:
             f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
@@ -510,7 +510,7 @@ def evaluateCAD(seriesUIDs: List[str],
 
         plt.savefig(os.path.join(output_dir, "froc_{}.png".format(iou_threshold)), bbox_inches=0, dpi=300)
 
-    return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score)
+    return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score), (best_f1_score, best_f1_threshold)
     
 def get_nodule(annot: List[Any], 
                header: List[str]) -> NoduleFinding:
@@ -607,11 +607,11 @@ def nodule_evaluation(annot_path: str,
     """
     all_gt_nodules, seriesUIDs = collect(annot_path, series_uids_path)
     
-    out, fixed_out = evaluateCAD(seriesUIDs = seriesUIDs, 
-                                results_path = pred_results_path, 
-                                output_dir = output_dir, 
-                                all_gt_nodules = all_gt_nodules,
-                                max_num_of_nodule_candidate_in_series = max_num_of_nodule_candidate_in_series, 
-                                fixed_prob_threshold=fixed_prob_threshold,
-                                iou_threshold = iou_threshold)
-    return out, fixed_out
+    out, fixed_out, (best_f1_score, best_f1_threshold) = evaluateCAD(seriesUIDs = seriesUIDs, 
+                                                                    results_path = pred_results_path, 
+                                                                    output_dir = output_dir, 
+                                                                    all_gt_nodules = all_gt_nodules,
+                                                                    max_num_of_nodule_candidate_in_series = max_num_of_nodule_candidate_in_series, 
+                                                                    fixed_prob_threshold=fixed_prob_threshold,
+                                                                    iou_threshold = iou_threshold)
+    return out, fixed_out, (best_f1_score, best_f1_threshold)

@@ -11,15 +11,16 @@ from utils.utils import get_progress_bar
 
 logger = logging.getLogger(__name__)
 
-def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    image = sample['image'].to(device, non_blocking=True) # z, y, x
-    labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
-    
-    # Compute loss
-    cls_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
-    cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-    loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-    return loss, cls_loss, shape_loss, offset_loss, iou_loss
+def train_one_step_wrapper(memory_format):
+    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
+        labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
+        # Compute loss
+        cls_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
+        cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
+        loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        return loss, cls_loss, shape_loss, offset_loss, iou_loss
+    return train_one_step
 
 def train(args,
           model: nn.modules,
@@ -42,6 +43,12 @@ def train(args,
         
     total_num_steps = len(dataloader)
     progress_bar = get_progress_bar('Train', (total_num_steps - 1) // iters_to_accumulate + 1)
+    
+    if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
+        train_one_step = train_one_step_wrapper(torch.channels_last_3d)
+    else:
+        train_one_step = train_one_step_wrapper(None)
+        
     optimizer.zero_grad()
     for iter_i, sample in enumerate(dataloader):
         if mixed_precision:

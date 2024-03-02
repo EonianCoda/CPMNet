@@ -1,5 +1,6 @@
 # %% -*- coding: utf-8 -*-
-from __future__ import print_function
+import multiprocessing
+multiprocessing.set_start_method('spawn', force=True)
 import argparse
 import torch
 import os
@@ -16,6 +17,7 @@ from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 import torchvision
+import torch
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
 from logic.train import train
@@ -58,6 +60,8 @@ def get_args():
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[45, 0, 0], help='random rotation range')
     parser.add_argument('--tp_iou', type=float, default=0.7, help='iou threshold for instance crop')
+    parser.add_argument('--memory_format', type=str, default='channels_first', help='memory format, channels_first or channels_last')
+    parser.add_argument('--not_use_cupy', action='store_true', default=False, help='not use cupy')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -105,7 +109,7 @@ def get_args():
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     # other
-    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score'], help='metric for validation')
+    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'best_f1_score'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, help='how many batches to wait before logging training status')
@@ -159,7 +163,10 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                                                  nms_topk = args.det_nms_topk,
                                                  crop_size = args.crop_size)
     start_epoch = 0
-    model.to(device)
+    if args.memory_format == 'channels_last':
+        model = model.to(device, memory_format=torch.channels_last_3d)
+    else:
+        model = model.to(device)
     # build optimizer and scheduler
     params = add_weight_decay(model, args.weight_decay)
     optimizer = AdamW(params=params, lr=args.lr, weight_decay=args.weight_decay)
@@ -198,7 +205,6 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model)
-        
     return start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
@@ -237,7 +243,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
-                                 transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method)
+                                 transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method, use_cupy=not args.not_use_cupy)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 
@@ -316,7 +322,7 @@ if __name__ == '__main__':
             if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
                 os.remove(ckpt_path)
         save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model, optimizer, scheduler_warm, ema)
-        
+    
         if epoch >= args.start_val_epoch: 
             # Use Shadow model to validate and save model
             if ema is not None:

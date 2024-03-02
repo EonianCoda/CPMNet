@@ -148,7 +148,6 @@ class InstanceCrop(object):
             rot_crop_ctrs = np.unique(rot_crop_ctrs, axis=0)
             
             all_rot_bb_min = (rot_crop_ctrs - self.rot_crop_size / 2).astype(np.int32) # [M, 3]
-            # all_rot_bb_max = (rot_crop_ctrs + self.rot_crop_size / 2).astype(np.int32)
             
             all_rot_nodule_bb_min = np.expand_dims(all_nodule_bb_min, axis=0) - np.expand_dims(all_rot_bb_min, axis=1) # [M, N, 3]
             all_rot_nodule_bb_max = np.expand_dims(all_nodule_bb_max, axis=0) - np.expand_dims(all_rot_bb_min, axis=1)
@@ -173,23 +172,22 @@ class InstanceCrop(object):
             all_rot_nodule_bb_max[:, :, 2] = np.max(all_rot_bbox_points[..., 1], axis=2) # [M, N, 3]
             
             # all_rot_angles # [M, N, 1]
+            # refine_offset = (all_rot_nodule_bb_max - all_rot_nodule_bb_min) * np.expand_dims(((np.abs(all_rot_angles) / 45) * 0.1), axis=2)
+            # refine_offset = refine_offset[:, :, 1:] # [M, N, 2]
             
-            refine_offset = (all_rot_nodule_bb_max - all_rot_nodule_bb_min) * np.expand_dims(((np.abs(all_rot_angles) / 45) * 0.1), axis=2)
-            refine_offset = refine_offset[:, :, 1:] # [M, N, 2]
+            # larger_axis = np.argmax(refine_offset, axis=2) # [M, N]
+            # larger_indices = np.indices(larger_axis.shape)
+            # larger_indices = np.stack([larger_indices[0], larger_indices[1], larger_axis], axis=2)
             
-            larger_axis = np.argmax(refine_offset, axis=2) # [M, N]
-            larger_indices = np.indices(larger_axis.shape)
-            larger_indices = np.stack([larger_indices[0], larger_indices[1], larger_axis], axis=2)
+            # aspect_ratio = refine_offset[..., 0] / np.maximum(refine_offset[..., 1], 1e-6) # [M, N]
+            # aspect_ratio = np.where(aspect_ratio < 1, 1 / np.maximum(aspect_ratio, 1e-6), aspect_ratio)
             
-            aspect_ratio = refine_offset[..., 0] / np.maximum(refine_offset[..., 1], 1e-6) # [M, N]
-            aspect_ratio = np.where(aspect_ratio < 1, 1 / np.maximum(aspect_ratio, 1e-6), aspect_ratio)
+            # new_refine_offset = np.zeros_like(refine_offset)
+            # new_refine_offset[larger_indices[..., 0], larger_indices[..., 1], larger_indices[..., 2]] = refine_offset[larger_indices[..., 0], larger_indices[..., 1], larger_indices[..., 2]]
+            # new_refine_offset *= np.expand_dims(np.maximum(np.minimum(aspect_ratio, 2), 1), axis=2)
             
-            new_refine_offset = np.zeros_like(refine_offset)
-            new_refine_offset[larger_indices[..., 0], larger_indices[..., 1], larger_indices[..., 2]] = refine_offset[larger_indices[..., 0], larger_indices[..., 1], larger_indices[..., 2]]
-            new_refine_offset *= np.expand_dims(np.maximum(np.minimum(aspect_ratio, 2), 1), axis=2)
-            
-            all_rot_nodule_bb_min[..., 1:] = all_rot_nodule_bb_min[..., 1:] + new_refine_offset
-            all_rot_nodule_bb_max[..., 1:] = all_rot_nodule_bb_max[..., 1:] - new_refine_offset
+            # all_rot_nodule_bb_min[..., 1:] = all_rot_nodule_bb_min[..., 1:] + new_refine_offset
+            # all_rot_nodule_bb_max[..., 1:] = all_rot_nodule_bb_max[..., 1:] - new_refine_offset
             
             all_rot_nodule_bb_rad = all_rot_nodule_bb_max - all_rot_nodule_bb_min
             all_rot_nodule_bb_volume = np.prod(all_rot_nodule_bb_rad, axis=2) # [M, N]

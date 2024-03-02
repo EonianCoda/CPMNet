@@ -9,6 +9,12 @@ import torch.nn.functional as F
 from utils.box_utils import nms_3D
 from .modules import SELayer, Identity, ConvBlock, act_layer, norm_layer3d
 
+def zyxdhw2zyxzyx(box, dim=-1):
+    ctr_zyx, dhw = torch.split(box, 3, dim)
+    z1y1x1 = ctr_zyx - dhw/2
+    z2y2x2 = ctr_zyx + dhw/2
+    return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
+
 def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
     anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
@@ -342,9 +348,7 @@ def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0
     """
     dtype, device = feat.dtype, feat.device
     _, _, d, h, w = feat.shape
-    strides = torch.tensor([input_size[0] / d, 
-                            input_size[1] / h, 
-                            input_size[2] / w]).type(dtype).to(device)
+    strides = torch.tensor([input_size[0] / d, input_size[1] / h, input_size[2] / w], dtype=dtype, device=device)
     sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
     sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
     sz = torch.arange(end=d, device=device, dtype=dtype) + grid_cell_offset  # shift z
@@ -449,13 +453,13 @@ class DetectionLoss(nn.Module):
                     A tensor of shape (batch_size, 1, z, y, x) to store the mask ignore.
         """
         batch_size = annotations.shape[0]
-        annotations_new = -1 * torch.ones_like(annotations).to(device)
+        annotations_new = -1 * torch.ones_like(annotations, device=device)
         for sample_i in range(batch_size):
             annots = annotations[sample_i]
             gt_bboxes = annots[annots[:, -1] > -1] # -1 means ignore, it is used to make each sample has same number of bbox (pad with -1)
             bbox_annotation_target = []
             
-            crop_box = torch.tensor([0., 0., 0., input_size[0], input_size[1], input_size[2]]).to(device)
+            crop_box = torch.tensor([0., 0., 0., input_size[0], input_size[1], input_size[2]], device=device)
             for s in range(len(gt_bboxes)):
                 each_label = gt_bboxes[s] # (z_ctr, y_ctr, x_ctr, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1)
                 # coordinate convert zmin, ymin, xmin, d, h, w
@@ -486,11 +490,6 @@ class DetectionLoss(nn.Module):
     
     @staticmethod
     def bbox_iou(box1, box2, DIoU=True, eps = 1e-7):
-        def zyxdhw2zyxzyx(box, dim=-1):
-            ctr_zyx, dhw = torch.split(box, 3, dim)
-            z1y1x1 = ctr_zyx - dhw/2
-            z2y2x2 = ctr_zyx + dhw/2
-            return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
         box1 = zyxdhw2zyxzyx(box1)
         box2 = zyxdhw2zyxzyx(box2)
         # Get the coordinates of bounding boxes

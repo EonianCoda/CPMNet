@@ -10,3 +10,4 @@ scikit-learn
 pandas
 PyYAML
 opencv-python # for drawing
+cupy-cuda12x
