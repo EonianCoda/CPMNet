@@ -29,10 +29,8 @@ from optimizer.ema import EMA
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
 from logic.early_stopping_save import EarlyStoppingSave
+from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING
 
-SAVE_ROOT = './save'
-DEFAULT_OVERLAP_RATIO = 0.25
-IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
 
 early_stopping = None

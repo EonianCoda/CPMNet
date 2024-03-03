@@ -373,8 +373,7 @@ def evaluateCAD(seriesUIDs: List[str],
     else:
         nodule_output_file.write("    Sensitivity: %.3f\n" % (float(tp_count) / float(total_num_of_nodules)))
     nodule_output_file.write("    Average number of candidates per scan: %.9f\n" % (float(total_num_of_cands) / float(len(seriesUIDs))))
-    nodule_output_file.write(
-        "    FN_diammeter:\n")
+    nodule_output_file.write("    FN_diammeter:\n")
     for idx, whd in enumerate(FN_diameter):
         nodule_output_file.write("    FN_%d: w:%.1f, h:%.1f, d:%.1f sericeuid: %s\n" % (idx+1, whd[0], whd[1], whd[2], FN_seriesuid[idx]))
     
@@ -384,20 +383,26 @@ def evaluateCAD(seriesUIDs: List[str],
                         'probably_benign': [0 ,0, 0],
                         'probably_suspicious': [0 ,0, 0],
                         'suspicious': [0 ,0, 0]}
-    
+    series_metric = dict()
     logger.info('Fixed threshold: {}'.format(fixed_prob_threshold))
     # dynamic_threshold = dynamic_threshold_wrapper(DYNAMIC_RATIO, fixed_prob_threshold)
-    for is_pos, prob, is_fn, nodule, cand in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, FROC_nodule_list, FROC_candidates_list):
+    for is_pos, prob, is_fn, nodule, cand, series_uid in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, FROC_nodule_list, FROC_candidates_list, FROC_series_uids):
+        if series_uid not in series_metric:
+            series_metric[series_uid] = [0, 0, 0]
+        
         # threshold = dynamic_threshold(cand)
         if is_fn or (is_pos == 1.0 and prob < fixed_prob_threshold):
             fixed_fn += 1
             classified_metrics[nodule.nodule_type][2] += 1
+            series_metric[series_uid][2] += 1
         elif is_pos == 1.0 and prob >= fixed_prob_threshold:
             fixed_tp += 1
             classified_metrics[nodule.nodule_type][0] += 1
+            series_metric[series_uid][0] += 1
         elif is_pos == 0.0 and prob >= fixed_prob_threshold:
             fixed_fp += 1
             classified_metrics[nodule.nodule_type][1] += 1
+            series_metric[series_uid][1] += 1
     
     fixed_recall = fixed_tp / max(fixed_tp + fixed_fn, 1e-6)
     fixed_precision = fixed_tp / max(fixed_tp + fixed_fp, 1e-6)
@@ -411,6 +416,13 @@ def evaluateCAD(seriesUIDs: List[str],
         f1_score = 2 * precision * recall / max(precision + recall, 1e-6)
         logger.info(template.format(nodule_type, recall, precision, f1_score, tp, fp, fn))
     logger.info(template.format('All', fixed_recall, fixed_precision, fixed_f1_score, fixed_tp, fixed_fp, fixed_fn))
+    # Compute metrics for each series
+    recall_series = []
+    for series_uid, metrics in series_metric.items():
+        tp, fp, fn = metrics
+        recall = tp / max(tp + fn, 1e-6)
+        recall_series.append(recall)
+    logger.info('Recall(series_based): {:.3f}'.format(np.mean(recall_series)))
     # compute FROC
     fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
                                                     FROC_prob_list = FROC_prob_list, 
@@ -419,12 +431,12 @@ def evaluateCAD(seriesUIDs: List[str],
     
     if PERFORMBOOTSTRAPPING:  # True
         (fps_bs_itp, thresholds_mean), senstitivity_info, precision_info = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
-                                                                                FROC_prob_list = FROC_prob_list,
-                                                                                FROC_series_uids = FROC_series_uids,
-                                                                                seriesUIDs = seriesUIDs,
-                                                                                FROC_is_FN_list = FROC_is_FN_list,
-                                                                                numberOfBootstrapSamples = NUMBEROFBOOTSTRAPSAMPLES, 
-                                                                                confidence = CONFIDENCE)
+                                                                                                FROC_prob_list = FROC_prob_list,
+                                                                                                FROC_series_uids = FROC_series_uids,
+                                                                                                seriesUIDs = seriesUIDs,
+                                                                                                FROC_is_FN_list = FROC_is_FN_list,
+                                                                                                numberOfBootstrapSamples = NUMBEROFBOOTSTRAPSAMPLES, 
+                                                                                                confidence = CONFIDENCE)
         sens_bs_mean, sens_bs_lb, sens_bs_up = senstitivity_info
         prec_bs_mean, prec_bs_lb, prec_bs_up = precision_info
         f1_score_mean = 2 * prec_bs_mean * sens_bs_mean / np.maximum(1e-6, prec_bs_mean + sens_bs_mean)
@@ -446,7 +458,7 @@ def evaluateCAD(seriesUIDs: List[str],
         for i in range(len(FROC_is_pos_list)):
             f.write("%d,%.4f\n" % (FROC_is_pos_list[i], FROC_prob_list[i]))
 
-    fps_itp = np.linspace(FROC_MINX, FROC_MAXX, num=10001)  # FROC横坐标范围
+    fps_itp = np.linspace(FROC_MINX, FROC_MAXX, num=10001)
     
     sens_itp = np.interp(fps_itp, fps, sens)
     prec_itp = np.interp(fps_itp, fps, precisions)

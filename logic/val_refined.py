@@ -82,17 +82,20 @@ def val(args,
     all_preds = []
     progress_bar = get_progress_bar('Validation', len(val_loader))
     for sample in val_loader:
-        data = sample['split_images'].to(device, non_blocking=True)
-        nzhws = sample['nzhws']
+        crop_images = sample['crop_images'].to(device, non_blocking=True)
+        crop_bb_mins = sample['crop_bb_mins']
+        nodule_centers = sample['nodule_centers']
+        nodule_shapes = sample['nodule_shapes']
         num_splits = sample['num_splits']
         series_names = sample['series_names']
+        series_paths = sample['series_paths']
         outputlist = []
         
-        for i in range(int(math.ceil(data.size(0) / batch_size))):
+        for i in range(int(math.ceil(crop_images.size(0) / batch_size))):
             end = (i + 1) * batch_size
-            if end > data.size(0):
-                end = data.size(0)
-            input = data[i * batch_size:end]
+            if end > crop_images.size(0):
+                end = crop_images.size(0)
+            input = crop_images[i * batch_size:end]
             if args.val_mixed_precision:
                 with torch.cuda.amp.autocast():
                     with torch.no_grad():
@@ -109,8 +112,7 @@ def val(args,
         start_idx = 0
         for i in range(len(num_splits)):
             n_split = num_splits[i]
-            nzhw = nzhws[i]
-            output = split_comber.combine(outputs[start_idx:start_idx + n_split], nzhw)
+            output = split_comber.combine(outputs[start_idx:start_idx + n_split], crop_bb_mins[i], nodule_centers[i], nodule_shapes[i])
             output = torch.from_numpy(output).view(-1, 8)
             # Remove the padding
             object_ids = output[:, 0] != -1.0

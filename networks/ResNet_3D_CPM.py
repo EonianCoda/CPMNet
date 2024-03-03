@@ -228,7 +228,7 @@ class ClsRegHead(nn.Module):
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
                  norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
-                 first_stride=(1, 2, 2), detection_loss=None, device=None):
+                 first_stride=(2, 2, 2), detection_loss=None, device=None):
         super(Resnet18, self).__init__()
         assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
         assert len(n_filters) == 4, 'The length of n_filters should be 4'

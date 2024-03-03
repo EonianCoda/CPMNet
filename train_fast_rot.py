@@ -31,12 +31,9 @@ from optimizer.ema import EMA
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
 from logic.early_stopping_save import EarlyStoppingSave
+from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING
 
-SAVE_ROOT = './save'
-DEFAULT_OVERLAY_RATIO = 0.25
-IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
-
 early_stopping = None
 
 def get_args():
@@ -131,8 +128,8 @@ def add_weight_decay(net, weight_decay):
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
 
-def get_overlap_size(crop_size, overlay_ratio=DEFAULT_OVERLAY_RATIO):
-    return [int(crop_size[i] * overlay_ratio) for i in range(len(crop_size))]
+def get_overlap_size(crop_size, overlap_ratio=DEFAULT_OVERLAP_RATIO):
+    return [int(crop_size[i] * overlap_ratio) for i in range(len(crop_size))]
 
 def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
     # build model

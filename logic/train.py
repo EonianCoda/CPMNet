@@ -42,14 +42,14 @@ def train(args,
         scaler = torch.cuda.amp.GradScaler()
         
     total_num_steps = len(dataloader)
-    progress_bar = get_progress_bar('Train', (total_num_steps - 1) // iters_to_accumulate + 1)
-    
     if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
+        logger.info('Using channels_last memory format')
         train_one_step = train_one_step_wrapper(torch.channels_last_3d)
     else:
         train_one_step = train_one_step_wrapper(None)
         
     optimizer.zero_grad()
+    progress_bar = get_progress_bar('Train', (total_num_steps - 1) // iters_to_accumulate + 1)
     for iter_i, sample in enumerate(dataloader):
         if mixed_precision:
             with torch.cuda.amp.autocast():

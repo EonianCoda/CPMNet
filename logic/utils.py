@@ -50,7 +50,6 @@ def load_states(load_path: str, device: torch.device, model: nn.Module, optimize
         
 def load_model(load_path: str):
     checkpoint = torch.load(load_path)
-    
     # Build model
     if 'model_structure' in checkpoint:
         model = checkpoint['model_structure']
@@ -63,5 +62,4 @@ def load_model(load_path: str):
         model.load_state_dict(checkpoint)
     else:
         model.load_state_dict(checkpoint['model_state_dict'])
-        
     return model

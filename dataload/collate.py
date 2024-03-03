@@ -52,6 +52,34 @@ def infer_collate_fn(batches) -> Dict[str, torch.Tensor]:
             'series_names': series_names,
             'series_folders': series_folders}
 
+def infer_refined_collate_fn(batches) -> Dict[str, torch.Tensor]:
+    num_splits = []
+    crop_images = []
+    nodule_centers = []
+    nodule_shapes = []
+    crop_bb_mins = []
+    series_names = []
+    series_paths = []
+
+    for b in batches:
+        crop_images.append(b['crop_images'])
+        num_splits.append(b['crop_images'].shape[0])
+        nodule_centers.append(b['nodule_centers'])
+        nodule_shapes.append(b['nodule_shapes'])
+        crop_bb_mins.append(b['crop_bb_mins'])
+        series_names.append(b['series_name'])
+        series_paths.append(b['series_path'])
+        
+    crop_images = np.concatenate(crop_images, axis=0)
+    
+    return {'crop_images': torch.from_numpy(crop_images),
+            'num_splits': np.array(num_splits),
+            'nodule_centers': nodule_centers,
+            'nodule_shapes': nodule_shapes,
+            'crop_bb_mins': crop_bb_mins,
+            'series_names': series_names,
+            'series_paths': series_paths}
+
 def semi_unlabeled_train_collate_fn_dict(batches):
     batch = []
     for b in batches:

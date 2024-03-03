@@ -7,14 +7,14 @@ import logging
 
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess
 ### data ###
-from dataload.dataset import DetDataset
+from dataload.dataset_fast_refined import DetRefinedDataset
+from dataload.dataset_fast_refined import ReFineSplitComb
 from dataload.utils import get_image_padding_value
-from dataload.collate import infer_collate_fn
-from dataload.split_combine import SplitComb
+from dataload.collate import infer_refined_collate_fn
 from torch.utils.data import DataLoader
 import transform as transform
 
-from logic.val import val
+from logic.val_refined import val
 from logic.utils import load_states
 
 from utils.logs import setup_logging
@@ -36,6 +36,7 @@ def get_args():
     parser.add_argument('--model_path', type=str, default='')
     # data
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
+    parser.add_argument('--series_cands_path', type=str, default='./save/predict.csv', help='series cands path')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     # hyper-parameters
@@ -96,9 +97,13 @@ def val_data_prepare(args):
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
     pad_value = get_image_padding_value(args.data_norm_method)
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
-    test_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    val_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.batch_size, collate_fn=infer_collate_fn, pin_memory=True)
+    split_comber = ReFineSplitComb(crop_size=crop_size)
+    series_cands = DetRefinedDataset.load_series_cands(args.series_cands_path)
+    test_dataset = DetRefinedDataset(series_list_path=args.val_set,
+                                    series_cands = series_cands,
+                                     SplitComb = split_comber, 
+                                     norm_method=args.data_norm_method)
+    val_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.batch_size, collate_fn=infer_refined_collate_fn, pin_memory=True)
     logger.info("There are {} samples in the val set".format(len(val_loader.dataset)))
     return val_loader
 
