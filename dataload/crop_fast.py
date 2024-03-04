@@ -4,38 +4,25 @@ import SimpleITK as sitk
 import numpy as np
 import random
 from itertools import product
-
-def compute_bbox3d_intersection_volume(box1: np.ndarray, box2: np.ndarray):
-    """ 
-    Args:
-        box1 (shape = [N, 2, 3])
-        box2 (shape = [M, 2, 3])
-    Return:
-        the area of the intersection between box1 and box2, shape = [N, M]
-    """
-    a1, a2 = box1[:,np.newaxis, 0,:], box1[:,np.newaxis, 1,:] # [N, 1, 3]
-    b1, b2 = box2[np.newaxis,:, 0,:], box2[np.newaxis,:, 1,:] # [1, N, 3]
-    inter_volume = np.clip((np.minimum(a2, b2) - np.maximum(a1, b1)),0, None).prod(axis=2)
-
-    return inter_volume
+from .utils import compute_bbox3d_intersection_volume
 
 class InstanceCrop(object):
-    """Randomly crop the input image (shape [C, D, H, W]
+    """Randomly crop the input image (shape [C, D, H, W])
+
+    Args:
+        crop_size (list[int]): The size of the patch to be cropped.
+        rand_trans (list[int], optional): Random translation. Defaults to None.
+        instance_crop (bool, optional): Flag to enable additional sampling with instance around center. Defaults to True.
+        overlap_size (list[int], optional): The size of overlap of sliding window. Defaults to [16, 32, 32].
+        tp_ratio (float, optional): Sampling rate for a patch containing at least one lesion. Defaults to 0.7.
+        sample_num (int, optional): Patch number per CT. Defaults to 2.
+        blank_side (int, optional): Labels within blank_side pixels near patch border is set to ignored. Defaults to 0.
+        sample_cls (list[int], optional): The class of the sample. Defaults to [0].
+        tp_iou (float, optional): IoU threshold to determine the label of the patches. Defaults to 0.5.
     """
-
-    def __init__(self, crop_size, rand_trans=None, instance_crop=True, overlap_size=[16, 32, 32], 
-                 tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0], tp_iou = 0.5):
+    def __init__(self, crop_size, rand_trans=None, rand_rot=None, instance_crop=True, overlap_size=[16, 32, 32], 
+                 tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0], tp_iou=0.5):
         """This is crop function with spatial augmentation for training Lesion Detection.
-
-        Arguments:
-            crop_size: patch size
-            rand_trans: random translation
-            instance_crop: additional sampling with instance around center
-            overlap_size: the size of overlap  of sliding window
-            tp_ratio: sampling rate for a patch containing at least one leision
-            sample_num: patch number per CT
-            blank_side:  labels within blank_side pixels near patch border is set to ignored.
-            sample_cls: the class of the sample
         """
         self.sample_cls = sample_cls
         self.crop_size = np.array(crop_size, dtype=np.int32)
@@ -52,6 +39,11 @@ class InstanceCrop(object):
             self.rand_trans = None
         else:
             self.rand_trans = np.array(rand_trans)
+
+        if rand_rot == None:
+            self.rand_rot = None
+        else:
+            self.rand_rot = np.array(rand_rot)
 
     def get_crop_centers(self, shape, dim: int):
         crop = self.crop_size[dim]
@@ -110,7 +102,6 @@ class InstanceCrop(object):
         all_crop_bb_max = all_crop_bb_min + crop_size
         all_crop_bboxes = np.stack([all_crop_bb_min, all_crop_bb_max], axis=1) # [M, 2, 3]
         
-        
         # Compute IoU to determine the label of the patches
         inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes) # [M, N]
         all_ious = inter_volumes / nodule_volumes[np.newaxis, :] # [M, N]
@@ -165,113 +156,3 @@ class InstanceCrop(object):
             sample['cls'] = cls
             samples.append(sample)
         return samples
-
-def rotate_vecs_3d(vec, angle, axis):
-    rad = np.deg2rad(angle)
-    rotated_vec = vec.copy()
-    rotated_vec[::, axis[0]] = vec[::, axis[0]] * np.cos(rad) - vec[::, axis[1]] * np.sin(rad)
-    rotated_vec[::, axis[1]] = vec[::, axis[0]] * np.sin(rad) + vec[::, axis[1]] * np.cos(rad)
-    return rotated_vec
-
-def apply_transformation_coord(coord, transform_param_list, rot_center):
-    """
-    apply rotation transformation to an ND image
-    Args:
-        image (nd array): the input nd image
-        transform_param_list (list): a list of roration angle and axes
-        order (int): interpolation order
-    """
-    for angle, axes in transform_param_list:
-        # rot_center = np.random.uniform(low=np.min(coord, axis=0), high=np.max(coord, axis=0), size=3)
-        org = coord - rot_center
-        new = rotate_vecs_3d(org, angle, axes)
-        coord = new + rot_center
-
-    return coord
-
-
-def rand_rot_coord(coord, angle_range_d, angle_range_h, angle_range_w, rot_center, p):
-    transform_param_list = []
-
-    if (angle_range_d[1]-angle_range_d[0] > 0) and (random.random() < p):
-        angle_d = np.random.uniform(angle_range_d[0], angle_range_d[1])
-        transform_param_list.append([angle_d, (-2, -1)])
-    if (angle_range_h[1]-angle_range_h[0] > 0) and (random.random() < p):
-        angle_h = np.random.uniform(angle_range_h[0], angle_range_h[1])
-        transform_param_list.append([angle_h, (-3, -1)])
-    if (angle_range_w[1]-angle_range_w[0] > 0) and (random.random() < p):
-        angle_w = np.random.uniform(angle_range_w[0], angle_range_w[1])
-        transform_param_list.append([angle_w, (-3, -2)])
-
-    if len(transform_param_list) > 0:
-        coord = apply_transformation_coord(coord, transform_param_list, rot_center)
-
-    return coord
-
-
-def convert_to_one_hot(label, class_num):
-    label_prob = []
-    for i in range(class_num):
-        temp_prob = label == i * np.ones_like(label)
-        label_prob.append(temp_prob)
-    label_prob = np.asarray(label_prob, dtype='float32')
-    return label_prob
-
-
-def reorient(itk_img, mark_matrix, spacing=[1., 1., 1.], interp1=sitk.sitkLinear):
-    '''
-    itk_img: image to reorient
-    mark_matric: physical mark point
-    '''
-    spacing = spacing[::-1]
-    origin, x_mark, y_mark, z_mark = np.array(mark_matrix[0]), np.array(mark_matrix[1]), np.array(
-        mark_matrix[2]), np.array(mark_matrix[3])
-
-    # centroid_world = itk_img.TransformContinuousIndexToPhysicalPoint(centroid)
-    filter_resample = sitk.ResampleImageFilter()
-    filter_resample.SetInterpolator(interp1)
-    filter_resample.SetOutputSpacing(spacing)
-
-    # set origin
-    origin_reorient = mark_matrix[0]
-    # set direction
-    # !!! note: column wise
-    x_base = (x_mark - origin) / np.linalg.norm(x_mark - origin)
-    y_base = (y_mark - origin) / np.linalg.norm(y_mark - origin)
-    z_base = (z_mark - origin) / np.linalg.norm(z_mark - origin)
-    direction_reorient = np.stack([x_base, y_base, z_base]).transpose().reshape(-1).tolist()
-
-    # set size
-    x, y, z = np.linalg.norm(x_mark - origin) / spacing[0], np.linalg.norm(y_mark - origin) / spacing[
-        1], np.linalg.norm(z_mark - origin) / spacing[2]
-    size_reorient = (int(np.ceil(x + 0.5)), int(np.ceil(y + 0.5)), int(np.ceil(z + 0.5)))
-
-    filter_resample.SetOutputOrigin(origin_reorient)
-    filter_resample.SetOutputDirection(direction_reorient)
-    filter_resample.SetSize(size_reorient)
-    # filter_resample.SetSpacing([sp]*3)
-
-    filter_resample.SetOutputPixelType(itk_img.GetPixelID())
-    itk_out = filter_resample.Execute(itk_img)
-
-    return itk_out
-
-
-def resample_simg(simg, interp=sitk.sitkBSpline, spacing=[1., 0.7, 0.7]):
-    identity1 = sitk.Transform(3, sitk.sitkIdentity)
-    new_spacing = spacing[::-1]
-
-    sp1 = simg.GetSpacing()
-    sz1 = simg.GetSize()
-    sz2 = (int(round(sz1[0] * sp1[0] / new_spacing[0])), int(round(sz1[1] * sp1[1] / new_spacing[1])),
-           int(round(sz1[2] * sp1[2] / new_spacing[2])))
-
-    new_origin = simg.GetOrigin()
-    new_origin = (new_origin[0] - sp1[0] / 2 + new_spacing[0] / 2, new_origin[1] - sp1[1] / 2 + new_spacing[1] / 2,
-                  new_origin[2] - sp1[2] / 2 + new_spacing[2] / 2)
-    imRefImage = sitk.Image(sz2, simg.GetPixelIDValue())
-    imRefImage.SetSpacing(new_spacing)
-    imRefImage.SetOrigin(new_origin)
-    imRefImage.SetDirection(simg.GetDirection())
-    resampled_image = sitk.Resample(simg, imRefImage, identity1, interp)
-    return resampled_image

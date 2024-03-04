@@ -11,7 +11,6 @@ from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
-from dataload.crop import InstanceCrop
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
@@ -43,7 +42,7 @@ def get_args():
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--batch_size', type=int, default=6, help='input batch size for training (default: 3)')
     parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
-    parser.add_argument('--epochs', type=int, default=350, help='number of epochs to train (default: 250)')
+    parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 250)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
     parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
     # Resume
@@ -55,6 +54,9 @@ def get_args():
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
+    parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp')
+    parser.add_argument('--use_itk_rotate', action='store_true', default=False, help='use itk rotate')
+    parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -229,12 +231,23 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     rand_trans = [int(s * 2/3) for s in overlap_size]
     
     logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
-    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
-                                 rand_rot=[20, 0, 0], sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+    
+    if args.use_itk_rotate:
+        from dataload.crop import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        mmap_mode = None
+        logger.info('Use itk rotate {}'.format(args.rand_rot))
+    else:
+        from dataload.crop_fast import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        mmap_mode = 'c'
+        logger.info('Not use itk rotate')
 
     train_transform = build_train_augmentation(args, crop_size, overlap_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
-                                 transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method)
+                                transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 

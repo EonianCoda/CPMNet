@@ -41,7 +41,7 @@ def get_HU_MIN_MAX(window_level: int, window_width: int):
     hu_max = window_level + window_width // 2
     return hu_min, hu_max
 
-def normalize_raw_image(image: np.ndarray, window_level: int, window_width: int) -> np.ndarray:
+def normalize_raw_image(image: np.ndarray, window_level: int = DEFAULT_WINDOW_LEVEL, window_width: int = DEFAULT_WINDOW_WIDTH) -> np.ndarray:
     hu_min, hu_max = get_HU_MIN_MAX(window_level, window_width)    
     image = np.clip(image, hu_min, hu_max)
     image = image - hu_min
@@ -135,3 +135,17 @@ def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0) -> Dict[st
                     ALL_CLS: all_cls,
                     NODULE_SIZE: nodule_sizes}
     return label
+
+def compute_bbox3d_intersection_volume(box1: np.ndarray, box2: np.ndarray):
+    """ 
+    Args:
+        box1 (shape = [N, 2, 3])
+        box2 (shape = [M, 2, 3])
+    Return:
+        the area of the intersection between box1 and box2, shape = [N, M]
+    """
+    a1, a2 = box1[:,np.newaxis, 0,:], box1[:,np.newaxis, 1,:] # [N, 1, 3]
+    b1, b2 = box2[np.newaxis,:, 0,:], box2[np.newaxis,:, 1,:] # [1, N, 3]
+    inter_volume = np.clip((np.minimum(a2, b2) - np.maximum(a1, b1)),0, None).prod(axis=2)
+
+    return inter_volume

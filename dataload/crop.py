@@ -6,17 +6,28 @@ import random
 from itertools import product
 
 class InstanceCrop(object):
-    """Randomly crop the input image (shape [C, D, H, W]
+    """Randomly crop the input image (shape [C, D, H, W])
+
+    Args:
+        crop_size (list[int]): The size of the patch to be cropped.
+        rand_trans (list[int], optional): The range of random translation. Defaults to None.
+        rand_rot (list[int], optional): The range of random rotation. Defaults to None.
+        instance_crop (bool, optional): Whether to perform additional sampling with instance around the center. Defaults to True.
+        overlap_size (list[int], optional): The size of overlap of sliding window. Defaults to [16, 32, 32].
+        tp_ratio (float, optional): The sampling rate for a patch containing at least one lesion. Defaults to 0.7.
+        sample_num (int, optional): The number of patches per CT. Defaults to 2.
+        blank_side (int, optional): The number of pixels near the patch border where labels are set to ignored. Defaults to 0.
+        sample_cls (list[int], optional): The list of classes to sample patches from. Defaults to [0].
     """
 
-    def __init__(self, crop_size, rand_trans=None, rand_rot=None, rand_space=None, instance_crop=True, overlap_size=[16, 32, 32], tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0]):
+    def __init__(self, crop_size, rand_trans=None, rand_rot=None, instance_crop=True, overlap_size=[16, 32, 32], 
+                 tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0]):
         """This is crop function with spatial augmentation for training Lesion Detection.
 
         Arguments:
             crop_size: patch size
             rand_trans: random translation
             rand_rot: random rotation
-            rand_space: random spacing
             instance_crop: additional sampling with instance around center
             spacing: output patch spacing, [z,y,x]
             base_spacing: spacing of the numpy image.
@@ -45,11 +56,6 @@ class InstanceCrop(object):
             self.rand_rot = None
         else:
             self.rand_rot = np.array(rand_rot)
-
-        if rand_space == None:
-            self.rand_space = None
-        else:
-            self.rand_space = np.array(rand_space)
 
     def get_crop_centers(self, shape, dim: int):
         crop = self.crop_size[dim]
@@ -114,7 +120,7 @@ class InstanceCrop(object):
             matrixs.append(matrix)
             # According to the matrixs, we can decide if the crop is foreground or background
             bb_min = np.maximum(matrix[0] - 10, 0)
-            bb_max = bb_min + crop_size + 10
+            bb_max = bb_min + crop_size + 20
             if len(all_loc) == 0:
                 tp_num = 0
             else:
@@ -203,7 +209,6 @@ def apply_transformation_coord(coord, transform_param_list, rot_center):
 
     return coord
 
-
 def rand_rot_coord(coord, angle_range_d, angle_range_h, angle_range_w, rot_center, p):
     transform_param_list = []
 
@@ -221,16 +226,6 @@ def rand_rot_coord(coord, angle_range_d, angle_range_h, angle_range_w, rot_cente
         coord = apply_transformation_coord(coord, transform_param_list, rot_center)
 
     return coord
-
-
-def convert_to_one_hot(label, class_num):
-    label_prob = []
-    for i in range(class_num):
-        temp_prob = label == i * np.ones_like(label)
-        label_prob.append(temp_prob)
-    label_prob = np.asarray(label_prob, dtype='float32')
-    return label_prob
-
 
 def reorient(itk_img, mark_matrix, spacing=[1., 1., 1.], interp1=sitk.sitkLinear):
     '''
@@ -269,23 +264,3 @@ def reorient(itk_img, mark_matrix, spacing=[1., 1., 1.], interp1=sitk.sitkLinear
     itk_out = filter_resample.Execute(itk_img)
 
     return itk_out
-
-
-def resample_simg(simg, interp=sitk.sitkBSpline, spacing=[1., 0.7, 0.7]):
-    identity1 = sitk.Transform(3, sitk.sitkIdentity)
-    new_spacing = spacing[::-1]
-
-    sp1 = simg.GetSpacing()
-    sz1 = simg.GetSize()
-    sz2 = (int(round(sz1[0] * sp1[0] / new_spacing[0])), int(round(sz1[1] * sp1[1] / new_spacing[1])),
-           int(round(sz1[2] * sp1[2] / new_spacing[2])))
-
-    new_origin = simg.GetOrigin()
-    new_origin = (new_origin[0] - sp1[0] / 2 + new_spacing[0] / 2, new_origin[1] - sp1[1] / 2 + new_spacing[1] / 2,
-                  new_origin[2] - sp1[2] / 2 + new_spacing[2] / 2)
-    imRefImage = sitk.Image(sz2, simg.GetPixelIDValue())
-    imRefImage.SetSpacing(new_spacing)
-    imRefImage.SetOrigin(new_origin)
-    imRefImage.SetDirection(simg.GetDirection())
-    resampled_image = sitk.Resample(simg, imRefImage, identity1, interp)
-    return resampled_image

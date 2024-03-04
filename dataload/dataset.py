@@ -32,7 +32,7 @@ class TrainDataset(Dataset):
         __getitem__(idx): Returns the item at the given index.
 
     """
-    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False, min_d=0, norm_method='scale'):
+    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False, min_d=0, norm_method='scale', mmap_mode=None):
         self.labels = []
         self.dicom_paths = []
         self.series_list_path = series_list_path
@@ -64,6 +64,7 @@ class TrainDataset(Dataset):
 
         self.transform_post = transform_post
         self.crop_fn = crop_fn
+        self.mmap_mode = mmap_mode
 
     def __len__(self):
         return len(self.labels)
@@ -73,7 +74,7 @@ class TrainDataset(Dataset):
         Return:
             A 3D numpy array with dimension order [D, H, W] (z, y, x)
         """
-        image = np.load(dicom_path)
+        image = np.load(dicom_path, mmap_mode=self.mmap_mode)
         image = np.transpose(image, (2, 0, 1))
         return image
     
