@@ -18,6 +18,8 @@ def save_states(save_path: str, model: nn.Module, optimizer: torch.optim.Optimiz
         save_dict['optimizer_state_dict'] = optimizer.state_dict()
     if scheduler is not None:
         save_dict['scheduler_state_dict'] = scheduler.state_dict()
+        if getattr(scheduler, 'after_scheduler', None) is not None:
+            save_dict['after_scheduler_state_dict'] = scheduler.after_scheduler.state_dict()
     if ema is not None:
         save_dict['ema_state_dict'] = ema.state_dict()
     
@@ -39,7 +41,8 @@ def load_states(load_path: str, device: torch.device, model: nn.Module, optimize
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    
+        if getattr(scheduler, 'after_scheduler', None) is not None:
+            scheduler.after_scheduler.load_state_dict(checkpoint['after_scheduler_state_dict'])
     if ema is not None:
         ema.load_state_dict(checkpoint['ema_state_dict'])
         
