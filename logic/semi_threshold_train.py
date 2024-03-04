@@ -29,31 +29,30 @@ def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], dev
     return loss, cls_loss, shape_loss, offset_loss, iou_loss
 
 def generate_pseudo_labels(args,
-                        model: nn.Module,
-                        dataloader: DataLoader,
-                        device: torch.device,
-                        detection_postprocess,
-                        nms_keep_top_k: int = 40) -> None:
+                            model: nn.Module,
+                            dataloader: DataLoader,
+                            device: torch.device,
+                            detection_postprocess,
+                            batch_size: int = 16,
+                            nms_keep_top_k: int = 40) -> None:
     logger.info("Generating pseudo labels")
     model.eval()
     split_comber = dataloader.dataset.splitcomb
-    infer_batch_size = args.unlabeled_batch_size * args.num_samples
     
-    for i, sample in enumerate(dataloader):
+    for sample in dataloader:
         # Generate pseudo labels
-        with torch.no_grad():
-            data = sample['split_images'].to(device, non_blocking=True)
+        data = sample['split_images'].to(device, non_blocking=True)
         nzhws = sample['nzhws']
         series_names = sample['series_names']
         series_folders = sample['series_folders']
         num_splits = sample['num_splits']
         
         outputlist = []
-        for i in range(int(math.ceil(data.size(0) / infer_batch_size))):
-            end = (i + 1) * infer_batch_size
+        for i in range(int(math.ceil(data.size(0) / batch_size))):
+            end = (i + 1) * batch_size
             if end > data.size(0):
                 end = data.size(0)
-            input = data[i * infer_batch_size:end]
+            input = data[i * batch_size:end]
             with torch.cuda.amp.autocast():
                 with torch.no_grad():
                     output = model(input)
@@ -88,9 +87,10 @@ def generate_pseudo_labels(args,
             save_path = os.path.join(series_folder, 'pseudo_label', f"{series_name}.json")
 
             all_loc = scan_outputs[i][:, 2:5]
+            all_rad = scan_outputs[i][:, 5:]
+            
             all_prob = scan_outputs[i][:, 1]
             all_prob = all_prob.reshape(-1, 1)
-            all_rad = scan_outputs[i][:, 5:]
             
             os.makedirs(os.path.dirname(save_path), exist_ok=True)
             with open(save_path, 'w') as f:
