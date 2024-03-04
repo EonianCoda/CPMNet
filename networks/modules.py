@@ -18,6 +18,14 @@ class SELayer(nn.Module):
             nn.Linear(channel // reduction, channel),
             nn.Sigmoid()
         )
+        self.init_weights()
+        
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, nonlinearity='relu', mode='fan_in')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
         b, c, _, _, _ = x.size()
