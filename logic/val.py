@@ -81,6 +81,7 @@ def val(args,
     split_comber = val_loader.dataset.splitcomb
     all_preds = []
     if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
+        logger.info('Using channels_last memory format to validation')
         memory_format = torch.channels_last_3d
     else:
         memory_format = None

@@ -161,7 +161,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
     start_epoch = 0
     
     if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
-        model = model.to(device, memory_format=args.memory_format)
+        model = model.to(device, memory_format=torch.channels_last_3d)
     else:
         model = model.to(device, memory_format=None)
         

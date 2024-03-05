@@ -19,12 +19,9 @@ from logic.utils import load_states
 
 from utils.logs import setup_logging
 from utils.utils import init_seed, write_yaml
+from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING
 
-SAVE_ROOT = './save'
-DEFAULT_OVERLAP_RATIO = 0.25
-IMAGE_SPACING = [1.0, 0.8, 0.8]
 logger = logging.getLogger(__name__)
-
 def get_args():
     parser = argparse.ArgumentParser()
     # training settings
@@ -38,6 +35,7 @@ def get_args():
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
+    parser.add_argument('--memory_format', type=str, default='channels_first')
     # hyper-parameters
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
