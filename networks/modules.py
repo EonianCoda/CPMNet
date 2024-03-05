@@ -61,7 +61,7 @@ def act_layer(act='ReLU'):
     elif act == 'RRelu':
         return nn.RReLU(inplace=True)
     else:
-        return Identity()    
+        return Identity()
 
 def norm_layer3d(norm_type, num_features):
     if norm_type == 'batchnorm':

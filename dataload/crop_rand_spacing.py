@@ -167,7 +167,8 @@ class InstanceCrop(object):
             all_loc_crop = np.array(all_loc_crop)
             
             image_crop = sitk.GetArrayFromImage(image_itk_crop)
-            image_crop = image_crop[bb_min[0]:bb_max[0], bb_min[1]:bb_max[1], bb_min[2]:bb_max[2]]            
+            if self.rand_spacing is not None:
+                image_crop = image_crop[bb_min[0]:bb_max[0], bb_min[1]:bb_max[1], bb_min[2]:bb_max[2]]
             in_idx = []
             for j in range(all_loc_crop.shape[0]):
                 if (all_loc_crop[j] <= np.array(image_crop.shape)).all() and (all_loc_crop[j] >= 0).all():

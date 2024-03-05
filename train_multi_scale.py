@@ -58,6 +58,8 @@ def get_args():
     parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp')
     parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
+    parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
+    parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -236,12 +238,17 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
     
+    if args.use_rand_spacing:
+        rand_spacing = args.rand_spacing
+    else:
+        rand_spacing = None
+        
     from dataload.crop_multi_scale import InstanceCrop
-    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot, 
+                                rand_spacing=rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
     mmap_mode = None
-    logger.info('Use itk rotate {}'.format(args.rand_rot))
-
+    logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
+        
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
                                 transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
