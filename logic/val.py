@@ -80,9 +80,14 @@ def val(args,
     model.eval()
     split_comber = val_loader.dataset.splitcomb
     all_preds = []
+    if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
+        memory_format = torch.channels_last_3d
+    else:
+        memory_format = None
+        
     progress_bar = get_progress_bar('Validation', len(val_loader))
     for sample in val_loader:
-        data = sample['split_images'].to(device, non_blocking=True)
+        data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format)
         nzhws = sample['nzhws']
         num_splits = sample['num_splits']
         series_names = sample['series_names']

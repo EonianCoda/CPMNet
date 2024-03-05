@@ -159,7 +159,12 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                                                  nms_topk = args.det_nms_topk,
                                                  crop_size = args.crop_size)
     start_epoch = 0
-    model.to(device)
+    
+    if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
+        model = model.to(device, memory_format=args.memory_format)
+    else:
+        model = model.to(device, memory_format=None)
+        
     # build optimizer and scheduler
     params = add_weight_decay(model, args.weight_decay)
     optimizer = AdamW(params=params, lr=args.lr, weight_decay=args.weight_decay)
