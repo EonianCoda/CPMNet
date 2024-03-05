@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 ### logic ###
 from logic.train import train
 from logic.val import val
-from logic.utils import write_metrics, save_states, load_states
+from logic.utils import write_metrics, save_states, load_states, get_memory_format
 ### optimzer ###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
@@ -54,10 +54,16 @@ def get_args():
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
-    parser.add_argument('--memory_format', type=str, default='channels_first')
-    parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp')
+    parser.add_argument('--memory_format', type=str, default='channels_first') # for speed up
+    parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp(Only use for crop_fast InstanceCrop)')
+    # Data Augmentation
+    parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
+    parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
+    parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
+    parser.add_argument('--use_rand_space', action='store_true', default=False, help='use random spacing')
+    parser.add_argument('--rand_space', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -80,10 +86,6 @@ def get_args():
     parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
-    # Train Data Augmentation
-    parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
-    parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
-    parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -105,6 +107,7 @@ def get_args():
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     # other
+    parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'froc_mean_recall'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
@@ -126,9 +129,6 @@ def add_weight_decay(net, weight_decay):
             decay.append(param)
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
-
-def get_overlap_size(crop_size, overlap_ratio: float) -> Tuple[int, int, int]:
-    return [int(crop_size[i] * overlap_ratio) for i in range(len(crop_size))]
 
 def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
     # build model
@@ -159,11 +159,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                                                  nms_topk = args.det_nms_topk,
                                                  crop_size = args.crop_size)
     start_epoch = 0
-    
-    if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
-        model = model.to(device, memory_format=torch.channels_last_3d)
-    else:
-        model = model.to(device, memory_format=None)
+    model = model.to(device=device, memory_format=get_memory_format(getattr(args, 'memory_format', 'channels_first')))
         
     # build optimizer and scheduler
     params = add_weight_decay(model, args.weight_decay)
@@ -206,7 +202,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
         
     return start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess
 
-def build_train_augmentation(args, crop_size: Tuple[int, int, int], overlap_size: Tuple[int, int, int], pad_value: int, blank_side: int):
+def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
         rot_yz = True
         rot_xz = True
@@ -232,26 +228,32 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], overlap_size
 
 def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
-    overlap_size = get_overlap_size(crop_size, args.overlap_ratio)
-    pad_value = get_image_padding_value(args.data_norm_method)
+    overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     rand_trans = [int(s * 2/3) for s in overlap_size]
+    pad_value = get_image_padding_value(args.data_norm_method)
     
-    logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
+    logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
     if args.not_use_itk_rotate:
         from dataload.crop_fast import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = 'c'
         logger.info('Not use itk rotate')
-    else:
+    elif not args.use_rand_space:
         from dataload.crop import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
         mmap_mode = None
         logger.info('Use itk rotate {}'.format(args.rand_rot))
+    elif args.use_rand_space:
+        from dataload.crop_rand_spacing import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                     rand_spacing=args.rand_space, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        mmap_mode = None
+        logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_space))
 
-    train_transform = build_train_augmentation(args, crop_size, overlap_size, pad_value, blank_side)
+    train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
                                 transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
@@ -259,7 +261,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                               batch_size=args.batch_size, 
                               shuffle=True,
                               collate_fn=train_collate_fn,
-                              num_workers=min(args.batch_size, 4),
+                              num_workers=min(args.batch_size, args.max_workers),
                               pin_memory=True,
                               drop_last=True, 
                               persistent_workers=True)
@@ -268,17 +270,16 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 
 def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
-    overlap_size = get_overlap_size(crop_size, args.overlap_ratio)
-    num_workers = min(args.val_batch_size, 4)
-    
+    overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method)
+    
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
 
     test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
+    test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
     logger.info("There are {} test samples and {} batches in '{}'".format(len(test_loader.dataset), len(test_loader), args.test_set))

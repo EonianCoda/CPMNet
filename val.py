@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 import transform as transform
 
 from logic.val import val
-from logic.utils import load_states
+from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging
 from utils.utils import init_seed, write_yaml
@@ -45,58 +45,61 @@ def get_args():
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     # network
-    parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
-    parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
-    parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
-    parser.add_argument('--first_stride', nargs='+', type=int, default=[2, 2, 2], help='stride of the first layer')
-    parser.add_argument('--n_blocks', nargs='+', type=int, default=[2, 3, 3, 3], help='number of blocks in each layer')
-    parser.add_argument('--n_filters', nargs='+', type=int, default=[64, 96, 128, 160], help='number of filters in each layer')
-    parser.add_argument('--stem_filters', type=int, default=32, help='number of filters in stem layer')
-    parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
-    parser.add_argument('--no_se', action='store_true', default=False, help='not use se')
-    parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
-    parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
-    parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
+    # parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
+    # parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
+    # parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
+    # parser.add_argument('--first_stride', nargs='+', type=int, default=[2, 2, 2], help='stride of the first layer')
+    # parser.add_argument('--n_blocks', nargs='+', type=int, default=[2, 3, 3, 3], help='number of blocks in each layer')
+    # parser.add_argument('--n_filters', nargs='+', type=int, default=[64, 96, 128, 160], help='number of filters in each layer')
+    # parser.add_argument('--stem_filters', type=int, default=32, help='number of filters in stem layer')
+    # parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
+    # parser.add_argument('--no_se', action='store_true', default=False, help='not use se')
+    # parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
+    # parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
+    # parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     # other
+    parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     args = parser.parse_args()
     return args
 
 def prepare_validation(args, device):
     # build model
-    model = Resnet18(norm_type = args.norm_type,
-                     head_norm = args.head_norm, 
-                     act_type = args.act_type, 
-                     first_stride = args.first_stride,
-                     se = not args.no_se,
-                     aspp = args.aspp,
-                     n_blocks=args.n_blocks,
-                     n_filters=args.n_filters,
-                     stem_filters=args.stem_filters,
-                     dropout=args.dropout,
-                     dw_type = args.dw_type,
-                     up_type = args.up_type,
-                     device = device)
+    # model = Resnet18(norm_type = args.norm_type,
+    #                  head_norm = args.head_norm, 
+    #                  act_type = args.act_type, 
+    #                  first_stride = args.first_stride,
+    #                  se = not args.no_se,
+    #                  aspp = args.aspp,
+    #                  n_blocks=args.n_blocks,
+    #                  n_filters=args.n_filters,
+    #                  stem_filters=args.stem_filters,
+    #                  dropout=args.dropout,
+    #                  dw_type = args.dw_type,
+    #                  up_type = args.up_type,
+    #                  device = device)
     detection_postprocess = DetectionPostprocess(topk=args.det_topk, 
                                                  threshold=args.det_threshold, 
                                                  nms_threshold=args.det_nms_threshold,
                                                  nms_topk=args.det_nms_topk,
                                                  crop_size=args.crop_size)
-    
     logger.info('Load model from "{}"'.format(args.model_path))
-    model.to(device)
-    load_states(args.model_path, device, model)
-    
+    model = load_model(args.model_path)
+    memory_format = get_memory_format(getattr(args, 'memory_format', None))
+    model = model.to(device = device, memory_format=memory_format)
+    # load_states(args.model_path, device, model)
     return model, detection_postprocess
 
 def val_data_prepare(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * args.overlap_ratio) for i in range(len(crop_size))]
+    pad_value = get_image_padding_value(args.data_norm_method)
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
-    pad_value = get_image_padding_value(args.data_norm_method)
+    
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
-    test_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    val_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.batch_size, collate_fn=infer_collate_fn, pin_memory=True)
+    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_collate_fn, pin_memory=True)
+    
     logger.info("There are {} samples in the val set".format(len(val_loader.dataset)))
     return val_loader
 
@@ -105,8 +108,8 @@ if __name__ == '__main__':
     exp_folder = os.path.dirname(args.model_path)
     exp_folder = os.path.join(exp_folder, 'val_temp')
     setup_logging(log_file=os.path.join(exp_folder, 'val.log'))
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
     model, detection_postprocess = prepare_validation(args, device)
     init_seed(args.seed)
     

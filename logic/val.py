@@ -14,6 +14,8 @@ from utils.generate_annot_csv_from_series_list import generate_annot_csv
 from evaluationScript.eval import nodule_evaluation
 
 from utils.utils import get_progress_bar
+from .utils import get_memory_format
+
 logger = logging.getLogger(__name__)
 
 def convert_to_standard_csv(csv_path: str, annot_save_path: str, series_uids_save_path: str, spacing):
@@ -80,11 +82,9 @@ def val(args,
     model.eval()
     split_comber = val_loader.dataset.splitcomb
     all_preds = []
-    if getattr(args, 'memory_format', None) is not None and args.memory_format == 'channels_last':
-        logger.info('Using channels_last memory format to validation')
-        memory_format = torch.channels_last_3d
-    else:
-        memory_format = None
+    memory_format = get_memory_format(getattr(args, 'memory_format', None))
+    if memory_format == torch.channels_last_3d:
+        logger.info('Use memory format: channels_last_3d to validate')
         
     progress_bar = get_progress_bar('Validation', len(val_loader))
     for sample in val_loader:

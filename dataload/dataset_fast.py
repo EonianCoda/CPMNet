@@ -86,19 +86,18 @@ class TrainDataset(Dataset):
         image_spacing = self.image_spacing.copy() # z, y, x
         image = self.load_image(dicom_path) # z, y, x
         
-        data = {}
-        data['image'] = image
-        data['all_loc'] = label['all_loc'] # z, y, x
-        data['all_rad'] = label['all_rad'] # d, h, w
-        data['all_cls'] = label['all_cls']
-        data['file_name'] = series_name
-        samples = self.crop_fn(data, image_spacing)
+        samples = {}
+        samples['image'] = image
+        samples['all_loc'] = label['all_loc'] # z, y, x
+        samples['all_rad'] = label['all_rad'] # d, h, w
+        samples['all_cls'] = label['all_cls']
+        samples['file_name'] = series_name
+        samples = self.crop_fn(samples, image_spacing)
         random_samples = []
 
         for i in range(len(samples)):
             sample = samples[i]
             sample['image'] = normalize_raw_image(sample['image'], DEFAULT_WINDOW_LEVEL, DEFAULT_WINDOW_WIDTH)
-            sample['spacing'] = image_spacing
             if self.transform_post:
                 sample['ctr_transform'] = []
                 sample = self.transform_post(sample)

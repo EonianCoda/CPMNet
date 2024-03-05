@@ -20,7 +20,7 @@ class InstanceCrop(object):
         sample_cls (list[int], optional): The list of classes to sample patches from. Defaults to [0].
     """
 
-    def __init__(self, crop_size, overlap_ratio: float = 0.25, rand_trans=None, rand_rot=None, instance_crop=True, 
+    def __init__(self, crop_size, overlap_ratio: float = 0.25, rand_trans=None, rand_rot=None, rand_spacing=None, instance_crop=True, 
                  tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0]):
         """This is crop function with spatial augmentation for training Lesion Detection.
 
@@ -35,6 +35,7 @@ class InstanceCrop(object):
             tp_ratio: sampling rate for a patch containing at least one leision
             sample_num: patch number per CT
             blank_side:  labels within blank_side pixels near patch border is set to ignored.
+
         """
         self.sample_cls = sample_cls
         self.crop_size = np.array(crop_size, dtype=np.int32)
@@ -56,6 +57,11 @@ class InstanceCrop(object):
             self.rand_rot = None
         else:
             self.rand_rot = np.array(rand_rot)
+
+        if rand_spacing == None:
+            self.rand_spacing = None
+        else:
+            self.rand_spacing = np.array(rand_spacing)
 
     def get_crop_centers(self, shape, dim: int):
         crop = self.crop_size[dim]
@@ -151,6 +157,9 @@ class InstanceCrop(object):
             matrix = matrixs[sample_i]
             matrix = matrix[:, ::-1]  # in itk axis
             
+            if (self.rand_space is not None) and (random.random() < 0.5):
+                space *= np.random.uniform(self.rand_space[0], self.rand_space[1], size=3)
+            
             image_itk_crop = reorient(image_itk, matrix, spacing=list(space), interp1=sitk.sitkLinear)
             all_loc_crop = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in
                             all_loc]
@@ -176,14 +185,16 @@ class InstanceCrop(object):
             image_crop = sitk.GetArrayFromImage(image_itk_crop)
             CT_crop = np.expand_dims(image_crop, axis=0)
             shape = np.array(CT_crop.shape[1:])
+            
+            space = image_spacing * space
             if len(rad) > 0:
-                rad = rad / image_spacing  # convert pixel coord
+                rad = rad / space  # convert pixel coord
             sample = dict()
             sample['image'] = CT_crop
             sample['ctr'] = ctr
             sample['rad'] = rad
             sample['cls'] = cls
-            sample['spacing'] = image_spacing
+            sample['spacing'] = space
             samples.append(sample)
         return samples
 

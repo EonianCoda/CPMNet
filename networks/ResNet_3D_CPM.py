@@ -637,7 +637,7 @@ class DetectionLoss(nn.Module):
         return classification_losses, reg_losses, offset_losses, iou_losses
 
 class DetectionPostprocess(nn.Module):
-    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[64, 96, 96]):
+    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96]):
         super(DetectionPostprocess, self).__init__()
         self.topk = topk
         self.threshold = threshold

@@ -20,13 +20,14 @@ class InstanceCrop(object):
         sample_cls (list[int], optional): The class of the sample. Defaults to [0].
         tp_iou (float, optional): IoU threshold to determine the label of the patches. Defaults to 0.5.
     """
-    def __init__(self, crop_size, rand_trans=None, rand_rot=None, instance_crop=True, overlap_size=[16, 32, 32], 
+    def __init__(self, crop_size, overlap_ratio: float = 0.25, rand_trans=None, rand_rot=None, instance_crop=True, 
                  tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0], tp_iou=0.5):
         """This is crop function with spatial augmentation for training Lesion Detection.
         """
         self.sample_cls = sample_cls
         self.crop_size = np.array(crop_size, dtype=np.int32)
-        self.overlap_size = np.array(overlap_size, dtype=np.int32)
+        self.overlap_ratio = overlap_ratio
+        self.overlap_size = (self.crop_size * self.overlap_ratio).astype(np.int32)
         self.stride_size = self.crop_size - self.overlap_size
         
         self.tp_ratio = tp_ratio
@@ -154,5 +155,6 @@ class InstanceCrop(object):
             sample['ctr'] = ctr
             sample['rad'] = rad
             sample['cls'] = cls
+            sample['spacing'] = image_spacing
             samples.append(sample)
         return samples

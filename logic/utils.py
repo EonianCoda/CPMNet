@@ -66,3 +66,9 @@ def load_model(load_path: str):
     else:
         model.load_state_dict(checkpoint['model_state_dict'])
     return model
+
+def get_memory_format(memory_format: str):
+    if memory_format == 'channels_last':
+        return torch.channels_last_3d
+    else:
+        return None
