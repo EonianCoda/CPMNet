@@ -54,6 +54,7 @@ def get_args():
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
+    parser.add_argument('--memory_format', type=str, default='channels_first')
     parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp')
     parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
