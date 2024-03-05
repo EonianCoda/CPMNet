@@ -55,7 +55,7 @@ def get_args():
     parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp')
-    parser.add_argument('--use_itk_rotate', action='store_true', default=False, help='use itk rotate')
+    parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
@@ -104,7 +104,7 @@ def get_args():
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     # other
-    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score'], help='metric for validation')
+    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'froc_mean_recall'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, help='how many batches to wait before logging training status')
@@ -232,18 +232,18 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
     
-    if args.use_itk_rotate:
-        from dataload.crop import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        mmap_mode = None
-        logger.info('Use itk rotate {}'.format(args.rand_rot))
-    else:
+    if args.not_use_itk_rotate:
         from dataload.crop_fast import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = 'c'
         logger.info('Not use itk rotate')
+    else:
+        from dataload.crop import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        mmap_mode = None
+        logger.info('Use itk rotate {}'.format(args.rand_rot))
 
     train_transform = build_train_augmentation(args, crop_size, overlap_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
