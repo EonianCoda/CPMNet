@@ -62,8 +62,8 @@ def get_args():
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
-    parser.add_argument('--use_rand_space', action='store_true', default=False, help='use random spacing')
-    parser.add_argument('--rand_space', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
+    parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
+    parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -240,18 +240,18 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = 'c'
         logger.info('Not use itk rotate')
-    elif not args.use_rand_space:
+    elif args.use_rand_spacing:
+        from dataload.crop_rand_spacing import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                     rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        mmap_mode = None
+        logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
+    else:
         from dataload.crop import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
         mmap_mode = None
         logger.info('Use itk rotate {}'.format(args.rand_rot))
-    elif args.use_rand_space:
-        from dataload.crop_rand_spacing import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                     rand_spacing=args.rand_space, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-        mmap_mode = None
-        logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_space))
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 

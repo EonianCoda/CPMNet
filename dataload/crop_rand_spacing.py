@@ -151,44 +151,50 @@ class InstanceCrop(object):
         sample_indices = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=p, replace=False)
         
         # Crop patches
+        bb_min = np.array([0, 0, 0], dtype=np.int32)
+        bb_max = (bb_min + crop_size).astype(np.int32)
         samples = []
         for sample_i in sample_indices:
             space = np.array([1.0, 1.0, 1.0], dtype=np.float64)
             matrix = matrixs[sample_i]
             matrix = matrix[:, ::-1]  # in itk axis
             
-            if (self.rand_space is not None) and (random.random() < 0.5):
-                space *= np.random.uniform(self.rand_space[0], self.rand_space[1], size=3)
+            if (self.rand_spacing is not None) and (random.random() < 0.5):
+                space *= np.random.uniform(self.rand_spacing[0], self.rand_spacing[1], size=3)
             
             image_itk_crop = reorient(image_itk, matrix, spacing=list(space), interp1=sitk.sitkLinear)
-            all_loc_crop = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in
-                            all_loc]
+            all_loc_crop = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in all_loc]
             all_loc_crop = np.array(all_loc_crop)
+            
+            image_crop = sitk.GetArrayFromImage(image_itk_crop)
+            image_crop = image_crop[bb_min[0]:bb_max[0], bb_min[1]:bb_max[1], bb_min[2]:bb_max[2]]            
             in_idx = []
             for j in range(all_loc_crop.shape[0]):
-                if (all_loc_crop[j] <= np.array(image_itk_crop.GetSize()[::-1])).all() and (
-                        all_loc_crop[j] >= np.zeros([3])).all():
+                if (all_loc_crop[j] <= np.array(image_crop.shape)).all() and (all_loc_crop[j] >= 0).all():
                     in_idx.append(True)
                 else:
                     in_idx.append(False)
             in_idx = np.array(in_idx)
 
+            space = image_spacing * space
             if in_idx.size > 0:
                 ctr = all_loc_crop[in_idx]
                 rad = all_rad[in_idx]
+                rad = rad / space  # convert pixel coord
+                
+                # Compute the new bounding box
+                crop_bb_min = np.maximum(ctr - rad / 2, 0)
+                crop_bb_max = np.minimum(ctr + rad / 2, np.array(image_crop.shape))
+                ctr = (crop_bb_min + crop_bb_max) / 2
+                rad = crop_bb_max - crop_bb_min
+                
                 cls = all_cls[in_idx]
             else:
                 ctr = np.array([]).reshape(-1, 3)
                 rad = np.array([])
                 cls = np.array([])
 
-            image_crop = sitk.GetArrayFromImage(image_itk_crop)
             CT_crop = np.expand_dims(image_crop, axis=0)
-            shape = np.array(CT_crop.shape[1:])
-            
-            space = image_spacing * space
-            if len(rad) > 0:
-                rad = rad / space  # convert pixel coord
             sample = dict()
             sample['image'] = CT_crop
             sample['ctr'] = ctr
