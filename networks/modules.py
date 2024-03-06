@@ -53,7 +53,7 @@ def act_layer(act='ReLU'):
     if act == 'ReLU':
         return nn.ReLU(inplace=True)
     elif act == 'LeakyReLU':
-        return nn.LeakyReLU(inplace=True)
+        return nn.LeakyReLU(inplace=True, negative_slope=0.1)
     elif act == 'ELU':
         return nn.ELU(inplace=True)
     elif act == 'PReLU':
