@@ -8,14 +8,15 @@ import os
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Type
 
 import torch
+import numpy as np
 from torch import nn
 import transform as transform
 import torchvision
 
 from config import IMAGE_SPACING, DEFAULT_OVERLAP_RATIO
 from logic.utils import load_model, save_states
-from dataload.crop_fast import InstanceCrop
-from dataload.dataset_fast import TrainDataset
+from dataload.crop import InstanceCrop
+from dataload.dataset import TrainDataset
 from torch.utils.data import DataLoader
 from dataload.utils import get_image_padding_value, load_series_list
 from dataload.collate import train_collate_fn
@@ -101,7 +102,6 @@ def update_bn_stats(
                them unchanged, you need to either pass in a submodule without
                those layers, or backup the states.
         data_loader (iterator): an iterator. Produce data as inputs to the model.
-        num_iters (int): number of iterations to compute the stats.
         progress: None or "tqdm". If set, use tqdm to report the progress.
     """
     model.train()
@@ -186,9 +186,6 @@ def get_bn_modules(model: nn.Module) -> List[nn.Module]:
     bn_layers = [m for m in model.modules() if m.training and isinstance(m, BN_MODULE_TYPES)]
     return bn_layers
 
-def get_overlap_size(crop_size, overlap_ratio=DEFAULT_OVERLAP_RATIO):
-    return [int(crop_size[i] * overlap_ratio) for i in range(len(crop_size))]
-
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
         rot_yz = True
@@ -217,6 +214,7 @@ def get_args():
     parser = argparse.ArgumentParser(description="PyTorch Training")
     parser.add_argument('--train_set', type=str, default='./data/pretrained_train.txt', help='path to the training set list')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size for training')
+    parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio for cropping')
     
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='ratio of positive samples in a crop')
     parser.add_argument('--tp_iou', type=float, default=0.7, help='IoU threshold for positive samples')
@@ -226,10 +224,11 @@ def get_args():
     parser.add_argument('--min_d', type=int, default=1, help='minimum distance between two instances')
     parser.add_argument('--data_norm_method', type=str, default='none', help='data normalization method')
     parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation method')
+    parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
     parser.add_argument('--use_crop', action='store_true', help='use random crop augmentation')
     
+    parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--model_path', type=str)
-    parser.add_argument('--num_iters', type=int, default=200, help='number of iterations for updating BN stats')
     return parser.parse_args()
 
 if __name__ == "__main__":
@@ -237,21 +236,20 @@ if __name__ == "__main__":
     
     args = get_args()
     crop_size = args.crop_size
-    overlap_size = get_overlap_size(crop_size)
+    overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method)
     rand_trans = [int(s * 2/3) for s in overlap_size]
     
     logger.info('Crop size: {}, overlap size: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, pad_value, args.tp_ratio))
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side = 0)
     
-    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_size=overlap_size, tp_ratio=args.tp_ratio, rand_trans=rand_trans,
-                                 sample_num=args.num_samples, instance_crop=True, tp_iou=args.tp_iou)
+    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot, sample_num=args.num_samples, instance_crop=True)
+    
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
                                  transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method)
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=train_collate_fn, 
-                              num_workers=min(args.batch_size, 4), pin_memory=True)
-    
+                              num_workers=min(args.batch_size, args.max_workers), pin_memory=True)
     
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model = load_model(args.model_path)

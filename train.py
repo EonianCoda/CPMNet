@@ -61,7 +61,7 @@ def get_args():
     parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
-    parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
+    parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
     parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
     parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
     # Learning rate
