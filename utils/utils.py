@@ -28,10 +28,11 @@ def get_local_time_str_in_taiwan() -> str:
     timestamp = "[%d-%02d-%02d-%02d%02d]" % (cur_time.year, cur_time.month, cur_time.day, cur_time.hour, cur_time.minute)
     return timestamp
 
-def get_progress_bar(identifer: str, total_steps: int) -> tqdm:
+def get_progress_bar(identifer: str, total_steps: int, initial_step: int = 0) -> tqdm:
     """Get the progress bar
     """
-    progress_bar = tqdm(total = total_steps, 
+    progress_bar = tqdm(initial = initial_step,
+                        total = total_steps, 
                         desc = "{:10s}".format(identifer), 
                         bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')
     return progress_bar

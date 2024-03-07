@@ -4,6 +4,7 @@ import argparse
 import torch
 import os
 import logging
+import pickle
 import numpy as np
 from typing import Tuple
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
@@ -19,9 +20,11 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.train import train
+from logic.semi_threshold_train import train
 from logic.val import val
+from logic.pseudo_label import gen_pseu_labels
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
+from logic.early_stopping_save import EarlyStoppingSave
 ### optimzer ###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
@@ -29,7 +32,6 @@ from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
-from logic.early_stopping_save import EarlyStoppingSave
 from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING
 
 logger = logging.getLogger(__name__)
@@ -234,7 +236,7 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
         
-    transform_list_train.append(transform.CoordToAnnot(blank_side=blank_side))
+    transform_list_train.append(transform.CoordToAnnot())
                             
     logger.info('Augmentation: random flip: True, random rotate: {}{}, random crop: {}'.format(args.rot_aug, [True, rot_yz, rot_xz], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
@@ -249,7 +251,7 @@ def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: in
         rot_xz = False
         
     transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.CoordToAnnot(blank_side=blank_side))
+    transform_list_train.append(transform.CoordToAnnot())
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -311,10 +313,24 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers),
                                 pin_memory=True,
                                 drop_last=True)
+    
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    det_dataset_u = DetDataset(series_list_path = args.unlabeled_train_set, 
+                               SplitComb=split_comber, 
+                               image_spacing=IMAGE_SPACING, 
+                               norm_method=args.data_norm_method)
+    det_loader_u = DataLoader(det_dataset_u, 
+                              batch_size=args.val_batch_size,
+                              shuffle=False, 
+                              num_workers=min(args.unlabeled_batch_size, args.max_workers), 
+                              pin_memory=True,
+                              drop_last=False, 
+                              collate_fn=infer_collate_fn)
+    
     logger.info("There are {} training labeled samples and {} batches in '{}'".format(len(train_loader_l.dataset), len(train_loader_l), args.train_set))
     logger.info("There are {} training unlabeled samples and {} batches in '{}'".format(len(train_loader_u.dataset), len(train_loader_u), args.unlabeled_train_set))
     
-    return train_loader_l, train_loader_u
+    return train_loader_l, train_loader_u, det_loader_u
 
 def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
@@ -354,80 +370,93 @@ if __name__ == '__main__':
     model_save_dir = os.path.join(exp_folder, 'model')
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_loader_l, train_loader_u = get_train_dataloder(args)
+    train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
     start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader_u))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
-    for epoch in range(start_epoch, args.epochs + 1):
-        train_metrics = train(args = args,
-                            model = model_s,
-                            optimizer = optimizer,
-                            dataloader = train_loader_l,
-                            ema = ema, 
-                            device = device)
-        scheduler_warm.step()
-        write_metrics(train_metrics, epoch, 'train', writer)
-        for key, value in train_metrics.items():
-            logger.info('==> Epoch: {} {}: {:.4f}'.format(epoch, key, value))
-        # add learning rate to tensorboard
-        logger.info('==> Epoch: {} lr: {:.6f}'.format(epoch, scheduler_warm.get_lr()[0]))
-        write_metrics({'lr': scheduler_warm.get_lr()[0]}, epoch, 'train', writer)
         
-        # Remove the checkpoint of epoch % save_model_interval != 0
-        for i in range(epoch):
-            ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
-            if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
-                os.remove(ckpt_path)
-        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema)
+    pseu_labels = gen_pseu_labels(model = model_s,
+                                dataloader = det_loader_u,
+                                device = device,
+                                detection_postprocess = detection_postprocess,
+                                prob_threshold = 0.5,
+                                mixed_precision = args.val_mixed_precision,
+                                memory_format = args.memory_format)
+    
+    pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
+    with open(pseu_label_save_path, 'wb') as f:
+        pickle.dump(pseu_labels, f)
+    
+    # for epoch in range(start_epoch, args.epochs + 1):
+    #     train_metrics = train(args = args,
+    #                         model = model_s,
+    #                         optimizer = optimizer,
+    #                         dataloader = train_loader_l,
+    #                         ema = ema, 
+    #                         device = device)
+    #     scheduler_warm.step()
+    #     write_metrics(train_metrics, epoch, 'train', writer)
+    #     for key, value in train_metrics.items():
+    #         logger.info('==> Epoch: {} {}: {:.4f}'.format(epoch, key, value))
+    #     # add learning rate to tensorboard
+    #     logger.info('==> Epoch: {} lr: {:.6f}'.format(epoch, scheduler_warm.get_lr()[0]))
+    #     write_metrics({'lr': scheduler_warm.get_lr()[0]}, epoch, 'train', writer)
         
-        if epoch >= args.start_val_epoch: 
-            # Use Shadow model to validate and save model
-            if ema is not None:
-                ema.apply_shadow()
+    #     # Remove the checkpoint of epoch % save_model_interval != 0
+    #     for i in range(epoch):
+    #         ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
+    #         if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
+    #             os.remove(ckpt_path)
+    #     save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema)
+        
+    #     if epoch >= args.start_val_epoch: 
+    #         # Use Shadow model to validate and save model
+    #         if ema is not None:
+    #             ema.apply_shadow()
             
-            val_metrics = val(args = args,
-                            model = model_s,
-                            detection_postprocess=detection_postprocess,
-                            val_loader = val_loader, 
-                            device = device,
-                            image_spacing = IMAGE_SPACING,
-                            series_list_path=args.val_set,
-                            exp_folder=exp_folder,
-                            epoch = epoch,
-                            min_d=args.min_d,
-                            min_size=args.min_size,
-                            nodule_size_mode=args.nodule_size_mode)
+    #         val_metrics = val(args = args,
+    #                         model = model_s,
+    #                         detection_postprocess=detection_postprocess,
+    #                         val_loader = val_loader, 
+    #                         device = device,
+    #                         image_spacing = IMAGE_SPACING,
+    #                         series_list_path=args.val_set,
+    #                         exp_folder=exp_folder,
+    #                         epoch = epoch,
+    #                         min_d=args.min_d,
+    #                         min_size=args.min_size,
+    #                         nodule_size_mode=args.nodule_size_mode)
             
-            early_stopping.step(val_metrics, epoch)
-            write_metrics(val_metrics, epoch, 'val', writer)
+    #         early_stopping.step(val_metrics, epoch)
+    #         write_metrics(val_metrics, epoch, 'val', writer)
 
-            # Restore model
-            if ema is not None:
-                ema.restore()
-    # Test
-    logger.info('Test the best model')
-    test_save_dir = os.path.join(exp_folder, 'test')
-    os.makedirs(test_save_dir, exist_ok=True)
-    for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
-        logger.info('Load best model from "{}"'.format(model_path))
-        load_states(model_path, device, model_s)
-        test_metrics = val(args = args,
-                            model = model_s,
-                            detection_postprocess=detection_postprocess,
-                            val_loader = test_loader,
-                            device = device,
-                            image_spacing = IMAGE_SPACING,
-                            series_list_path=args.test_set,
-                            exp_folder=exp_folder,
-                            epoch = 'test_best_{}'.format(target_metric),
-                            min_d=args.min_d)
-        write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
-        with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
-            f.write('Best epoch: {}\n'.format(best_epoch))
-            f.write('-' * 30 + '\n')
-            max_length = max([len(key) for key in test_metrics.keys()])
-            for key, value in test_metrics.items():
-                f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
-    writer.close()
+    #         # Restore model
+    #         if ema is not None:
+    #             ema.restore()
+    # # Test
+    # logger.info('Test the best model')
+    # test_save_dir = os.path.join(exp_folder, 'test')
+    # os.makedirs(test_save_dir, exist_ok=True)
+    # for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
+    #     logger.info('Load best model from "{}"'.format(model_path))
+    #     load_states(model_path, device, model_s)
+    #     test_metrics = val(args = args,
+    #                         model = model_s,
+    #                         detection_postprocess=detection_postprocess,
+    #                         val_loader = test_loader,
+    #                         device = device,
+    #                         image_spacing = IMAGE_SPACING,
+    #                         series_list_path=args.test_set,
+    #                         exp_folder=exp_folder,
+    #                         epoch = 'test_best_{}'.format(target_metric),
+    #                         min_d=args.min_d)
+    #     write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
+    #     with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
+    #         f.write('Best epoch: {}\n'.format(best_epoch))
+    #         f.write('-' * 30 + '\n')
+    #         max_length = max([len(key) for key in test_metrics.keys()])
+    #         for key, value in test_metrics.items():
+    #             f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
+    # writer.close()
