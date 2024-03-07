@@ -6,7 +6,7 @@ import numpy as np
 from dataload.utils import load_series_list, load_label, gen_label_path, ALL_CLS, ALL_LOC, ALL_RAD, NODULE_SIZE
 import argparse
 from typing import List
-
+from evaluationScript.nodule_typer import NoduleTyper
 logger = logging.getLogger(__name__)
 
 def generate_series_uids_csv(series_list_path: str, save_path: str):
@@ -18,45 +18,16 @@ def generate_series_uids_csv(series_list_path: str, save_path: str):
         for folder, series_name in series_infos:
             f.write(series_name + '\n')
 
-class NoduleTyper:
-    def __init__(self, spacing: List[float]):
-        self.diamters = {'benign': [0,4], 
-                        'probably_benign': [4, 6],
-                        'probably_suspicious': [6, 8],
-                        'suspicious': [8, -1]}
-        
-        self.spacing = np.array(spacing)
-        self.voxel_volume = np.prod(self.spacing)
-        
-        self.areas = {}
-        for key in self.diamters:
-            self.areas[key] = [round(self.compute_sphere_volume(self.diamters[key][0]) / self.voxel_volume),
-                               round(self.compute_sphere_volume(self.diamters[key][1]) / self.voxel_volume)]
-        
-    @staticmethod
-    def compute_sphere_volume(diameter: float) -> float:
-        if diameter == 0:
-            return 0
-        elif diameter == -1:
-            return 100000000
-        else:
-            radius = diameter / 2
-            return 4/3 * math.pi * radius**3
-        
-    def get_nodule_type(self, nodule_size: float) -> str:
-        for key in self.areas:
-            if nodule_size >= self.areas[key][0] and (nodule_size < self.areas[key][1] or self.areas[key][1] == -1):
-                return key
-        return 'benign'
-
 def generate_annot_csv(series_list_path: str,
                        save_path: str,
                        spacing: List[float] = None,
-                       min_d: int = 0):
+                       mode = 'seg_size',
+                       min_d: int = 0,
+                       mid_size: int = 6):
     spacing = np.array(spacing)
     column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'nodule_type']
     
-    nodule_typer = NoduleTyper(spacing)    
+    nodule_typer = NoduleTyper(spacing, mode=mode)
     all_locs = []
     all_rads = []
     all_types = []
@@ -66,10 +37,14 @@ def generate_annot_csv(series_list_path: str,
         series_name = series_info[1]
         
         label_path = gen_label_path(folder, series_name)
-        label = load_label(label_path, spacing, min_d)
+        label = load_label(label_path, spacing, min_d, mid_size)
         all_locs.append(label[ALL_LOC].tolist())
         all_rads.append(label[ALL_RAD].tolist())
-        all_types.append([nodule_typer.get_nodule_type(s) for s in label[NODULE_SIZE]])
+        
+        if mode == 'seg_size':
+            all_types.append([nodule_typer.get_nodule_type_by_seg_size(s) for s in label[NODULE_SIZE]])
+        elif mode == 'dhw':
+            all_types.append([nodule_typer.get_nodule_type_by_dhw(d, h, w) for d, h, w in label[ALL_RAD]])
         
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, 'w') as f:

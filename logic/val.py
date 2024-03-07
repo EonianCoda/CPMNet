@@ -63,7 +63,9 @@ def val(args,
         epoch: int = 0,
         batch_size: int = 16,
         nms_keep_top_k: int = 40,
-        min_d: int = 0) -> Dict[str, float]:
+        min_d: int = 0,
+        min_size: int = 0,
+        nodule_size_mode: str = 'seg_size') -> Dict[str, float]:
     
     annot_dir = os.path.join(exp_folder, 'annotation')
     os.makedirs(annot_dir, exist_ok=True)
@@ -73,7 +75,9 @@ def val(args,
     series_uids_path = os.path.join(annot_dir, 'seriesuid_{}.csv'.format(state))
     if min_d != 0:
         logger.info('When validating, ignore nodules with depth less than {}'.format(min_d))
-    generate_annot_csv(series_list_path, origin_annot_path, spacing=image_spacing, min_d=min_d)
+    if min_size != 0:
+        logger.info('When validating, ignore nodules with size less than {}'.format(min_size))
+    generate_annot_csv(series_list_path, origin_annot_path, spacing=image_spacing, min_d=min_d, mid_size=min_size, mode=nodule_size_mode)
     convert_to_standard_csv(csv_path = origin_annot_path, 
                             annot_save_path=annot_path,
                             series_uids_save_path=series_uids_path,
@@ -86,54 +90,53 @@ def val(args,
     if memory_format == torch.channels_last_3d:
         logger.info('Use memory format: channels_last_3d to validate')
         
-    progress_bar = get_progress_bar('Validation', len(val_loader))
-    for sample in val_loader:
-        data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format)
-        nzhws = sample['nzhws']
-        num_splits = sample['num_splits']
-        series_names = sample['series_names']
-        outputlist = []
-        
-        for i in range(int(math.ceil(data.size(0) / batch_size))):
-            end = (i + 1) * batch_size
-            if end > data.size(0):
-                end = data.size(0)
-            input = data[i * batch_size:end]
-            if args.val_mixed_precision:
-                with torch.cuda.amp.autocast():
+    with get_progress_bar('Validation', len(val_loader)) as progress_bar:
+        for sample in val_loader:
+            data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format)
+            nzhws = sample['nzhws']
+            num_splits = sample['num_splits']
+            series_names = sample['series_names']
+            outputlist = []
+            
+            for i in range(int(math.ceil(data.size(0) / batch_size))):
+                end = (i + 1) * batch_size
+                if end > data.size(0):
+                    end = data.size(0)
+                input = data[i * batch_size:end]
+                if args.val_mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        with torch.no_grad():
+                            output = model(input)
+                            output = detection_postprocess(output, device=device)
+                else:
                     with torch.no_grad():
                         output = model(input)
-                        output = detection_postprocess(output, device=device)
-            else:
-                with torch.no_grad():
-                    output = model(input)
-                    output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-            outputlist.append(output.data.cpu().numpy())
-        
-        outputs = np.concatenate(outputlist, 0)
-        
-        start_idx = 0
-        for i in range(len(num_splits)):
-            n_split = num_splits[i]
-            nzhw = nzhws[i]
-            output = split_comber.combine(outputs[start_idx:start_idx + n_split], nzhw)
-            output = torch.from_numpy(output).view(-1, 8)
-            # Remove the padding
-            object_ids = output[:, 0] != -1.0
-            output = output[object_ids]
+                        output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                outputlist.append(output.data.cpu().numpy())
             
-            # NMS
-            if len(output) > 0:
-                keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
-                output = output[keep]
-            output = output.numpy()
-        
-            preds = convert_to_standard_output(output, series_names[i])  
-            all_preds.extend(preds)
-            start_idx += n_split
+            outputs = np.concatenate(outputlist, 0)
             
-        progress_bar.update(1)
-    progress_bar.close()
+            start_idx = 0
+            for i in range(len(num_splits)):
+                n_split = num_splits[i]
+                nzhw = nzhws[i]
+                output = split_comber.combine(outputs[start_idx:start_idx + n_split], nzhw)
+                output = torch.from_numpy(output).view(-1, 8)
+                # Remove the padding
+                object_ids = output[:, 0] != -1.0
+                output = output[object_ids]
+                
+                # NMS
+                if len(output) > 0:
+                    keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
+                    output = output[keep]
+                output = output.numpy()
+            
+                preds = convert_to_standard_output(output, series_names[i])  
+                all_preds.extend(preds)
+                start_idx += n_split
+                
+            progress_bar.update(1)
     # Save the results to csv
     output_dir = os.path.join(annot_dir, f'epoch_{epoch}')
     os.makedirs(output_dir, exist_ok=True)

@@ -3,7 +3,7 @@ import json
 import numpy as np
 
 from typing import Dict, List
-
+from evaluationScript.nodule_typer import compute_nodule_volume
 DEFAULT_WINDOW_LEVEL = -300
 DEFAULT_WINDOW_WIDTH = 1400
 
@@ -88,10 +88,13 @@ def load_image(dicom_path: str, window_level: int = DEFAULT_WINDOW_LEVEL, window
     image = normalize_raw_image(image, window_level, window_width)
     return image
 
-def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0) -> Dict[str, np.ndarray]:
+def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_size = 0) -> Dict[str, np.ndarray]:
     """
     Return:
         A dictionary with keys 'all_loc', 'all_rad', 'all_cls'
+        (1) 'all_loc': 3D numpy array with shape (n, 3) (z, y, x)
+        (2) 'all_rad': depth, height, width of nodules
+        (3) 'all_cls': 1D numpy array with shape (n,)
     """
     min_d = int(min_d)
     with open(label_path, 'r') as f:
@@ -116,6 +119,8 @@ def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0) -> Dict[st
         all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
         
         valid_mask = all_rad[:, 0] >= min_d
+        if min_size > 0:
+            valid_mask = valid_mask & (nodule_sizes[:, 0] >= min_size)
         
         all_rad = all_rad * image_spacing # (z, y, x)
         all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)

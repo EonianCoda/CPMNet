@@ -52,7 +52,8 @@ def get_args():
     parser.add_argument('--train_set', type=str, required=True, help='train_list')
     parser.add_argument('--val_set', type=str, required=True,help='val_list')
     parser.add_argument('--test_set', type=str, required=True,help='test_list')
-    parser.add_argument('--min_d', type=int, default=0, help="min depth of ground truth, if some nodule's depth < min_d, it will be` ignored")
+    parser.add_argument('--min_d', type=int, default=0, help="min depth of nodule, if some nodule's depth < min_d, it will be` ignored")
+    parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first') # for speed up
     parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp(Only use for crop_fast InstanceCrop)')
@@ -107,6 +108,7 @@ def get_args():
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     # other
+    parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'froc_mean_recall'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
@@ -348,7 +350,9 @@ if __name__ == '__main__':
                             series_list_path=args.val_set,
                             exp_folder=exp_folder,
                             epoch = epoch,
-                            min_d=args.min_d)
+                            min_d=args.min_d,
+                            min_size=args.min_size,
+                            nodule_size_mode=args.nodule_size_mode)
             
             early_stopping.step(val_metrics, epoch)
             write_metrics(val_metrics, epoch, 'val', writer)
