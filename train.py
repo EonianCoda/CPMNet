@@ -212,8 +212,7 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
         rot_yz = False
         rot_xz = False
         
-    transform_list_train = [transform.Pad(output_size=crop_size),
-                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
     if args.rot_aug == 'rot90':
         transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
     elif args.rot_aug == 'transpose':
@@ -222,7 +221,7 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
         
-    transform_list_train.append(transform.CoordToAnnot(blank_side=blank_side))
+    transform_list_train.append(transform.CoordToAnnot())
                             
     logger.info('Augmentation: random flip: True, random rotate: {}{}, random crop: {}'.format(args.rot_aug, [True, rot_yz, rot_xz], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
@@ -256,8 +255,8 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         logger.info('Use itk rotate {}'.format(args.rand_rot))
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
-    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
-                                transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
+    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
+                                 min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 

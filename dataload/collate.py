@@ -80,85 +80,70 @@ def infer_refined_collate_fn(batches) -> Dict[str, torch.Tensor]:
             'series_names': series_names,
             'series_paths': series_paths}
 
-def semi_unlabeled_train_collate_fn_dict(batches):
-    batch = []
-    for b in batches:
-        if b is not None:
-            batch.extend(b)
+def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
+    """
+    Args:
+        batches: Dict[str, List[Dict[str, any]]]
+            A dictionary with keys 'weak' and 'strong', each of which is a list of dictionaries.
+            Each dictionary contains keys 'image', 'annot', 'ctr_transform'.
+    """
     
-    if len(batch) == 0:
-        return {'image': torch.tensor([]), 'annot': torch.tensor([]), 'ctr_transform': []}
+    # Prepare weak and strong batches
+    weak_batch = []
+    strong_batch = []
+    for b in batches['weak']:
+        weak_batch.extend(b)
+    for b in batches['strong']:
+        strong_batch.extend(b)
     
-    imgs = []
-    annots = []
-    for b in batch:
-        imgs.append(b['image'])
-        annots.append(b['annot'])
+    # Prepare weak and strong images and annotations
+    weak_imgs = []
+    weak_annots = []
+    strong_imgs = []
+    strong_annots = []
+    for b in weak_batch:
+        weak_imgs.append(b['image'])
+        weak_annots.append(b['annot'])
+    for b in strong_batch:
+        strong_imgs.append(b['image'])
+        strong_annots.append(b['annot'])
     
-    imgs = np.stack(imgs)
-    max_num_annots = max(annot.shape[0] for annot in annots)
-
-    ctr_transforms = [s['ctr_transform'] for s in batch]
-    if max_num_annots > 0:
-        annot_padded = np.ones((len(annots), max_num_annots, 10), dtype='float32') * -1
-        for idx, annot in enumerate(annots):
+    weak_imgs = np.stack(weak_imgs)
+    strong_imgs = np.stack(strong_imgs)
+    
+    weak_max_num_annots = max(annot.shape[0] for annot in weak_annots)
+    strong_max_num_annots = max(annot.shape[0] for annot in strong_annots)
+    
+    # Prepare weak and strong center transforms
+    weak_ctr_transforms = [s['ctr_transform'] for s in weak_batch]
+    strong_ctr_transforms = [s['ctr_transform'] for s in strong_batch]
+    
+    # Pad weak and strong annotations
+    if weak_max_num_annots > 0:
+        weak_annot_padded = np.ones((len(weak_annots), weak_max_num_annots, 10), dtype='float32') * -1
+        for idx, annot in enumerate(weak_annots):
             if annot.shape[0] > 0:
-                annot_padded[idx, :annot.shape[0], :] = annot
+                weak_annot_padded[idx, :annot.shape[0], :] = annot
     else:
-        annot_padded = np.ones((len(annots), 1, 10), dtype='float32') * -1
-    
-    return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded), 'ctr_transform': ctr_transforms}
-
-def semi_unlabeled_infer_collate_fn(batches) -> Dict[str, torch.Tensor]:
-    num_splits = []
-    imgs = []
-    nzhws = []
-    spacings = []
-    series_names = []
-    series_folders = []
-
-    for b in batches:
-        imgs.append(b['split_images'])
-        num_splits.append(b['split_images'].shape[0])
-        nzhws.append(b['nzhw'])
-        spacings.append(b['spacing'])
-        series_names.append(b['series_name'])
-        series_folders.append(b['series_folder'])
+        weak_annot_padded = np.ones((len(weak_annots), 1, 10), dtype='float32') * -1
         
-    imgs = np.concatenate(imgs, axis=0)
-    nzhws = np.stack(nzhws)
-    num_splits = np.array(num_splits)
-    
-    return {'split_images': torch.from_numpy(imgs),
-            'nzhws': torch.from_numpy(nzhws), 
-            'num_splits': num_splits, 
-            'spacings': spacings, 
-            'series_names': series_names,
-            'series_folders': series_folders}
-
-def semi_labeled_collate_fn_dict(batches) -> Dict[str, torch.Tensor]:
-    batch = []
-    for b in batches:
-        batch.extend(b)
-    
-    imgs = []
-    annots = []
-    for b in batch:
-        imgs.append(b['image'])
-        annots.append(b['annot'])
-        
-    imgs = np.stack(imgs)
-    max_num_annots = max(annot.shape[0] for annot in annots)
-
-    ctr_transforms = [s['ctr_transform'] for s in batch]
-    if max_num_annots > 0:
-        annot_padded = np.ones((len(annots), max_num_annots, 10), dtype='float32') * -1
-
-        if max_num_annots > 0:
-            for idx, annot in enumerate(annots):
-                if annot.shape[0] > 0:
-                    annot_padded[idx, :annot.shape[0], :] = annot
+    if strong_max_num_annots > 0:
+        strong_annot_padded = np.ones((len(strong_annots), strong_max_num_annots, 10), dtype='float32') * -1
+        for idx, annot in enumerate(strong_annots):
+            if annot.shape[0] > 0:
+                strong_annot_padded[idx, :annot.shape[0], :] = annot
     else:
-        annot_padded = np.ones((len(annots), 1, 10), dtype='float32') * -1
-
-    return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded), 'ctr_transform': ctr_transforms}
+        strong_annot_padded = np.ones((len(strong_annots), 1, 10), dtype='float32') * -1
+    
+    # Return the samples
+    weak_samples = {'image': torch.from_numpy(weak_imgs), 
+                    'annot': torch.from_numpy(weak_annot_padded), 
+                    'ctr_transform': weak_ctr_transforms}
+    
+    strong_samples = {'image': torch.from_numpy(strong_imgs),
+                    'annot': torch.from_numpy(strong_annot_padded),
+                    'ctr_transform': strong_ctr_transforms}
+    
+    samples = {'weak': weak_samples, 
+               'strong': strong_samples}
+    return samples
