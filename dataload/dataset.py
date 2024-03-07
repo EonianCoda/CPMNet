@@ -32,16 +32,20 @@ class TrainDataset(Dataset):
         __getitem__(idx): Returns the item at the given index.
 
     """
-    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, use_bg=False, min_d=0, norm_method='scale', mmap_mode=None):
+    def __init__(self, series_list_path: str, image_spacing: List[float], transform_post=None, crop_fn=None, 
+                 use_bg=False, min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None):
         self.labels = []
         self.dicom_paths = []
         self.series_list_path = series_list_path
         self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         self.min_d = int(min_d)
+        self.min_size = int(min_size)
         
         if self.min_d > 0:
             logger.info('When training, ignore nodules with depth less than {}'.format(min_d))
+        if self.min_size != 0:
+            logger.info('When training, ignore nodules with size less than {}'.format(min_size))
         
         if self.norm_method == 'mean_std':
             logger.info('Normalize image to have mean 0 and std 1, and then scale to -1 to 1')
@@ -55,7 +59,7 @@ class TrainDataset(Dataset):
             label_path = gen_label_path(folder, series_name)
             dicom_path = gen_dicom_path(folder, series_name)
            
-            label = load_label(label_path, self.image_spacing, min_d)
+            label = load_label(label_path, self.image_spacing, min_d, min_size)
             if label[ALL_LOC].shape[0] == 0 and not use_bg:
                 continue
             

@@ -47,6 +47,7 @@ def load_states(load_path: str, device: torch.device, model: nn.Module, optimize
         ema.load_state_dict(checkpoint['ema_state_dict'])
         
     for key, value in kwargs.items():
+        key = '{}_state_dict'.format(key)
         if key not in checkpoint:
             logger.warning(f'Key {key} not found in checkpoint')
         kwargs[key].load_state_dict(checkpoint[key])
