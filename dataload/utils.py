@@ -120,7 +120,7 @@ def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_size =
         
         valid_mask = all_rad[:, 0] >= min_d
         if min_size > 0:
-            valid_mask = valid_mask & (nodule_sizes[:, 0] >= min_size)
+            valid_mask = valid_mask & (nodule_sizes >= min_size)
         
         all_rad = all_rad * image_spacing # (z, y, x)
         all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
