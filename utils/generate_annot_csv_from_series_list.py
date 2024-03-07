@@ -27,7 +27,7 @@ def generate_annot_csv(series_list_path: str,
     spacing = np.array(spacing)
     column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'nodule_type']
     
-    nodule_typer = NoduleTyper(spacing, mode=mode)
+    nodule_typer = NoduleTyper(spacing)
     all_locs = []
     all_rads = []
     all_types = []
