@@ -3,7 +3,7 @@ import math
 import logging
 import numpy as np
 import pandas as pd
-from typing import List, Any, Dict
+from typing import List, Any, Dict, Tuple
 
 import torch
 import torch.nn as nn
@@ -63,6 +63,7 @@ def val(args,
         epoch: int = 0,
         batch_size: int = 16,
         nms_keep_top_k: int = 40,
+        nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
         min_size: int = 0,
         nodule_size_mode: str = 'seg_size') -> Dict[str, float]:
@@ -77,7 +78,13 @@ def val(args,
         logger.info('When validating, ignore nodules with depth less than {}'.format(min_d))
     if min_size != 0:
         logger.info('When validating, ignore nodules with size less than {}'.format(min_size))
-    generate_annot_csv(series_list_path, origin_annot_path, spacing=image_spacing, min_d=min_d, mid_size=min_size, mode=nodule_size_mode)
+    generate_annot_csv(series_list_path = series_list_path, 
+                       save_path = origin_annot_path,
+                       spacing=image_spacing, 
+                       nodule_type_diameters = nodule_type_diameters,
+                       min_d=min_d, 
+                       min_size=min_size, 
+                       mode=nodule_size_mode)
     convert_to_standard_csv(csv_path = origin_annot_path, 
                             annot_save_path=annot_path,
                             series_uids_save_path=series_uids_path,

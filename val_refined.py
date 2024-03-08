@@ -19,10 +19,7 @@ from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging
 from utils.utils import init_seed, write_yaml
-
-SAVE_ROOT = './save'
-DEFAULT_OVERLAP_RATIO = 0.25
-IMAGE_SPACING = [1.0, 0.8, 0.8]
+from .config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 logger = logging.getLogger(__name__)
 
 def get_args():
@@ -104,6 +101,7 @@ if __name__ == '__main__':
                 val_loader = val_loader, 
                 device = device,
                 image_spacing = IMAGE_SPACING,
+                nodule_type_diameters=NODULE_TYPE_DIAMETERS,
                 series_list_path=args.val_set,
                 exp_folder=exp_folder,
                 min_d=args.min_d)

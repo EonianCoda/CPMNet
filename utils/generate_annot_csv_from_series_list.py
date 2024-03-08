@@ -5,7 +5,7 @@ import logging
 import numpy as np
 from dataload.utils import load_series_list, load_label, gen_label_path, ALL_CLS, ALL_LOC, ALL_RAD, NODULE_SIZE
 import argparse
-from typing import List
+from typing import List, Dict, Tuple
 from evaluationScript.nodule_typer import NoduleTyper
 logger = logging.getLogger(__name__)
 
@@ -20,14 +20,15 @@ def generate_series_uids_csv(series_list_path: str, save_path: str):
 
 def generate_annot_csv(series_list_path: str,
                        save_path: str,
+                       nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
                        spacing: List[float] = None,
                        mode = 'seg_size',
                        min_d: int = 0,
-                       mid_size: int = 6):
+                       min_size: int = 6):
     spacing = np.array(spacing)
     column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'nodule_type']
     
-    nodule_typer = NoduleTyper(spacing)
+    nodule_typer = NoduleTyper(nodule_type_diameters, spacing)
     all_locs = []
     all_rads = []
     all_types = []
@@ -37,7 +38,7 @@ def generate_annot_csv(series_list_path: str,
         series_name = series_info[1]
         
         label_path = gen_label_path(folder, series_name)
-        label = load_label(label_path, spacing, min_d, mid_size)
+        label = load_label(label_path, spacing, min_d, min_size)
         all_locs.append(label[ALL_LOC].tolist())
         all_rads.append(label[ALL_RAD].tolist())
         

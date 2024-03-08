@@ -16,8 +16,8 @@ ALL_CLS = 'all_cls'
 def gen_dicom_path(folder: str, series_name: str) -> str:
     return os.path.join(folder, 'npy', f'{series_name}_crop.npy')
 
-def gen_label_path(folder: str, series_name: str) -> str:
-    return os.path.join(folder, 'mask', f'{series_name}_nodule_count_crop.json')
+def gen_label_path(dir_name: str, name: str) -> str:
+    return os.path.join(dir_name, 'mask', f'{name}_nodule_count_crop.json')
 
 def load_series_list(series_list_path: str) -> List[List[str]]:
     """
@@ -93,7 +93,7 @@ def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_size =
     Return:
         A dictionary with keys 'all_loc', 'all_rad', 'all_cls'
         (1) 'all_loc': 3D numpy array with shape (n, 3) (z, y, x)
-        (2) 'all_rad': depth, height, width of nodules
+        (2) 'all_rad': depth, height, width of nodules with shape (n, 3) (z, y, x)
         (3) 'all_cls': 1D numpy array with shape (n,)
     """
     min_d = int(min_d)

@@ -1,6 +1,6 @@
 import math
 import numpy as np
-from typing import List
+from typing import List, Dict, Tuple
 
 def compute_sphere_volume(diameter: float) -> float:
     if diameter == 0:
@@ -21,19 +21,17 @@ def compute_nodule_volume(w: float, h: float, d: float) -> float:
     return volume
 
 class NoduleTyper:
-    def __init__(self, image_spacing: List[float]):
-        self.diamters = {'benign': [0,4], 
-                        'probably_benign': [4, 6],
-                        'probably_suspicious': [6, 8],
-                        'suspicious': [8, -1]}
-        
+    def __init__(self, 
+                 nodule_type_diameters: Dict[str, Tuple[float, float]],
+                 image_spacing: List[float]):
+        self.nodule_type_diameters = nodule_type_diameters
         self.spacing = np.array(image_spacing, dtype=np.float64)
         self.voxel_volume = np.prod(self.spacing)
         
         self.areas = {}
-        for key in self.diamters:
-            self.areas[key] = [round(compute_sphere_volume(self.diamters[key][0]) / self.voxel_volume),
-                               round(compute_sphere_volume(self.diamters[key][1]) / self.voxel_volume)]
+        for key in self.nodule_type_diameters:
+            self.areas[key] = [round(compute_sphere_volume(self.nodule_type_diameters[key][0]) / self.voxel_volume),
+                               round(compute_sphere_volume(self.nodule_type_diameters[key][1]) / self.voxel_volume)]
         
     def get_nodule_type_by_seg_size(self, nodule_size: float) -> str:
         for key in self.areas:
