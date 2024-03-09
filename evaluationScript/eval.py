@@ -420,6 +420,8 @@ def evaluateCAD(seriesUIDs: List[str],
     recall_series = []
     for series_uid, metrics in series_metric.items():
         tp, fp, fn = metrics
+        if tp + fn == 0:
+            continue
         recall = tp / max(tp + fn, 1e-6)
         recall_series.append(recall)
     logger.info('Recall(series_based): {:.3f}'.format(np.mean(recall_series)))

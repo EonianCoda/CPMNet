@@ -80,32 +80,43 @@ def val_data_prepare(args):
 
 if __name__ == '__main__':
     args = get_args()
-    exp_folder = os.path.dirname(args.model_path)
-    exp_folder = os.path.join(exp_folder, 'val_temp')
-    setup_logging(log_file=os.path.join(exp_folder, 'val.log'))
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, detection_postprocess = prepare_validation(args, device)
-    init_seed(args.seed)
+    base_exp_folder = os.path.join(os.path.dirname(args.model_path), 'val_results')
+    setup_logging(log_file=os.path.join(base_exp_folder, 'val.log'))
     
-    val_loader = val_data_prepare(args)
-    
-    write_yaml(os.path.join(exp_folder, 'val_config.yaml'), args)
-    logger.info('Save validation results to "{}"'.format(exp_folder))
-    logger.info('Val set: "{}"'.format(args.val_set))
-    metrics = val(args = args,
-                model = model,
-                detection_postprocess=detection_postprocess,
-                val_loader = val_loader, 
-                device = device,
-                image_spacing = IMAGE_SPACING,
-                series_list_path=args.val_set,
-                exp_folder=exp_folder,
-                nodule_size_mode=NODULE_TYPE_DIAMETERS,
-                min_d=args.min_d,
-                min_size=args.min_size,
-                nodule_size_mode=args.nodule_size_mode)
-    
-    with open(os.path.join(exp_folder, 'val_metrics.txt'), 'w') as f:
-        for k, v in metrics.items():
-            f.write('{}: {}\n'.format(k, v))
+    if '*' not in args.model_path: # validation all models in the folder
+        model_paths = [args.model_path]
+    else:
+        model_folder = os.path.dirname(args.model_path)
+        model_paths = [os.path.join(model_folder, f) for f in os.listdir(model_folder) if f.endswith('.pth')]
+        
+    for model_path in model_paths:
+        model_name = os.path.basename(model_path)
+        exp_folder = os.path.join(base_exp_folder, model_name)
+        args.model_path = model_path
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model, detection_postprocess = prepare_validation(args, device)
+        init_seed(args.seed)
+        
+        val_loader = val_data_prepare(args)
+        
+        write_yaml(os.path.join(exp_folder, 'val_config.yaml'), args)
+        logger.info('Save validation results to "{}"'.format(exp_folder))
+        logger.info('Val set: "{}"'.format(args.val_set))
+        metrics = val(args = args,
+                    model = model,
+                    detection_postprocess=detection_postprocess,
+                    val_loader = val_loader, 
+                    device = device,
+                    image_spacing = IMAGE_SPACING,
+                    series_list_path=args.val_set,
+                    exp_folder=exp_folder,
+                    nodule_type_diameters=NODULE_TYPE_DIAMETERS,
+                    min_d=args.min_d,
+                    min_size=args.min_size,
+                    nodule_size_mode=args.nodule_size_mode)
+        
+        with open(os.path.join(exp_folder, 'val_metrics.txt'), 'w') as f:
+            for k, v in metrics.items():
+                f.write('{}: {}\n'.format(k, v))

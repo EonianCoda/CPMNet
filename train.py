@@ -49,9 +49,9 @@ def get_args():
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
     # Data
-    parser.add_argument('--train_set', type=str, required=True, help='train_list')
-    parser.add_argument('--val_set', type=str, required=True,help='val_list')
-    parser.add_argument('--test_set', type=str, required=True,help='test_list')
+    parser.add_argument('--train_set', type=str, help='train_list')
+    parser.add_argument('--val_set', type=str, help='val_list')
+    parser.add_argument('--test_set', type=str, help='test_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of nodule, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
@@ -375,9 +375,12 @@ if __name__ == '__main__':
                             device = device,
                             image_spacing = IMAGE_SPACING,
                             series_list_path=args.test_set,
+                            nodule_type_diameters=NODULE_TYPE_DIAMETERS,
                             exp_folder=exp_folder,
                             epoch = 'test_best_{}'.format(target_metric),
-                            min_d=args.min_d)
+                            min_d=args.min_d,
+                            min_size=args.min_size,
+                            nodule_size_mode=args.nodule_size_mode)
         write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
         with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
             f.write('Best epoch: {}\n'.format(best_epoch))

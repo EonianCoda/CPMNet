@@ -154,3 +154,18 @@ def compute_bbox3d_intersection_volume(box1: np.ndarray, box2: np.ndarray):
     inter_volume = np.clip((np.minimum(a2, b2) - np.maximum(a1, b1)),0, None).prod(axis=2)
 
     return inter_volume
+
+def compute_bbox3d_iou(box1: np.ndarray, box2: np.ndarray):
+    """ 
+    Args:
+        box1 (shape = [N, 2, 3])
+        box2 (shape = [M, 2, 3])
+    Return:
+        the iou between box1 and box2, shape = [N, M]
+    """
+    inter_volume = compute_bbox3d_intersection_volume(box1, box2)
+    box1_volume = np.prod(box1[:, 1] - box1[:, 0], axis=1)
+    box2_volume = np.prod(box2[:, 1] - box2[:, 0], axis=1)
+    union_volume = box1_volume[:, np.newaxis] + box2_volume[np.newaxis, :] - inter_volume
+    iou = inter_volume / union_volume
+    return iou
