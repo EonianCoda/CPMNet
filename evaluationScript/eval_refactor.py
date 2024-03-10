@@ -35,6 +35,8 @@ FROC_MINX = 0.125 # Mininum value of x-axis of FROC curve
 FROC_MAXX = 8 # Maximum value of x-axis of FROC curve
 bLogPlot = True
 
+NODULE_TYPE_TEMPLATE = '{:20s}: Recall={:.3f}, Precision={:.3f}, F1={:.3f}, TP={:4d}, FP={:4d}, FN={:4d}'
+
 def box_iou_union_3d(boxes1: List[float], boxes2: List[float], eps: float = 0.001) -> float:
     """
     Return intersection-over-union (Jaccard index) and  of boxes.
@@ -226,204 +228,6 @@ def evaluateCAD(seriesUIDs: List[str],
     """
     function to evaluate a CAD algorithm
     """
-    nodule_output_file = open(os.path.join(output_dir,'Analysis_{}.txt'.format(iou_threshold)),'w')
-
-    pred_results = csvTools.readCSV(results_path)
-    all_pred_cands = {}
-    
-    # collect candidates from prediction result file
-    for series_uid in seriesUIDs:
-        nodules = {}
-        header = pred_results[0]
-        i = 0
-        for result in pred_results[1:]:
-            nodule_seriesuid = result[header.index(SERIESUID)]
-            
-            if series_uid == nodule_seriesuid:
-                nodule = get_nodule(result, header)
-                nodule.candidateID = i
-                nodules[nodule.candidateID] = nodule
-                i += 1
-        
-        # If number of candidate in a series of prediction is larger than max_num_of_nodule_candidate_in_series, keep 
-        # the top max_num_of_nodule_candidate_in_series candidates
-        if (max_num_of_nodule_candidate_in_series > 0) and (len(nodules.keys()) > max_num_of_nodule_candidate_in_series):
-            # sort the candidates by their probability
-            sorted_nodules = sorted(nodules.items(), key=lambda x: x[1].CADprobability, reverse=True) 
-            
-            keep_nodules = dict()
-            for i in range(max_num_of_nodule_candidate_in_series):
-                keep_nodules[sorted_nodules[i][0]] = sorted_nodules[i][1]
-            
-            nodules = keep_nodules  
-        
-        all_pred_cands[series_uid] = nodules  
-        
-    # open output files
-    FN_list_file = open(os.path.join(output_dir, "FN_{}.csv".format(iou_threshold)), 'w')
-    FN_list_file.write("seriesuid,coordX,coordY,coordZ,w,h,d\n")
-
-    # --- iterate over all cases (seriesUIDs) and determine how
-    # often a nodule annotation is not covered by a candidate
-    # initialize some variables to be used in the loop
-    tp_count, fp_count, fn_count, tn_count = 0, 0, 0, 0
-    total_num_of_cands, total_num_of_nodules = 0, 0
-    duplicated_detection_count = 0
-    min_prob_value = -10000.0  # minimum value of a float
-    FROC_is_pos_list = []
-    FROC_prob_list = []
-    FROC_series_uids = []
-    FROC_is_FN_list = []
-    FROC_nodule_list = []
-    FROC_candidates_list = []
-    # -- loop over the cases
-    FN_diameter = []
-    FN_seriesuid = []
-    for series_uid in seriesUIDs:
-        # get the candidates based on the seriesUID
-        pred_cands = all_pred_cands.get(series_uid, dict()) # A dict of candidates with key as candidateID and value as NoduleFinding
-        total_num_of_cands += len(pred_cands.keys())  
-        pred_cands_copy = pred_cands.copy() # make a copy in which items will be deleted
-
-        # get the nodule annotations for this case
-        gt_nodules = all_gt_nodules.get(series_uid, list()) # A list of NoduleFinding
-
-        # - loop over each nodule annotation and determine whether it is covered by a candidate
-        for gt_nodule in gt_nodules:
-            total_num_of_nodules += 1
-
-            x, y, z = float(gt_nodule.ctr_x), float(gt_nodule.ctr_y), float(gt_nodule.ctr_z)
-            w, h, d = float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d)
-            half_w, half_h, half_d = w/2, h/2, d/2
-
-            nodule_matches = []
-            for cand_id, candidate in pred_cands.items():
-                cand_x, cand_y, cand_z = float(candidate.coordX), float(candidate.coordY), float(candidate.coordZ)
-                cand_w, cand_h, cand_d = float(candidate.w), float(candidate.h), float(candidate.d)
-                cand_half_w, cand_half_h, cand_half_d = cand_w/2, cand_h/2, cand_d/2
-                
-                # [x1, x2, y1, y2, z1, z2]
-                pred_box = [cand_x - cand_half_w, cand_x + cand_half_w, 
-                            cand_y - cand_half_h, cand_y + cand_half_h, 
-                            cand_z - cand_half_d, cand_z + cand_half_d]
-                
-                gt_box = [x - half_w, x + half_w, 
-                          y - half_h, y + half_h, 
-                          z - half_d, z + half_d]
-                
-                iou = box_iou_union_3d(pred_box, gt_box)
-                if iou >= iou_threshold:
-                    nodule_matches.append(candidate)  
-                    if cand_id not in pred_cands_copy.keys():
-                        logger.info('This is strange: There are two nodules overlapping with the same prediction, but one of them is already deleted')
-                        logger.info('series_uid: %s, coordX: %s, coordY: %s, coordZ: %s, w: %.2f, h: %.2f, d: %.2f' % (series_uid, gt_nodule.ctr_x, gt_nodule.ctr_y, gt_nodule.ctr_z, gt_nodule.w, gt_nodule.h, gt_nodule.d))
-                        logger.info('cand_id: %s, coordX: %s, coordY: %s, coordZ: %s, w: %.2f, h: %.2f, d: %.2f' % (cand_id, candidate.coordX, candidate.coordY, candidate.coordZ, candidate.w, candidate.h, candidate.d))
-                    else:
-                        del pred_cands_copy[cand_id]
-                        
-            # There are multiple candidates that overlap with the same ground truth nodule
-            if len(nodule_matches) >= 2:  
-                duplicated_detection_count += (len(nodule_matches) - 1)  
-            
-            FROC_is_pos_list.append(1.0) 
-            FROC_series_uids.append(series_uid)  
-            FROC_nodule_list.append(gt_nodule)
-            if len(nodule_matches) > 0: # at least one candidate overlaps with the ground truth nodule
-                tp_count += 1  
-                # append the sample with the highest probability for the FROC analysis
-                max_idx = np.argmax([float(candidate.CADprobability) for candidate in nodule_matches])
-                max_prob = nodule_matches[max_idx].CADprobability
-                gt_nodule
-                FROC_prob_list.append(float(max_prob))
-                FROC_is_FN_list.append(False)
-                FROC_candidates_list.append(nodule_matches[max_idx])
-                
-            else: # no candidate overlaps with the ground truth nodule
-                fn_count += 1
-                # append a positive sample with the lowest probability, such that this is added in the FROC analysis
-                FROC_prob_list.append(min_prob_value)  
-                
-                FROC_is_FN_list.append(True)  
-                # For FN
-                FN_list_file.write("%s, %s,%s,%s,%.1f,%.1f,%.1f\n" % (series_uid, gt_nodule.ctr_x, gt_nodule.ctr_y, gt_nodule.ctr_z, float(gt_nodule.w), float(gt_nodule.h), float(gt_nodule.d)))
-                FN_diameter.append([w, h, d])
-                FN_seriesuid.append(series_uid)
-                FROC_candidates_list.append(None)
-        
-        # add all false positives to the vectors
-        for cand_id, candidate in pred_cands_copy.items(): # the remaining candidates are false positives
-            fp_count += 1
-            FROC_is_pos_list.append(0.0) 
-            FROC_prob_list.append(float(candidate.CADprobability))
-            FROC_series_uids.append(series_uid)
-            FROC_is_FN_list.append(False)
-            FROC_nodule_list.append(candidate)
-            FROC_candidates_list.append(candidate)
-    # Statistics that are computed
-    nodule_output_file.write("Candidate detection results:\n")
-    nodule_output_file.write("    True positives: %d\n" % tp_count)
-    nodule_output_file.write("    False positives: %d\n" % fp_count)
-    nodule_output_file.write("    False negatives: %d\n" % fn_count)
-    nodule_output_file.write("    True negatives: %d\n" % tn_count)
-    nodule_output_file.write("    Total number of candidates: %d\n" % total_num_of_cands)
-    nodule_output_file.write("    Total number of nodules: %d\n" % total_num_of_nodules)
-
-    nodule_output_file.write("    Total number of ignored candidates which were double detections on a nodule: %d\n" % duplicated_detection_count)
-    if int(total_num_of_nodules) == 0:
-        nodule_output_file.write("    Sensitivity: 0.0\n")
-    else:
-        nodule_output_file.write("    Sensitivity: %.3f\n" % (float(tp_count) / float(total_num_of_nodules)))
-    nodule_output_file.write("    Average number of candidates per scan: %.9f\n" % (float(total_num_of_cands) / float(len(seriesUIDs))))
-    nodule_output_file.write("    FN_diammeter:\n")
-    for idx, whd in enumerate(FN_diameter):
-        nodule_output_file.write("    FN_%d: w:%.1f, h:%.1f, d:%.1f sericeuid: %s\n" % (idx+1, whd[0], whd[1], whd[2], FN_seriesuid[idx]))
-    
-    fixed_tp, fixed_fp, fixed_fn = 0, 0, 0
-    
-    classified_metrics = {'benign': [0 ,0, 0],
-                        'probably_benign': [0 ,0, 0],
-                        'probably_suspicious': [0 ,0, 0],
-                        'suspicious': [0 ,0, 0]}
-    series_metric = dict()
-    logger.info('Fixed threshold: {}'.format(fixed_prob_threshold))
-    # dynamic_threshold = dynamic_threshold_wrapper(DYNAMIC_RATIO, fixed_prob_threshold)
-    for is_pos, prob, is_fn, nodule, cand, series_uid in zip(FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, FROC_nodule_list, FROC_candidates_list, FROC_series_uids):
-        if series_uid not in series_metric:
-            series_metric[series_uid] = [0, 0, 0]
-        
-        # threshold = dynamic_threshold(cand)
-        if is_fn or (is_pos == 1.0 and prob < fixed_prob_threshold):
-            fixed_fn += 1
-            classified_metrics[nodule.nodule_type][2] += 1
-            series_metric[series_uid][2] += 1
-        elif is_pos == 1.0 and prob >= fixed_prob_threshold:
-            fixed_tp += 1
-            classified_metrics[nodule.nodule_type][0] += 1
-            series_metric[series_uid][0] += 1
-        elif is_pos == 0.0 and prob >= fixed_prob_threshold:
-            fixed_fp += 1
-            classified_metrics[nodule.nodule_type][1] += 1
-            series_metric[series_uid][1] += 1
-    
-    fixed_recall = fixed_tp / max(fixed_tp + fixed_fn, 1e-6)
-    fixed_precision = fixed_tp / max(fixed_tp + fixed_fp, 1e-6)
-    fixed_f1_score = (2 * fixed_precision * fixed_recall) / max(fixed_precision + fixed_recall, 1e-6)
-    
-    template = '{:20s}: Recall={:.3f}, Precision={:.3f}, F1={:.3f}, TP={:4d}, FP={:4d}, FN={:4d}'
-    for nodule_type, metrics in classified_metrics.items():
-        tp, fp, fn = metrics
-        recall = tp / max(tp + fn, 1e-6)
-        precision = tp / max(tp + fp, 1e-6)
-        f1_score = 2 * precision * recall / max(precision + recall, 1e-6)
-        logger.info(template.format(nodule_type, recall, precision, f1_score, tp, fp, fn))
-    logger.info(template.format('All', fixed_recall, fixed_precision, fixed_f1_score, fixed_tp, fixed_fp, fixed_fn))
-    # Compute metrics for each series
-    recall_series = []
-    for series_uid, metrics in series_metric.items():
-        tp, fp, fn = metrics
-        recall = tp / max(tp + fn, 1e-6)
-        recall_series.append(recall)
-    logger.info('Recall(series_based): {:.3f}'.format(np.mean(recall_series)))
     # compute FROC
     fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
                                                     FROC_prob_list = FROC_prob_list, 
@@ -525,110 +329,6 @@ def evaluateCAD(seriesUIDs: List[str],
 
     return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score), (best_f1_score, best_f1_threshold)
     
-def get_nodule(annot: List[Any], 
-               header: List[str]) -> NoduleFinding:
-    nodule = NoduleFinding()
-    nodule.ctr_x = annot[header.index(COORDX)]
-    nodule.ctr_y = annot[header.index(COORDY)]
-    nodule.ctr_z = annot[header.index(COORDZ)]
-
-    nodule.w = float(annot[header.index(WW)])
-    nodule.h = float(annot[header.index(HH)])
-    nodule.d = float(annot[header.index(DD)])
-    
-    if NODULE_TYPE in header:
-        nodule.nodule_type = annot[header.index(NODULE_TYPE)]
-    else:
-        nodule.auto_nodule_type()
-    if CADProbability_label in header:
-        nodule.prob = annot[header.index(CADProbability_label)]
-    
-    return nodule
-
-def collect_nodule_annotations(annotations: List[List[Any]],
-                               seriesUIDs: List[str]) -> Dict[str, List[NoduleFinding]]:
-    """Collects all nodule annotations from the annotations file and returns them in a dictionary
-    
-    Args:
-        annotations: list of annotations
-        annotations_excluded: list of annotations that are excluded from analysis
-        seriesUIDs: list of CT images in seriesuids
-    Returns:
-        Dictionary with all nodule annotations of all cases, keys of the dictionary are the seriesuids
-    """
-    allNodules = {}
-    noduleCount = 0
-    noduleCountTotal = 0
-    
-    for seriesuid in seriesUIDs:
-        nodules = []
-        numberOfIncludedNodules = 0
-        
-        header = annotations[0]
-        for annotation in annotations[1:]:
-            nodule_seriesuid = annotation[header.index(SERIESUID)]
-            
-            if seriesuid == nodule_seriesuid:
-                nodule = get_nodule(annotation, header)
-                nodules.append(nodule)
-                numberOfIncludedNodules += 1
-            
-        allNodules[seriesuid] = nodules
-        noduleCount += numberOfIncludedNodules
-        noduleCountTotal += len(nodules)
-    
-    # logger.info('Total number of included nodule annotations: {}'.format(noduleCount))
-    logger.info('Total number of nodule annotations: {}'.format(noduleCountTotal))
-    return allNodules
-    
-def collect(annot_path: str, 
-            seriesuids_path: str) -> Tuple[Dict[str, List[NoduleFinding]], List[str]]:
-    """Collects all nodule annotations from the annotations file and returns them in a dictionary
-    Args:
-        annot_path: path to annotations file
-        seriesuids_path: path to seriesuids file
-    Returns:
-        A tuple of:
-        - Dictionary with all nodule annotations of all cases, keys of the dictionary are the seriesuids
-        - List of seriesuids
-    """
-    annotations = csvTools.readCSV(annot_path) 
-    seriesUIDs_csv = csvTools.readCSV(seriesuids_path)
-    
-    seriesUIDs = []
-    for seriesUID in seriesUIDs_csv:
-        seriesUIDs.append(seriesUID[0])
-
-    allNodules = collect_nodule_annotations(annotations, seriesUIDs)  
-    return allNodules, seriesUIDs
-    
-def nodule_evaluation(annot_path: str,
-                    series_uids_path: str,
-                    pred_results_path: str,
-                    output_dir: str,
-                    iou_threshold: float,
-                    fixed_prob_threshold: float = 0.8,
-                    max_num_of_nodule_candidate_in_series: int = 100):
-    """
-    function to load annotations and evaluate a CAD algorithm
-    Args:
-        annot_path: path to annotations file
-        seriesuids_path: path to seriesuids file
-        pred_results_path: path to prediction results file
-        output_dir: output directory
-        iou_threshold: iou threshold
-    """
-    all_gt_nodules, seriesUIDs = collect(annot_path, series_uids_path)
-    
-    out, fixed_out, (best_f1_score, best_f1_threshold) = evaluateCAD(seriesUIDs = seriesUIDs, 
-                                                                    results_path = pred_results_path, 
-                                                                    output_dir = output_dir, 
-                                                                    all_gt_nodules = all_gt_nodules,
-                                                                    max_num_of_nodule_candidate_in_series = max_num_of_nodule_candidate_in_series, 
-                                                                    fixed_prob_threshold=fixed_prob_threshold,
-                                                                    iou_threshold = iou_threshold)
-    return out, fixed_out, (best_f1_score, best_f1_threshold)
-
 import os
 import math
 from collections import defaultdict
@@ -654,7 +354,8 @@ def compute_nodule_volume(w: float, h: float, d: float) -> float:
     return volume
         
 class FROC:
-    def __init__(self):
+    def __init__(self, 
+                 nodule_types: List[str] = ['benign', 'probably_benign', 'probably_suspicious', 'suspicious']):
         self.is_pos_list = []
         self.is_FN_list = []
         self.prob_list = []
@@ -666,6 +367,8 @@ class FROC:
         self.tp_count = 0
         self.fp_count = 0
         self.fn_count = 0
+        
+        self.nodule_types = nodule_types
         
     def add(self, is_pos: bool, is_FN: bool, prob: float, series_name: str, nodule: NoduleFinding):
         self.is_pos_list.append(is_pos)
@@ -686,29 +389,71 @@ class FROC:
         else:
             self.canidates_list.append(nodule)
 
-    def get_recall(self, is_series_based: bool = False):
-        if not is_series_based:
-            return self.tp_count / max(self.tp_count + self.fn_count, 1e-6)
-        else:
-            series_recall = dict()
-            for series_name in set(self.series_names):
-                tp_count = 0
-                fn_count = 0
-                for i in range(len(self.series_names)):
-                    if self.series_names[i] == series_name:
-                        if self.is_pos_list[i]:
-                            tp_count += 1
-                        elif self.is_FN_list[i]:
-                            fn_count += 1
-                recall = tp_count / max(tp_count + fn_count, 1e-6)
-                series_recall.append(recall)
-            return np.mean(series_recall)
+    def get_metrics(self, prob_threshold: float = 0.0) -> Tuple[np.ndarray, float, float]:
+        ##TODO make prob_threshold into list
+        logger.info('Prob threshold: {:.3f}'.format(prob_threshold))
+        classified_metrics = dict()
+        series_metric = dict()
+        for nodule_type in self.nodule_types:
+            classified_metrics[nodule_type] = np.zeros(3, dtype=np.int32) # tp, fp, fn
+        for is_pos, is_FN, prob, nodule, series_name in zip(self.is_pos_list, self.is_FN_list, self.prob_list, self.nodules_list, self.series_names):
+            if series_name not in series_metric:
+                series_metric[series_name] = np.zeros(3, dtype=np.int32)
+            
+            if is_FN or (is_pos and prob < prob_threshold): # fn
+                classified_metrics[nodule.nodule_type][2] += 1
+                series_metric[series_name][2] += 1
+            elif is_pos and prob >= prob_threshold: # tp
+                classified_metrics[nodule.nodule_type][0] += 1
+                series_metric[series_name][0] += 1
+            elif not is_pos and prob >= prob_threshold: # fp
+                classified_metrics[nodule.nodule_type][1] += 1
+                series_metric[series_name][1] += 1
+        
+        # Compute metrics for all types
+        classified_metrics['all'] = np.zeros(3, dtype=np.int32)
+        for nodule_type in self.nodule_types:
+            classified_metrics['all'] += classified_metrics[nodule_type]
+        
+        for nodule_type in self.nodule_types + ['all']:
+            tp, fp, fn = classified_metrics[nodule_type]
+            recall = tp / max(tp + fn, 1e-6)
+            precision = tp / max(tp + fp, 1e-6)
+            f1_score = 2 * precision * recall / max(precision + recall, 1e-6)
+            logger.info(NODULE_TYPE_TEMPLATE.format(nodule_type, recall, precision, f1_score, tp, fp, fn))
     
+            classified_metrics[nodule_type] = {'recall': recall, 
+                                               'precision': precision, 
+                                               'f1_score': f1_score, 
+                                               'tp': tp, 
+                                               'fp': fp, 
+                                               'fn': fn}
+    
+        # Compute metrics for each series
+        recall_series_based = []
+        for series_name, metrics in series_metric.items():
+            tp, fp, fn = metrics
+            if tp + fn == 0:
+                recall_series_based.append(-1)
+            else:
+                recall_series_based.append(tp / max(tp + fn, 1e-6))
+        recall_series_based = np.array(recall_series_based)
+        
+        recall_remove_health_series_based = np.mean(recall_series_based[recall_series_based != -1])
+        recall_series_based[recall_series_based == -1] = 1
+        recall_series_based = np.mean(recall_series_based)
+        
+        logger.info('Recall(series_based): {:.3f}'.format(recall_series_based))
+        logger.info('Recall(remove_healthy_series_based): {:.3f}'.format(recall_remove_health_series_based))
+                
+        return classified_metrics, recall_series_based, recall_remove_health_series_based
+
 class Evaluation:
     def __init__(self, 
                  series_list_path: str,
                  image_spacing: Tuple[float, float, float],
                  nodule_type_diameters: Dict[str, float],
+                 prob_threshold: float = 0.65,
                  iou_threshold: float = 0.1,
                  nodule_size_mode = 'dhw', # or 'seg_size'
                  nodule_min_d: int = 0,
@@ -716,6 +461,7 @@ class Evaluation:
         
         self.image_spacing = np.array(image_spacing)
         self.iou_threshold = iou_threshold
+        self.prob_threshold = prob_threshold
         self.voxel_volume = np.prod(self.image_spacing)
         
         self.nodule_min_d = nodule_min_d
@@ -782,7 +528,7 @@ class Evaluation:
         num_of_all_pred_cands = len(preds)
         all_pred_cands = defaultdict(list)
         for pred in preds:
-            series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob = pred
+            series_name, ctr_x, ctr_y, ctr_z, prob, w, h, d = pred
             all_pred_cands[series_name].append(self._build_nodule_finding(series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob = prob))
         if len(all_pred_cands) > len(self.all_gt_nodules):
             raise ValueError('Number of predicted series is {} which is larger than the number of ground truth series {}'.format(len(all_pred_cands), len(self.all_gt_nodules)))
@@ -800,56 +546,212 @@ class Evaluation:
             # Compute the iou between all ground truth nodules and all predicted nodules
             gt_bboxes = np.array([gt_nodule.get_box(dim=2) for gt_nodule in gt_nodules]) # [M, 2, 3], 3 is for [x, y, z]
             pred_bboxes = np.array([cand.get_box(dim=2) for cand in pred_cands]) # [N, 2, 3], 3 is for [x, y, z]
-            all_ious = compute_bbox3d_iou(gt_bboxes, pred_bboxes) # [M, N]
+            
+            if len(gt_bboxes) != 0 and len(pred_bboxes) != 0:
+                all_ious = compute_bbox3d_iou(gt_bboxes, pred_bboxes) # [M, N]
+            else:
+                all_ious = np.zeros((0,))
             
             # Compute TP and FN
-            for gt_idx, gt_nodule in enumerate(gt_nodules):
-                ious = all_ious[gt_idx]
-                match_mask = (ious >= self.iou_threshold)
-                if np.any(match_mask):
-                    # Select the candidate with the highest probability
-                    match_cand_ids = np.where(match_mask == True)[0]
-                    max_prob_idx = np.argmax([pred_cands[cand_id].prob for cand_id in match_cand_ids])
-                    match_cand = pred_cands[match_cand_ids[max_prob_idx]]
-                    
-                    froc.add(is_pos=True, is_FN=False, prob=match_cand.prob, series_name=series_name, nodule=gt_nodule)
-                    
-                    max_prob_iou = ious[match_cand_ids[max_prob_idx]] # iou of the matched candidate with the highest probability
-                    match_cand.set_match(max_prob_iou, gt_nodule)
-                    gt_nodule.set_match(max_prob_iou, match_cand)
-                else:
-                    FN_gt_nodules.append(gt_nodule)
-                    gt_nodule.set_match(np.max(ious), None)
-                    froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
-                    
-            # Compute FP
-            pred_ious = np.max(all_ious, axis=0)
-            for iou, cand in zip(pred_ious, pred_cands):
-                if iou >= self.iou_threshold:
-                    continue
-                cand.set_match(iou, None)
-                froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
+            if len(gt_nodules) != 0:
+                for gt_idx, gt_nodule in enumerate(gt_nodules):
+                    ious = all_ious[gt_idx]
+                    match_mask = (ious >= self.iou_threshold)
+                    if np.any(match_mask):
+                        # Select the candidate with the highest probability
+                        match_cand_ids = np.where(match_mask == True)[0]
+                        max_prob_idx = np.argmax([pred_cands[cand_id].prob for cand_id in match_cand_ids])
+                        match_cand = pred_cands[match_cand_ids[max_prob_idx]]
+                        max_prob = match_cand.prob
+                        
+                        max_prob_iou = ious[match_cand_ids[max_prob_idx]] # iou of the matched candidate with the highest probability
+                        match_cand.set_match(max_prob_iou, gt_nodule)
+                        gt_nodule.set_match(max_prob_iou, match_cand)
+                        gt_nodule.prob = max_prob
+                        froc.add(is_pos=True, is_FN=False, prob=match_cand.prob, series_name=series_name, nodule=gt_nodule)
+                    else:
+                        FN_gt_nodules.append(gt_nodule)
+                        gt_nodule.set_match(np.max(ious), None)
+                        froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
             
+            # Compute FP
+            if len(pred_cands) != 0:
+                if len(all_ious) != 0:
+                    pred_ious = np.max(all_ious, axis=0)
+                    for iou, cand in zip(pred_ious, pred_cands):
+                        if iou >= self.iou_threshold:
+                            continue
+                        cand.set_match(iou, None)
+                        froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
+                else:
+                    for cand in pred_cands:
+                        froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
+
+        self._write_predicitions(save_dir, froc)
         self._write_FN_csv(FN_gt_nodules, save_dir)
+        classified_metrics, recall_series_based, recall_remove_health_series_based = froc.get_metrics(self.prob_threshold)
+        self._write_stats(froc, save_dir, classified_metrics, recall_series_based, recall_remove_health_series_based, num_of_all_pred_cands)
+        ##TODO: refactor this part
+        # compute FROC
+        FROC_is_pos_list = froc.is_pos_list
+        FROC_prob_list = froc.prob_list
+        seriesUIDs = list(set(froc.series_names))
+        FROC_is_FN_list = froc.is_FN_list
+        FROC_series_uids = froc.series_names
         
-    def _write_stats(self, froc: FROC, save_dir: str):    
+        fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
+                                                        FROC_prob_list = FROC_prob_list, 
+                                                        total_num_of_series = len(seriesUIDs), 
+                                                        FROC_is_FN_list = FROC_is_FN_list)
         
+        if PERFORMBOOTSTRAPPING:  # True
+            (fps_bs_itp, thresholds_mean), senstitivity_info, precision_info = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
+                                                                                                    FROC_prob_list = FROC_prob_list,
+                                                                                                    FROC_series_uids = FROC_series_uids,
+                                                                                                    seriesUIDs = seriesUIDs,
+                                                                                                    FROC_is_FN_list = FROC_is_FN_list,
+                                                                                                    numberOfBootstrapSamples = NUMBEROFBOOTSTRAPSAMPLES, 
+                                                                                                    confidence = CONFIDENCE)
+            sens_bs_mean, sens_bs_lb, sens_bs_up = senstitivity_info
+            prec_bs_mean, prec_bs_lb, prec_bs_up = precision_info
+            f1_score_mean = 2 * prec_bs_mean * sens_bs_mean / np.maximum(1e-6, prec_bs_mean + sens_bs_mean)
+            
+            best_f1_index = np.argmax(f1_score_mean)
+            best_f1_threshold = thresholds_mean[best_f1_index]
+            best_f1_sens = sens_bs_mean[best_f1_index]
+            best_f1_prec = prec_bs_mean[best_f1_index]
+            best_f1_score = f1_score_mean[best_f1_index]
+            logger.info('Best F1 score: {:.4f} at threshold: {:.3f}, Sens: {:.3f}, Prec: {:.3f}'.format(best_f1_score, best_f1_threshold, best_f1_sens, best_f1_prec))
+            # Write FROC curve
+            with open(os.path.join(save_dir, "froc_{}.txt".format(self.iou_threshold)), 'w') as f:
+                f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
+                for i in range(len(fps_bs_itp)):
+                    f.write("%.5f,%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], prec_bs_mean[i], f1_score_mean[i], thresholds_mean[i]))
+        # Write FROC vectors to disk as well
+        with open(os.path.join(save_dir, "froc_gt_prob_vectors_{}.csv".format(self.iou_threshold)), 'w') as f:
+            f.write("is_pos, prob\n")
+            for i in range(len(FROC_is_pos_list)):
+                f.write("%d,%.4f\n" % (FROC_is_pos_list[i], FROC_prob_list[i]))
+
+        fps_itp = np.linspace(FROC_MINX, FROC_MAXX, num=10001)
+        
+        sens_itp = np.interp(fps_itp, fps, sens)
+        prec_itp = np.interp(fps_itp, fps, precisions)
+        
+        sens_points = []
+        prec_points = []
+        
+        if PERFORMBOOTSTRAPPING: # True
+            # Write mean, lower, and upper bound curves to disk
+            with open(os.path.join(save_dir, "froc_bootstrapping_{}.csv".format(self.iou_threshold)), 'w') as f:
+                f.write("FPrate,Sensivity[Mean],Sensivity[Lower bound],Sensivity[Upper bound]\n")
+                for i in range(len(fps_bs_itp)):
+                    f.write("%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], sens_bs_lb[i], sens_bs_up[i]))
+                FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
+                total_sens = 0
+                # nodule_output_file.write('-'*20 + '\n')
+                # nodule_output_file.write("FP/Scan, Sensitivity, Precision\n")
+                for fp_point in FPS:
+                    index = np.argmin(abs(fps_bs_itp - fp_point))
+                    # nodule_output_file.write('{:.3f}, {:.3f}, {:.3f}\n'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
+                    sens_points.append(sens_bs_mean[index])
+                    prec_points.append(prec_bs_mean[index])
+                    total_sens += sens_bs_mean[index]
+                # nodule_output_file.write("\n")
+                # nodule_output_file.write("Froc_mean = {:.2f}\n".format(total_sens / len(FPS)))
+        else:
+            fps_bs_itp = None
+            sens_bs_mean = None
+            sens_bs_lb = None
+            sens_bs_up = None
+
+        # create FROC graphs
+        # if int(total_num_of_nodules) > 0:
+        fig1 = plt.figure()
+        ax = plt.gca()
+        clr = 'b'
+        plt.plot(fps_itp, sens_itp, color=clr, lw=2)
+        if PERFORMBOOTSTRAPPING:
+            plt.plot(fps_bs_itp, sens_bs_mean, color=clr, ls='--')
+            plt.plot(fps_bs_itp, sens_bs_lb, color=clr, ls=':') # , label = "lb")
+            plt.plot(fps_bs_itp, sens_bs_up, color=clr, ls=':') # , label = "ub")
+            ax.fill_between(fps_bs_itp, sens_bs_lb, sens_bs_up, facecolor=clr, alpha=0.05)
+        xmin = FROC_MINX
+        xmax = FROC_MAXX
+        plt.xlim(xmin, xmax)
+        plt.ylim(0, 1)
+        plt.xlabel('Average number of false positives per scan')
+        plt.ylabel('Sensitivity')
+        plt.title('FROC performance')
+        
+        if bLogPlot:
+            plt.xscale('log')
+            ax.xaxis.set_major_locator(plt.FixedLocator([0.125,0.25,0.5,1,2,4,8]))
+            ax.xaxis.set_major_formatter(FixedFormatter([0.125,0.25,0.5,1,2,4,8]))
+        
+        # set your ticks manually
+        ax.xaxis.set_ticks([0.125,0.25,0.5,1,2,4,8])
+        ax.yaxis.set_ticks(np.arange(0, 1.1, 0.1))
+        plt.grid(which='both')
+        plt.tight_layout()
+
+        plt.savefig(os.path.join(save_dir, "froc_{}.png".format(self.iou_threshold)), bbox_inches=0, dpi=300)
+
+        fixed_tp = classified_metrics['all']['tp']
+        fixed_fp = classified_metrics['all']['fp']
+        fixed_fn = classified_metrics['all']['fn']
+        fixed_recall = classified_metrics['all']['recall']
+        fixed_precision = classified_metrics['all']['precision']
+        fixed_f1_score = classified_metrics['all']['f1_score']
+        
+        return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score), (best_f1_score, best_f1_threshold)
+    
+    def _write_predicitions(self, save_dir: str, froc: FROC):
+        save_path = os.path.join(save_dir, "predictions.csv")
+        
+        header = "series_name,ctr_x,ctr_y,ctr_z,w,h,d,prob, nodule_type, match_iou\n"
+        lines = [header]
+        for cand in froc.nodules_list:
+            # if cand is None:
+            #     continue
+            series_name = cand.series_name
+            ctr_x, ctr_y, ctr_z = cand.ctr_x, cand.ctr_y, cand.ctr_z
+            w, h, d = cand.w, cand.h, cand.d
+            prob = cand.prob
+            nodule_type = cand.nodule_type
+            match_iou = cand.match_iou
+            lines.append("{},{},{},{},{},{},{},{},{},{}\n".format(series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob, nodule_type, match_iou))
+        
+        with open(save_path, 'w') as f:
+            f.writelines(lines)
+            
+    def _write_stats(self, froc: FROC, save_dir: str, classified_metrics: Dict[str, Dict[str, float]], recall_series_based: float, recall_remove_health_series_based: float, num_of_all_pred_cands: int): 
         stats_file_path = os.path.join(save_dir, "stats_{}.txt".format(self.iou_threshold))
+        # Get recall
+        # recall = froc.get_recall(is_series_based=False)
+        # recall_series_based, recall_remove_healthy_series_based = froc.get_recall(is_series_based=True)
+        
         with open(stats_file_path, 'w') as f:
+            
             f.write("TP: {}\n".format(froc.tp_count))
             f.write("FP: {}\n".format(froc.fp_count))
             f.write("FN: {}\n".format(froc.fn_count))
             
-            f.write("Recall: {:.3f}\n".format(froc.recall))
+            f.write("Number of all predicted candidates: {}\n".format(num_of_all_pred_cands))
+            f.write("Average number of candidates per series: {:.2f}\n".format(num_of_all_pred_cands / len(self.all_gt_nodules)))
+            f.write("Number of all ground truth nodules: {}\n".format(self.num_of_all_gt_nodules))
             
+            recall = froc.tp_count / max(froc.tp_count + froc.fn_count, 1e-6)
+            f.write("Recall(Threshold = 0): {:.3f}\n".format(recall))
             
-        # nodule_output_file.write("    Total number of ignored candidates which were double detections on a nodule: %d\n" % 0)
-        # if int(self.num_of_all_gt_nodules) == 0:
-        #     nodule_output_file.write("    Sensitivity: 0.0\n")
-        # else:
-        #     nodule_output_file.write("    Sensitivity: %.3f\n" % (float(tp_count) / float(self.num_of_all_gt_nodules)))
-        # nodule_output_file.write("    Average number of candidates per scan: %.9f\n" % (float(num_of_all_pred_cands) / float(len(self.all_gt_nodules)))
-        # nodule_output_file.close()
+            f.write("-"*20 + "\n")
+            for nodule_type, metrics in classified_metrics.items():
+                f.write(NODULE_TYPE_TEMPLATE.format(nodule_type, metrics['recall'], metrics['precision'], metrics['f1_score'], metrics['tp'], metrics['fp'], metrics['fn']))
+                f.write("\n")
+            f.write("-"*20 + "\n")
+            f.write("Recall(series_based): {:.3f}\n".format(recall_series_based))
+            f.write("Recall(remove_healthy_series_based): {:.3f}\n".format(recall_remove_health_series_based))
+        
     def _write_FN_csv(self, FN_gt_nodules: List[NoduleFinding], save_dir: str):
         if save_dir is None:
             return

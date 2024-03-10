@@ -23,7 +23,7 @@ class NoduleFinding:
         is_gt (bool): Whether the nodule is a ground truth nodule.        
     """
     def __init__(self, series_name: str, ctr_x: float, ctr_y: float, ctr_z: float, w: float, h: float, d: float, nodule_type: str, 
-                 prob=0, is_gt=False):
+                 prob=-1, is_gt=False):
         # set the variables and convert them to the correct type
         self.series_name = series_name
         self.ctr_x = to_float(ctr_x)
