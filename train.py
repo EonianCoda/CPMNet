@@ -57,6 +57,7 @@ def get_args():
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first', help='memory format of model, channels_first or channels_last, channels_last is faster on linux') # channels_last is faster on linux
     parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp(Only use for crop_fast InstanceCrop)')
+    parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
     parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
@@ -257,7 +258,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
-                                 min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
+                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg,norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 

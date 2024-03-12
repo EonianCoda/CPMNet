@@ -78,11 +78,13 @@ class InstanceCrop(object):
         all_rad = sample['all_rad']
         all_cls = sample['all_cls']
         
-        all_rad_pixel = all_rad / image_spacing
-        nodule_bb_min = all_loc - all_rad_pixel / 2
-        nodule_bb_max = all_loc + all_rad_pixel / 2
-        instance_loc = all_loc[np.sum([all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
-
+        if len(all_loc) != 0:
+            all_rad_pixel = all_rad / image_spacing
+            nodule_bb_min = all_loc - all_rad_pixel / 2
+            nodule_bb_max = all_loc + all_rad_pixel / 2
+            instance_loc = all_loc[np.sum([all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
+        else:
+            instance_loc = []
         image_itk = sitk.GetImageFromArray(image)
         shape = image.shape
         crop_size = np.array(self.crop_size)

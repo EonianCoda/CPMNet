@@ -2,9 +2,9 @@ import os
 import json
 import numpy as np
 from multiprocessing import Pool
-root = 'E:\workspace\medical\LDCT_test_dataset'
+root = 'D:\workspace\medical_dataset\LN_dataset'
 
-def crop_image(series_folder: str, series_name:str, margins = [8, 8, 0]): # margins = [y, x, z]
+def crop_image(series_folder: str, series_name:str, margins = [0, 0, 0]): # margins = [y, x, z]
     npy_path = os.path.join(series_folder, 'npy', f'{series_name}.npy')
     lobe_path = os.path.join(series_folder, 'npy', f'{series_name}_lobe.npz')
     lobe_info_path = os.path.join(series_folder, 'npy', 'lobe_info.txt')

@@ -54,6 +54,9 @@ class TrainDataset(Dataset):
         elif self.norm_method == 'none':
             logger.info('Normalize image to have value ranged from 0 to 1')
         
+        if use_bg:
+            logger.info('Using background(healthy lung) as training data')
+        
         self.series_infos = load_series_list(series_list_path)
         for folder, series_name in self.series_infos:
             label_path = gen_label_path(folder, series_name)
