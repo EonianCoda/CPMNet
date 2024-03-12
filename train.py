@@ -56,7 +56,10 @@ def get_args():
     parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first', help='memory format of model, channels_first or channels_last, channels_last is faster on linux') # channels_last is faster on linux
-    parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp(Only use for crop_fast InstanceCrop)')
+    
+    parser.add_argument('--crop_partial', action='store_true', default=False, help='crop partial nodule')
+    parser.add_argument('--crop_tp_iou', type=float, default=0.5, help='iou threshold for crop tp use if crop_partial is True')
+    
     parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
@@ -85,6 +88,7 @@ def get_args():
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
+    parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
     parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
@@ -139,6 +143,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
+                                   cls_num_neg=args.cls_num_neg,
                                    cls_num_hard = args.cls_num_hard,
                                    cls_fn_weight = args.cls_fn_weight,
                                    cls_fn_threshold = args.cls_fn_threshold)
@@ -249,6 +254,12 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                      rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
         mmap_mode = None
         logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
+    elif args.crop_partial:
+        from dataload.crop_partial import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        mmap_mode = None
+        logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
     else:
         from dataload.crop import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
@@ -258,7 +269,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
-                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg,norm_method=args.data_norm_method, mmap_mode=mmap_mode)
+                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 
