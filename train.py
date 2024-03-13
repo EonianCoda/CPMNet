@@ -36,7 +36,7 @@ early_stopping = None
 
 def get_args():
     parser = argparse.ArgumentParser()
-    # Rraining settings
+    # Training settings
     parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
     parser.add_argument('--mixed_precision', action='store_true', default=False, help='use mixed precision in training')
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision in validation')

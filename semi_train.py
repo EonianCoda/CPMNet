@@ -7,11 +7,9 @@ import logging
 import pickle
 import numpy as np
 from typing import Tuple
-from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
+from networks.ResNet_3D_CPM_semi import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
-from dataload.dataset import TrainDataset
-from dataload.dataset import DetDataset
-from dataload.unlabeled_dataset import UnLabeledDataset
+from dataload.semi_dataset import TrainDataset, DetDataset, UnLabeledDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_train_collate_fn
 from dataload.split_combine import SplitComb
@@ -32,7 +30,7 @@ from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
-from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING
+from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +39,12 @@ early_stopping = None
 def get_args():
     parser = argparse.ArgumentParser()
     # Training settings
+    parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
     parser.add_argument('--mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
+    parser.add_argument('--batch_size', type=int, default=6, help='input batch size for training (default: 6)')
+    parser.add_argument('--unlabeled_batch_size', type=int, default=6, help='input batch size for training (default: 6)')
+    parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
     parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 250)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
     parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
@@ -50,20 +52,19 @@ def get_args():
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
     # Data
-    parser.add_argument('--batch_size', type=int, default=6, help='input batch size for training (default: 6)')
-    parser.add_argument('--unlabeled_batch_size', type=int, default=6, help='input batch size for training (default: 6)')
-    parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
-    parser.add_argument('--unlabeled_num_samples', type=int, default=5, help='number of samples for each instance')
-    
-    parser.add_argument('--unlabeled_train_set', type=str, required=True, help='unlabeled_train_list')
-    parser.add_argument('--train_set', type=str, required=True, help='train_list')
-    parser.add_argument('--val_set', type=str, required=True,help='val_list')
-    parser.add_argument('--test_set', type=str, required=True,help='test_list')
+    parser.add_argument('--train_set', type=str, help='train_list')
+    parser.add_argument('--val_set', type=str, help='val_list')
+    parser.add_argument('--test_set', type=str, help='test_list')
+    parser.add_argument('--unlabeled_train_set', type=str, help='unlabeled_train_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of nodule, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first') # for speed up
-    parser.add_argument('--crop_tp_iou', type=float, default=0.7, help='iou threshold for crop tp(Only use for crop_fast InstanceCrop)')
+    
+    parser.add_argument('--crop_partial', action='store_true', default=False, help='crop partial nodule')
+    parser.add_argument('--crop_tp_iou', type=float, default=0.5, help='iou threshold for crop tp use if crop_partial is True')
+    
+    parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
     parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
@@ -89,12 +90,15 @@ def get_args():
     # Train hyper-parameters
     parser.add_argument('--pos_target_topk', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
+    parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
+    parser.add_argument('--unlabeled_num_samples', type=int, default=5, help='number of samples for each instance')
+    parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
+    parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
     parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Val hyper-parameters
-    parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
@@ -115,11 +119,11 @@ def get_args():
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     # other
-    parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'froc_mean_recall'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
+    parser.add_argument('--val_interval', type=int, default=1, help='validate interval')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, help='how many batches to wait before logging training status')
     args = parser.parse_args()
@@ -156,23 +160,31 @@ def build_model(args, device) -> Resnet18:
                      device = device)
     return model
 
-def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
+def prepare_training(args, device, num_training_steps):
     # build model
     model_s = build_model(args, device)
     model_t = build_model(args, device)
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
+                                   cls_num_neg=args.cls_num_neg,
                                    cls_num_hard = args.cls_num_hard,
                                    cls_fn_weight = args.cls_fn_weight,
                                    cls_fn_threshold = args.cls_fn_threshold)
     model_s.detection_loss = detection_loss
                                 
-    detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
+    train_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
+                                                    threshold = args.det_threshold, 
+                                                    nms_threshold = args.det_nms_threshold,
+                                                    nms_topk = args.det_nms_topk,
+                                                    crop_size = args.crop_size)
+        
+    val_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                  threshold = args.det_threshold, 
                                                  nms_threshold = args.det_nms_threshold,
                                                  nms_topk = args.det_nms_topk,
                                                  crop_size = args.crop_size)
+    
     start_epoch = 0
     memory_format = get_memory_format(getattr(args, 'memory_format', 'channels_first'))
     model_s = model_s.to(device=device, memory_format=memory_format)
@@ -217,7 +229,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
         load_states(args.pretrained_model_path, device, model_s)
         load_states(args.pretrained_model_path, device, model_t)
         
-    return start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, detection_postprocess
+    return start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, val_detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
@@ -280,6 +292,14 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                        
         mmap_mode = None
         logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
+    elif args.crop_partial:
+        from dataload.crop_partial import InstanceCrop
+        crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        mmap_mode = None
+        logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
     else:
         from dataload.crop import InstanceCrop
         crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
@@ -291,8 +311,8 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     
-    train_dataset_l = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train_l, image_spacing=IMAGE_SPACING, 
-                                transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
+    train_dataset_l = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train_l, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
+                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_l = DataLoader(train_dataset_l, 
                               batch_size=args.batch_size, 
                               shuffle=True,
@@ -305,7 +325,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     weak_aug = build_weak_augmentation(args, crop_size, pad_value, blank_side)
     strong_aug = train_transform
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, 
-                                       strong_aug=strong_aug, min_d=args.min_d, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
+                                       strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_u = DataLoader(train_dataset_u,
                                 batch_size=args.unlabeled_batch_size, 
                                 shuffle=True,
@@ -376,7 +396,6 @@ if __name__ == '__main__':
     
     if early_stopping is None:
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
-        
     pseu_labels = gen_pseu_labels(model = model_s,
                                 dataloader = det_loader_u,
                                 device = device,
@@ -389,74 +408,81 @@ if __name__ == '__main__':
     with open(pseu_label_save_path, 'wb') as f:
         pickle.dump(pseu_labels, f)
     
-    # for epoch in range(start_epoch, args.epochs + 1):
-    #     train_metrics = train(args = args,
-    #                         model = model_s,
-    #                         optimizer = optimizer,
-    #                         dataloader = train_loader_l,
-    #                         ema = ema, 
-    #                         device = device)
-    #     scheduler_warm.step()
-    #     write_metrics(train_metrics, epoch, 'train', writer)
-    #     for key, value in train_metrics.items():
-    #         logger.info('==> Epoch: {} {}: {:.4f}'.format(epoch, key, value))
-    #     # add learning rate to tensorboard
-    #     logger.info('==> Epoch: {} lr: {:.6f}'.format(epoch, scheduler_warm.get_lr()[0]))
-    #     write_metrics({'lr': scheduler_warm.get_lr()[0]}, epoch, 'train', writer)
+    ##TODO
+    for epoch in range(start_epoch, args.epochs + 1):
+        train_metrics = train(args = args,
+                            model_t = model_t,
+                            model_s = model_s,
+                            optimizer = optimizer,
+                            dataloader_u = train_loader_u,
+                            dataloader_l = train_loader_l,
+                            num_iters = len(train_loader_u),
+                            device = device)
+        scheduler_warm.step()
+        write_metrics(train_metrics, epoch, 'train', writer)
+        for key, value in train_metrics.items():
+            logger.info('==> Epoch: {} {}: {:.4f}'.format(epoch, key, value))
+        # add learning rate to tensorboard
+        logger.info('==> Epoch: {} lr: {:.6f}'.format(epoch, scheduler_warm.get_lr()[0]))
+        write_metrics({'lr': scheduler_warm.get_lr()[0]}, epoch, 'train', writer)
         
-    #     # Remove the checkpoint of epoch % save_model_interval != 0
-    #     for i in range(epoch):
-    #         ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
-    #         if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
-    #             os.remove(ckpt_path)
-    #     save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema)
+        # Remove the checkpoint of epoch % save_model_interval != 0
+        for i in range(epoch):
+            ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
+            if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
+                os.remove(ckpt_path)
+        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema)
         
-    #     if epoch >= args.start_val_epoch: 
-    #         # Use Shadow model to validate and save model
-    #         if ema is not None:
-    #             ema.apply_shadow()
+        if (epoch >= args.start_val_epoch and epoch % args.val_interval == 0) or epoch == args.epochs:
+            # Use Shadow model to validate and save model
+            if ema is not None:
+                ema.apply_shadow()
             
-    #         val_metrics = val(args = args,
-    #                         model = model_s,
-    #                         detection_postprocess=detection_postprocess,
-    #                         val_loader = val_loader, 
-    #                         device = device,
-    #                         image_spacing = IMAGE_SPACING,
-    #                         series_list_path=args.val_set,
-    #                         exp_folder=exp_folder,
-    #                         epoch = epoch,
-    #                         min_d=args.min_d,
-    #                         min_size=args.min_size,
-    #                         nodule_size_mode=args.nodule_size_mode)
+            val_metrics = val(args = args,
+                            model = model_s,
+                            detection_postprocess=detection_postprocess,
+                            val_loader = val_loader, 
+                            device = device,
+                            image_spacing = IMAGE_SPACING,
+                            series_list_path=args.val_set,
+                            exp_folder=exp_folder,
+                            epoch = epoch,
+                            nodule_type_diameters=NODULE_TYPE_DIAMETERS,
+                            min_d=args.min_d,
+                            min_size=args.min_size,
+                            nodule_size_mode=args.nodule_size_mode)
             
-    #         early_stopping.step(val_metrics, epoch)
-    #         write_metrics(val_metrics, epoch, 'val', writer)
+            early_stopping.step(val_metrics, epoch)
+            write_metrics(val_metrics, epoch, 'val', writer)
 
-    #         # Restore model
-    #         if ema is not None:
-    #             ema.restore()
-    # # Test
-    # logger.info('Test the best model')
-    # test_save_dir = os.path.join(exp_folder, 'test')
-    # os.makedirs(test_save_dir, exist_ok=True)
-    # for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
-    #     logger.info('Load best model from "{}"'.format(model_path))
-    #     load_states(model_path, device, model_s)
-    #     test_metrics = val(args = args,
-    #                         model = model_s,
-    #                         detection_postprocess=detection_postprocess,
-    #                         val_loader = test_loader,
-    #                         device = device,
-    #                         image_spacing = IMAGE_SPACING,
-    #                         series_list_path=args.test_set,
-    #                         exp_folder=exp_folder,
-    #                         epoch = 'test_best_{}'.format(target_metric),
-    #                         min_d=args.min_d)
-    #     write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
-    #     with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
-    #         f.write('Best epoch: {}\n'.format(best_epoch))
-    #         f.write('-' * 30 + '\n')
-    #         max_length = max([len(key) for key in test_metrics.keys()])
-    #         for key, value in test_metrics.items():
-    #             f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
-    # writer.close()
+            # Restore model
+            if ema is not None:
+                ema.restore()
+    # Test
+    logger.info('Test the best model')
+    test_save_dir = os.path.join(exp_folder, 'test')
+    os.makedirs(test_save_dir, exist_ok=True)
+    for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
+        logger.info('Load best model from "{}"'.format(model_path))
+        load_states(model_path, device, model_s)
+        test_metrics = val(args = args,
+                            model = model_s,
+                            detection_postprocess=detection_postprocess,
+                            val_loader = test_loader,
+                            device = device,
+                            image_spacing = IMAGE_SPACING,
+                            series_list_path=args.test_set,
+                            nodule_type_diameters=NODULE_TYPE_DIAMETERS,
+                            exp_folder=exp_folder,
+                            epoch = 'test_best_{}'.format(target_metric),
+                            min_d=args.min_d,
+                            min_size=args.min_size,
+                            nodule_size_mode=args.nodule_size_mode)
+        write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
+        with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
+            f.write('Best epoch: {}\n'.format(best_epoch))
+            f.write('-' * 30 + '\n')
+            max_length = max([len(key) for key in test_metrics.keys()])
+            for key, value in test_metrics.items():
+                f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
+    writer.close()

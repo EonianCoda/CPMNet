@@ -77,11 +77,16 @@ def train(args,
                 labeled_sample = next(iter_l)
 
             optimizer.zero_grad(set_to_none=True)
-            if mixed_precision:
-                with torch.cuda.amp.autocast():
-                    outputs_t = model_predict(model_t, sample_u['strong'], device)
-            else:
-                outputs_t = model_predict(model_t, sample_u['strong'], device)
+            
+            weak_u_sample = sample_u['weak']
+            strong_u_sample = sample_u['strong']
+            
+            with torch.no_grad():
+                if mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        outputs_t = model_predict(model_t, weak_u_sample, device)
+                else:
+                    outputs_t = model_predict(model_t, strong_u_sample, device)
             
             
             

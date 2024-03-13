@@ -158,7 +158,7 @@ class UpsamplingBlock(nn.Module):
 
 class ASPP(nn.Module):
     def __init__(self, channels, ratio=4,
-                 dilations=[1, 1, 2, 3],
+                 dilations=[1, 2, 3, 4],
                  norm_type='batchnorm', act_type='ReLU'):
         super(ASPP, self).__init__()
         # assert dilations[0] == 1, 'The first item in dilations should be `1`'
@@ -226,14 +226,11 @@ class ClsRegHead(nn.Module):
         return dict1
 
 class Resnet18(nn.Module):
-    def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
-                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
-                 first_stride=(2, 2, 2), detection_loss=None, device=None):
+    def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32, norm_type='batchnorm', 
+                 head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0, first_stride=(2, 2, 2)):
         super(Resnet18, self).__init__()
         assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
         assert len(n_filters) == 4, 'The length of n_filters should be 4'
-        self.detection_loss = detection_loss
-        self.device = device
 
         # Stem
         self.in_conv = ConvBlock(n_channels, stem_filters, stride=1, norm_type=norm_type, act_type=act_type)
@@ -277,10 +274,7 @@ class Resnet18(nn.Module):
         self._init_weight()
 
     def forward(self, inputs):
-        if self.training:
-            x, labels = inputs
-        else:
-            x = inputs
+        x = inputs
         "input encode"
         x = self.in_conv(x)
         x = self.in_dw(x)
@@ -314,9 +308,6 @@ class Resnet18(nn.Module):
         x = self.block22(x)
 
         out = self.head(x)
-        if self.training:
-            cls_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
-            return cls_loss, shape_loss, offset_loss, iou_loss
         return out
 
     def _init_weight(self):
