@@ -92,12 +92,13 @@ def get_args():
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
     parser.add_argument('--unlabeled_num_samples', type=int, default=5, help='number of samples for each instance')
-    parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
     parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
     parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
+    # Semi hyper-parameters
+    parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -174,10 +175,10 @@ def prepare_training(args, device, num_training_steps):
     model_s.detection_loss = detection_loss
                                 
     train_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
-                                                    threshold = args.det_threshold, 
-                                                    nms_threshold = args.det_nms_threshold,
-                                                    nms_topk = args.det_nms_topk,
-                                                    crop_size = args.crop_size)
+                                                        threshold = args.pseudo_label_threshold,
+                                                        nms_threshold = args.det_nms_threshold,
+                                                        nms_topk = args.det_nms_topk,
+                                                        crop_size = args.crop_size)
         
     val_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                  threshold = args.det_threshold, 
@@ -229,7 +230,7 @@ def prepare_training(args, device, num_training_steps):
         load_states(args.pretrained_model_path, device, model_s)
         load_states(args.pretrained_model_path, device, model_t)
         
-    return start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, val_detection_postprocess
+    return start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, train_detection_postprocess, val_detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
@@ -391,7 +392,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
-    start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader_u))
+    start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, train_detection_postprocess, val_detection_postprocess = prepare_training(args, device, len(train_loader_u))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
@@ -399,7 +400,7 @@ if __name__ == '__main__':
     pseu_labels = gen_pseu_labels(model = model_s,
                                 dataloader = det_loader_u,
                                 device = device,
-                                detection_postprocess = detection_postprocess,
+                                detection_postprocess = val_detection_postprocess,
                                 prob_threshold = 0.5,
                                 mixed_precision = args.val_mixed_precision,
                                 memory_format = args.memory_format)
@@ -416,6 +417,7 @@ if __name__ == '__main__':
                             optimizer = optimizer,
                             dataloader_u = train_loader_u,
                             dataloader_l = train_loader_l,
+                            detection_postprocess = train_detection_postprocess,
                             num_iters = len(train_loader_u),
                             device = device)
         scheduler_warm.step()
@@ -440,7 +442,7 @@ if __name__ == '__main__':
             
             val_metrics = val(args = args,
                             model = model_s,
-                            detection_postprocess=detection_postprocess,
+                            detection_postprocess=val_detection_postprocess,
                             val_loader = val_loader, 
                             device = device,
                             image_spacing = IMAGE_SPACING,
@@ -467,7 +469,7 @@ if __name__ == '__main__':
         load_states(model_path, device, model_s)
         test_metrics = val(args = args,
                             model = model_s,
-                            detection_postprocess=detection_postprocess,
+                            detection_postprocess=val_detection_postprocess,
                             val_loader = test_loader,
                             device = device,
                             image_spacing = IMAGE_SPACING,

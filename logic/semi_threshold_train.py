@@ -43,6 +43,7 @@ def train(args,
           optimizer: torch.optim.Optimizer,
           dataloader_u: DataLoader,
           dataloader_l: DataLoader,
+          detection_postprocess,
           num_iters: int,
           device: torch.device) -> Dict[str, float]:
     model_t.eval()
@@ -87,9 +88,7 @@ def train(args,
                         outputs_t = model_predict(model_t, weak_u_sample, device)
                 else:
                     outputs_t = model_predict(model_t, strong_u_sample, device)
-            
-            
-            
+                outputs_t = detection_postprocess(outputs_t, device=device) # shape: (n, 7), 7: prob, ctr_z, ctr_y, ctr_x, d, h, w
             
             # # Update teacher model by exponential moving average
             # for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):

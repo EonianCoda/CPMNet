@@ -4,7 +4,7 @@ from __future__ import print_function, division
 import json
 from .abstract_transform import AbstractTransform
 from .image_process import *
-from .ctr_transform import EmptyTransform, TransposeCTR, RotateCTR
+from .ctr_transform import TransposeCTR, RotateCTR
 import random
 import math
 from typing import Tuple
@@ -49,8 +49,7 @@ class RandomRotate90(AbstractTransform):
             rot_spacing = sample['spacing']
             for rot_axes, rot_angle in zip(all_rot_axes, rot_angles):
                 rot_image = self.rotate_3d_image(rot_image, rot_axes, rot_angle)
-                if len(rot_ctr) != 0:
-                    rot_ctr, rot_rad, rot_spacing = self.rotate_3d_bbox(rot_ctr, rot_rad, rot_spacing, image_shape, rot_axes, rot_angle)
+                rot_ctr, rot_rad, rot_spacing = self.rotate_3d_bbox(rot_ctr, rot_rad, rot_spacing, image_shape, rot_axes, rot_angle)
                 sample['ctr_transform'].append(RotateCTR(rot_angle, rot_axes, image_shape))
             sample['image'] = rot_image
             sample['ctr'] = rot_ctr
@@ -81,19 +80,23 @@ class RandomRotate90(AbstractTransform):
             angle: rotation angle. One of 90, 180, or 270.
             plane: rotation plane. One of 'xy', 'xz', or 'yz'.
         """
-        radian = math.radians(angle)
-        cos = np.cos(radian)
-        sin = np.sin(radian)
-        img_center = np.array(image_shape) / 2
         new_ctr_zyx = ctrs.copy()
-        new_ctr_zyx[:, rot_axes[0]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * cos - (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * sin + img_center[rot_axes[0]]
-        new_ctr_zyx[:, rot_axes[1]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * sin + (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * cos + img_center[rot_axes[1]]
-        
         new_shape_dhw = bbox_shapes.copy()
         new_image_spacing = image_spacing.copy()
+        
+        if len(ctrs) != 0:
+            radian = math.radians(angle)
+            cos = np.cos(radian)
+            sin = np.sin(radian)
+            img_center = np.array(image_shape) / 2
+            new_ctr_zyx = ctrs.copy()
+            new_ctr_zyx[:, rot_axes[0]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * cos - (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * sin + img_center[rot_axes[0]]
+            new_ctr_zyx[:, rot_axes[1]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * sin + (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * cos + img_center[rot_axes[1]]
+        
         if angle == 90 or angle == 270:
-            new_shape_dhw[:, rot_axes[0]] = bbox_shapes[:, rot_axes[1]] 
-            new_shape_dhw[:, rot_axes[1]] = bbox_shapes[:, rot_axes[0]]
+            if len(bbox_shapes) != 0:
+                new_shape_dhw[:, rot_axes[0]] = bbox_shapes[:, rot_axes[1]] 
+                new_shape_dhw[:, rot_axes[1]] = bbox_shapes[:, rot_axes[0]]
             new_image_spacing[rot_axes[0]] = image_spacing[rot_axes[1]]
             new_image_spacing[rot_axes[1]] = image_spacing[rot_axes[0]]
         return new_ctr_zyx, new_shape_dhw, new_image_spacing
