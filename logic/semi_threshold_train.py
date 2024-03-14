@@ -154,19 +154,20 @@ def train(args,
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
                         loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_train_one_step(args, model_s, strong_u_sample, device)
-                    loss_pseu = loss_pseu * args.lambda_pseu
-                    scaler.scale(loss_pseu).backward()
+                    # loss_pseu = loss_pseu * args.lambda_pseu
+                    # scaler.scale(loss_pseu).backward()
                 else:
                     loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_train_one_step(args, model_s, strong_u_sample, device)
-                    loss_pseu = loss_pseu * args.lambda_pseu
-                    loss_pseu.backward()
+                    # loss_pseu = loss_pseu * args.lambda_pseu
+                    # loss_pseu.backward()
                 
                 avg_pseu_cls_loss.update(cls_pseu_loss.item() * args.lambda_pseu_cls)
                 avg_pseu_shape_loss.update(shape_pseu_loss.item() * args.lambda_pseu_shape)
                 avg_pseu_offset_loss.update(offset_pseu_loss.item() * args.lambda_pseu_offset)
                 avg_pseu_iou_loss.update(iou_pseu_loss.item() * args.lambda_pseu_iou)
                 avg_pseu_loss.update(loss_pseu.item())
-            
+            else:
+                loss_pseu = torch.tensor(0.0, device=device)
             ### Labeled data    
             try:
                 labeled_sample = next(iter_l)
@@ -177,22 +178,26 @@ def train(args,
             if mixed_precision:
                 with torch.cuda.amp.autocast():
                     loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model_s, labeled_sample, device)
-                scaler.scale(loss).backward()
+                # scaler.scale(loss).backward()
             else:
                 loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model_s, labeled_sample, device)
-                loss.backward()
+                # loss.backward()
             
             avg_cls_loss.update(cls_loss.item() * args.lambda_cls)
             avg_shape_loss.update(shape_loss.item() * args.lambda_shape)
             avg_offset_loss.update(offset_loss.item() * args.lambda_offset)
             avg_iou_loss.update(iou_loss.item() * args.lambda_iou)
-            avg_loss.update(loss.item() * iters_to_accumulate)
+            avg_loss.update(loss.item())
             
             # Update model
+            total_loss = loss + loss_pseu * args.lambda_pseu
             if mixed_precision:
+                scaler.scale(total_loss).backward()
+                
                 scaler.step(optimizer)
                 scaler.update()
             else:
+                total_loss.backward()
                 optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             
