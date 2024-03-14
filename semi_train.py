@@ -106,7 +106,7 @@ def get_args():
     # Semi hyper-parameters
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
-    parser.add_argument('--semi_ema_alpha', type=int, default=0.997, help='alpha of ema')
+    parser.add_argument('--semi_ema_alpha', type=int, default=0.995, help='alpha of ema')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -435,7 +435,6 @@ if __name__ == '__main__':
             pseu_labels = pickle.load(f)
             
     train_loader_u.dataset.set_pseu_labels(pseu_labels)
-    ##TODO
     for epoch in range(start_epoch, args.epochs + 1):
         train_metrics = train(args = args,
                             model_t = model_t,
@@ -461,7 +460,7 @@ if __name__ == '__main__':
             ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
             if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
                 os.remove(ckpt_path)
-        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema)
+        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema, model_t = model_t)
         
         if (epoch >= args.start_val_epoch and epoch % args.val_interval == 0) or epoch == args.epochs:
             # Use Shadow model to validate and save model

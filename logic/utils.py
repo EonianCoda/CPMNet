@@ -24,7 +24,7 @@ def save_states(save_path: str, model: nn.Module, optimizer: torch.optim.Optimiz
         save_dict['ema_state_dict'] = ema.state_dict()
     
     for key, value in kwargs.items():
-        save_dict[key] = value
+        save_dict['{}_state_dict'.format(key)] = value.state_dict()
     
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(save_dict, save_path)
