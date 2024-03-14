@@ -106,6 +106,7 @@ def get_args():
     # Semi hyper-parameters
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
+    parser.add_argument('--pseudo_tp_ratio', type=float, default=0.8, help='positive ratio in pseudo label')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.995, help='alpha of ema')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -282,13 +283,13 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     rand_trans = [int(s * 2/3) for s in overlap_size]
     pad_value = get_image_padding_value(args.data_norm_method)
     
-    logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
+    logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}, pseudo_tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio, args.pseudo_tp_ratio))
     
     if args.not_use_itk_rotate:
         from dataload.crop_fast import InstanceCrop
         crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio,
+        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio,
                                        sample_num=args.unlabeled_num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = 'c'
         logger.info('Not use itk rotate')
@@ -296,7 +297,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         from dataload.crop_rand_spacing import InstanceCrop
         crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                      rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                      rand_spacing=args.rand_spacing, sample_num=args.unlabeled_num_samples, blank_side=blank_side, instance_crop=True)
                                        
         mmap_mode = None
@@ -305,7 +306,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         from dataload.crop_partial import InstanceCrop
         crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = None
         logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
@@ -313,7 +314,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         from dataload.crop import InstanceCrop
         crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.unlabeled_num_samples, blank_side=blank_side, instance_crop=True)
         mmap_mode = None
         logger.info('Use itk rotate {}'.format(args.rand_rot))

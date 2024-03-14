@@ -243,7 +243,7 @@ def train(args,
                                     shape_u = avg_pseu_shape_loss.avg,
                                     offset_u = avg_pseu_offset_loss.avg,
                                     giou_u = avg_pseu_iou_loss.avg,
-                                    num_pseudo_label = num_pseudo_label)
+                                    num_u = num_pseudo_label)
             progress_bar.update()
             
             # Update teacher model by exponential moving average
