@@ -48,6 +48,10 @@ def gen_pseu_labels(model: nn.Module,
                     nms_keep_top_k: int = 40,
                     mixed_precision: bool = False,
                     memory_format: str = None) -> Dict[str, np.ndarray]:
+    """
+    Return:
+        A dictionary with series name as key and pseudo labels as value. The pseudo label is a dictionary with keys 'all_loc', 'all_rad', 'all_cls'.
+    """
     logger.info("Generating pseudo labels")
     
     model.eval()
@@ -56,7 +60,7 @@ def gen_pseu_labels(model: nn.Module,
     
     pseudo_labels = dict()
     
-    with get_progress_bar('Pseudo Label Generation', len(dataloader)) as pbar:
+    with get_progress_bar('Pseu-Label Generation', len(dataloader)) as pbar:
         for sample in dataloader:
             data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format)
             nzhws = sample['nzhws']

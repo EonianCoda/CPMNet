@@ -7,7 +7,7 @@ import logging
 import pickle
 import numpy as np
 from typing import Tuple
-from networks.ResNet_3D_CPM_semi import Resnet18, DetectionPostprocess, DetectionLoss
+from networks.ResNet_3D_CPM_semi import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
 from dataload.semi_dataset import TrainDataset, DetDataset, UnLabeledDataset
 from dataload.utils import get_image_padding_value
@@ -87,6 +87,12 @@ def get_args():
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
     parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
+    
+    parser.add_argument('--lambda_pseu', type=float, default=1.0, help='weights of pseudo label')
+    parser.add_argument('--lambda_pseu_cls', type=float, default=4.0, help='weights of seg')
+    parser.add_argument('--lambda_pseu_offset', type=float, default=1.0,help='weights of offset')
+    parser.add_argument('--lambda_pseu_shape', type=float, default=0.1, help='weights of reg')
+    parser.add_argument('--lambda_pseu_iou', type=float, default=1.0, help='weights of iou loss')
     # Train hyper-parameters
     parser.add_argument('--pos_target_topk', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
@@ -98,7 +104,8 @@ def get_args():
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Semi hyper-parameters
-    parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
+    parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
+    parser.add_argument('--semi_ema_alpha', type=int, default=0.997, help='alpha of ema')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -145,7 +152,7 @@ def add_weight_decay(net, weight_decay):
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
 
-def build_model(args, device) -> Resnet18:
+def build_model(args) -> Resnet18:
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
                      act_type = args.act_type, 
@@ -157,14 +164,13 @@ def build_model(args, device) -> Resnet18:
                      stem_filters=args.stem_filters,
                      dropout=args.dropout,
                      dw_type = args.dw_type,
-                     up_type = args.up_type,
-                     device = device)
+                     up_type = args.up_type)
     return model
 
 def prepare_training(args, device, num_training_steps):
     # build model
-    model_s = build_model(args, device)
-    model_t = build_model(args, device)
+    model_s = build_model(args)
+    model_t = build_model(args)
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
@@ -172,15 +178,16 @@ def prepare_training(args, device, num_training_steps):
                                    cls_num_hard = args.cls_num_hard,
                                    cls_fn_weight = args.cls_fn_weight,
                                    cls_fn_threshold = args.cls_fn_threshold)
-    model_s.detection_loss = detection_loss
-                                
-    train_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
-                                                        threshold = args.pseudo_label_threshold,
-                                                        nms_threshold = args.det_nms_threshold,
-                                                        nms_topk = args.det_nms_topk,
-                                                        crop_size = args.crop_size)
-        
-    val_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
+
+    unsupervised_detection_loss = Unsupervised_DetectionLoss(crop_size = args.crop_size,
+                                                            pos_target_topk = args.pos_target_topk, 
+                                                            pos_ignore_ratio = args.pos_ignore_ratio,
+                                                            cls_num_neg=args.cls_num_neg,
+                                                            cls_num_hard = args.cls_num_hard,
+                                                            cls_fn_weight = args.cls_fn_weight,
+                                                            cls_fn_threshold = args.cls_fn_threshold)
+
+    detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                  threshold = args.det_threshold, 
                                                  nms_threshold = args.det_nms_threshold,
                                                  nms_topk = args.det_nms_topk,
@@ -230,7 +237,7 @@ def prepare_training(args, device, num_training_steps):
         load_states(args.pretrained_model_path, device, model_s)
         load_states(args.pretrained_model_path, device, model_t)
         
-    return start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, train_detection_postprocess, val_detection_postprocess
+    return start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
@@ -392,32 +399,52 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
-    start_epoch, model_s, model_t, optimizer, scheduler_warm, ema, train_detection_postprocess, val_detection_postprocess = prepare_training(args, device, len(train_loader_u))
+    start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader_u))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
-    pseu_labels = gen_pseu_labels(model = model_s,
-                                dataloader = det_loader_u,
-                                device = device,
-                                detection_postprocess = val_detection_postprocess,
-                                prob_threshold = 0.5,
-                                mixed_precision = args.val_mixed_precision,
-                                memory_format = args.memory_format)
-    
-    pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-    with open(pseu_label_save_path, 'wb') as f:
-        pickle.dump(pseu_labels, f)
-    
+
+    # pseu_labels = gen_pseu_labels(model = model_s,
+    #                                 dataloader = det_loader_u,
+    #                                 device = device,
+    #                                 detection_postprocess = detection_postprocess,
+    #                                 prob_threshold = 0.5,
+    #                                 mixed_precision = args.val_mixed_precision,
+    #                                 memory_format = args.memory_format)
+        
+    # pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
+    # with open(pseu_label_save_path, 'wb') as f:
+    #     pickle.dump(pseu_labels, f)
+    if not os.path.exists('./pseu_labels.pkl'):
+        pseu_labels = gen_pseu_labels(model = model_s,
+                                    dataloader = det_loader_u,
+                                    device = device,
+                                    detection_postprocess = detection_postprocess,
+                                    prob_threshold = 0.5,
+                                    mixed_precision = args.val_mixed_precision,
+                                    memory_format = args.memory_format)
+        
+        pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
+        with open(pseu_label_save_path, 'wb') as f:
+            pickle.dump(pseu_labels, f)
+    else:
+        logger.info('Load pseudo labels from "./pseu_labels.pkl"')
+        with open('./pseu_labels.pkl', 'rb') as f:
+            pseu_labels = pickle.load(f)
+            
+    train_loader_u.dataset.set_pseu_labels(pseu_labels)
     ##TODO
     for epoch in range(start_epoch, args.epochs + 1):
         train_metrics = train(args = args,
                             model_t = model_t,
                             model_s = model_s,
+                            detection_loss = detection_loss,
+                            unsupervised_detection_loss =  unsupervised_detection_loss,
                             optimizer = optimizer,
                             dataloader_u = train_loader_u,
                             dataloader_l = train_loader_l,
-                            detection_postprocess = train_detection_postprocess,
+                            detection_postprocess = detection_postprocess,
                             num_iters = len(train_loader_u),
                             device = device)
         scheduler_warm.step()
@@ -442,7 +469,7 @@ if __name__ == '__main__':
             
             val_metrics = val(args = args,
                             model = model_s,
-                            detection_postprocess=val_detection_postprocess,
+                            detection_postprocess=detection_postprocess,
                             val_loader = val_loader, 
                             device = device,
                             image_spacing = IMAGE_SPACING,
@@ -469,7 +496,7 @@ if __name__ == '__main__':
         load_states(model_path, device, model_s)
         test_metrics = val(args = args,
                             model = model_s,
-                            detection_postprocess=val_detection_postprocess,
+                            detection_postprocess=detection_postprocess,
                             val_loader = test_loader,
                             device = device,
                             image_spacing = IMAGE_SPACING,

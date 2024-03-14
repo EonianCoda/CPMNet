@@ -159,9 +159,7 @@ class DetDataset(Dataset):
 
 class UnLabeledDataset(Dataset):
     def __init__(self, series_list_path: str, image_spacing: List[float], weak_aug=None, strong_aug = None, crop_fn=None, 
-                 use_bg=False, min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None, labels = None):
-        self.labels = []
-        self.dicom_paths = []
+                 use_bg=False, min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None):
         self.series_list_path = series_list_path
         self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
@@ -178,15 +176,21 @@ class UnLabeledDataset(Dataset):
         elif self.norm_method == 'none':
             logger.info('Normalize image to have value ranged from 0 to 1')
         
+        self.dicom_paths = []
+        self.series_names = []
+        self.labels = None
         self.series_infos = load_series_list(series_list_path)
-        self.labels = labels
-
+        for folder, series_name in self.series_infos:
+            dicom_path = gen_dicom_path(folder, series_name)
+            self.dicom_paths.append(dicom_path)
+            self.series_names.append(series_name)
+            
         self.weak_aug = weak_aug
         self.strong_aug = strong_aug
         self.crop_fn = crop_fn
         self.mmap_mode = mmap_mode
 
-    def update_labels(self, labels):
+    def set_pseu_labels(self, labels):
         self.labels = labels
 
     def __len__(self):
@@ -203,9 +207,8 @@ class UnLabeledDataset(Dataset):
     
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
-        series_folder = self.series_infos[idx][0]
-        series_name = self.series_infos[idx][1]
-        label = self.labels[idx]
+        series_name = self.series_names[idx]
+        label = self.labels[series_name]
 
         image_spacing = self.image_spacing.copy() # z, y, x
         image = self.load_image(dicom_path) # z, y, x

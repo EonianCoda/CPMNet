@@ -89,24 +89,28 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     """
     
     # Prepare weak and strong batches
-    weak_batch = []
-    strong_batch = []
-    for b in batches['weak']:
-        weak_batch.extend(b)
-    for b in batches['strong']:
-        strong_batch.extend(b)
+    weak_batches = []
+    strong_batches = []
+    
+    for b in batches:
+        weak_batches.extend(b['weak'])
+        strong_batches.extend(b['strong'])
     
     # Prepare weak and strong images and annotations
     weak_imgs = []
     weak_annots = []
+    weak_spacings = []
     strong_imgs = []
     strong_annots = []
-    for b in weak_batch:
+    strong_spacings = []
+    for b in weak_batches:
         weak_imgs.append(b['image'])
         weak_annots.append(b['annot'])
-    for b in strong_batch:
+        weak_spacings.append(b['spacing'])
+    for b in strong_batches:
         strong_imgs.append(b['image'])
         strong_annots.append(b['annot'])
+        strong_spacings.append(b['spacing'])
     
     weak_imgs = np.stack(weak_imgs)
     strong_imgs = np.stack(strong_imgs)
@@ -115,8 +119,8 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     strong_max_num_annots = max(annot.shape[0] for annot in strong_annots)
     
     # Prepare weak and strong center transforms
-    weak_ctr_transforms = [s['ctr_transform'] for s in weak_batch]
-    strong_ctr_transforms = [s['ctr_transform'] for s in strong_batch]
+    weak_ctr_transforms = [s['ctr_transform'] for s in weak_batches]
+    strong_ctr_transforms = [s['ctr_transform'] for s in strong_batches]
     
     # Pad weak and strong annotations
     if weak_max_num_annots > 0:
@@ -138,11 +142,13 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     # Return the samples
     weak_samples = {'image': torch.from_numpy(weak_imgs), 
                     'annot': torch.from_numpy(weak_annot_padded), 
-                    'ctr_transform': weak_ctr_transforms}
+                    'ctr_transform': weak_ctr_transforms,
+                    'spacing': weak_spacings}
     
     strong_samples = {'image': torch.from_numpy(strong_imgs),
                     'annot': torch.from_numpy(strong_annot_padded),
-                    'ctr_transform': strong_ctr_transforms}
+                    'ctr_transform': strong_ctr_transforms,
+                    'spacing': strong_spacings}
     
     samples = {'weak': weak_samples, 
                'strong': strong_samples}
