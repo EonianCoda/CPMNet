@@ -4,6 +4,7 @@ import random
 import numpy as np
 from .abstract_transform import AbstractTransform
 from .ctr_transform import OffsetMinusCTR
+from .feat_transform import FlipFeatTransform
 
 class RandomFlip(AbstractTransform):
     """ random flip the image (shape [C, D, H, W] or [C, H, W]) """
@@ -23,31 +24,32 @@ class RandomFlip(AbstractTransform):
         image = sample['image']
         input_shape = image.shape
         input_dim = len(input_shape) - 1
-        flip_axis = []
+        flip_axes = []
         if self.flip_width:
             if random.random() < self.p:
-                flip_axis.append(-1)
+                flip_axes.append(-1)
         if self.flip_height:
             if random.random() < self.p:
-                flip_axis.append(-2)
+                flip_axes.append(-2)
         if input_dim == 3 and self.flip_depth:
             if random.random() < self.p:
-                flip_axis.append(-3)
+                flip_axes.append(-3)
 
-        if len(flip_axis) > 0:
+        if len(flip_axes) > 0:
             # use .copy() to avoid negative strides of numpy array
             # current pytorch does not support negative strides
-            image_t = np.flip(image, flip_axis).copy()
+            image_t = np.flip(image, flip_axes).copy()
             sample['image'] = image_t
 
             if 'ctr' in sample:
                 ctr = sample['ctr'].copy()
                 offset = np.array([0, 0, 0]) # (z, y, x)
-                for axis in flip_axis:
+                for axis in flip_axes:
                     ctr[:, axis] = input_shape[axis] - 1 - ctr[:, axis]
                     offset[axis] = input_shape[axis] - 1
                 sample['ctr'] = ctr
                 sample['ctr_transform'].append(OffsetMinusCTR(offset))
+                sample['feat_transform'].append(FlipFeatTransform(flip_axes))
         return sample
 
 class RandomMaskFlip(AbstractTransform):

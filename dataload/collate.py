@@ -122,6 +122,9 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     weak_ctr_transforms = [s['ctr_transform'] for s in weak_batches]
     strong_ctr_transforms = [s['ctr_transform'] for s in strong_batches]
     
+    weak_feat_transforms = [s['feat_transform'] for s in weak_batches]
+    strong_feat_transforms = [s['feat_transform'] for s in strong_batches]
+    
     # Pad weak and strong annotations
     if weak_max_num_annots > 0:
         weak_annot_padded = np.ones((len(weak_annots), weak_max_num_annots, 10), dtype='float32') * -1
@@ -143,11 +146,13 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     weak_samples = {'image': torch.from_numpy(weak_imgs), 
                     'annot': torch.from_numpy(weak_annot_padded), 
                     'ctr_transform': weak_ctr_transforms,
+                    'feat_transform': weak_feat_transforms,
                     'spacing': weak_spacings}
     
     strong_samples = {'image': torch.from_numpy(strong_imgs),
                     'annot': torch.from_numpy(strong_annot_padded),
                     'ctr_transform': strong_ctr_transforms,
+                    'feat_transform': strong_feat_transforms,
                     'spacing': strong_spacings}
     
     samples = {'weak': weak_samples, 

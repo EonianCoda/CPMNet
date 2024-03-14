@@ -5,6 +5,7 @@ import json
 from .abstract_transform import AbstractTransform
 from .image_process import *
 from .ctr_transform import TransposeCTR, RotateCTR
+from .feat_transform import Rot90FeatTransform, TransposeFeatTransform
 import random
 import math
 from typing import Tuple
@@ -31,15 +32,15 @@ class RandomRotate90(AbstractTransform):
         all_rot_axes = []
         rot_angles = []
         if random.random() < self.p and self.rot_xy:
-            all_rot_axes.append((2, 1))
+            all_rot_axes.append((-1, -2))
             rot_angles.append(np.random.choice(self.rot_angles, 1)[0])
         
         if random.random() < self.p and self.rot_xz:
-            all_rot_axes.append((2, 0))
+            all_rot_axes.append((-1, -3))
             rot_angles.append(np.random.choice(self.rot_angles, 1)[0])
         
         if random.random() < self.p and self.rot_yz:
-            all_rot_axes.append((1, 0))
+            all_rot_axes.append((-2, -3))
             rot_angles.append(np.random.choice(self.rot_angles, 1)[0])
         
         if len(all_rot_axes) > 0:
@@ -51,6 +52,7 @@ class RandomRotate90(AbstractTransform):
                 rot_image = self.rotate_3d_image(rot_image, rot_axes, rot_angle)
                 rot_ctr, rot_rad, rot_spacing = self.rotate_3d_bbox(rot_ctr, rot_rad, rot_spacing, image_shape, rot_axes, rot_angle)
                 sample['ctr_transform'].append(RotateCTR(rot_angle, rot_axes, image_shape))
+                sample['feat_transform'].append(Rot90FeatTransform(rot_angle, rot_axes))
             sample['image'] = rot_image
             sample['ctr'] = rot_ctr
             sample['rad'] = rot_rad
@@ -66,7 +68,6 @@ class RandomRotate90(AbstractTransform):
             rot_angle: rotation angle. One of 90, 180, or 270.
         """
         rotated_data = data.copy()
-        rot_axes = np.array(rot_axes) + 1 # Image has channel dimension in the first dimension 
         rotated_data = np.rot90(rotated_data, k=rot_angle // 90, axes=rot_axes)
         return rotated_data
 
@@ -213,6 +214,7 @@ class RandomTranspose(AbstractTransform):
             sample['rad'] = sample['rad'][:, transpose_order[1:] - 1]
             sample['spacing'] = sample['spacing'][transpose_order[1:] - 1]
             sample['ctr_transform'].append(TransposeCTR(transpose_order))
+            sample['feat_transform'].append(TransposeFeatTransform(transpose_order))
         return sample
 
 class RandomMaskTranspose(AbstractTransform):

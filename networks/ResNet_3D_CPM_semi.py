@@ -668,7 +668,7 @@ class Unsupervised_DetectionLoss(nn.Module):
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, background_mask, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
 
@@ -689,6 +689,7 @@ class Unsupervised_DetectionLoss(nn.Module):
         """
         classification_losses = []
         batch_size = pred.shape[0]
+        background_mask = background_mask.unsqueeze(-1) # shape = (b, num_points, 1)
         for j in range(batch_size):
             pred_b = pred[j]
             target_b = target[j]
@@ -711,31 +712,30 @@ class Unsupervised_DetectionLoss(nn.Module):
                 FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
                 cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
                 
-                # Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
+                Negative_loss = cls_loss[record_targets == 0 & background_mask[j]]
                 
-                # if num_neg != -1:
-                #     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
-                #     Negative_loss = Negative_loss[neg_idcs] 
-                # _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
-                # Negative_loss = Negative_loss[keep_idx] 
+                if num_neg != -1:
+                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
+                    Negative_loss = Negative_loss[neg_idcs]
+                _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
+                Negative_loss = Negative_loss[keep_idx] 
                 
                 Positive_loss = Positive_loss.sum()
-                # Negative_loss = Negative_loss.sum()
-                # cls_loss = Positive_loss + Negative_loss
-                cls_loss = Positive_loss
-                classification_losses.append(cls_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
-            # else:
-            #     cls_loss = torch.tensor(0).float().to(pred_b.device)
-                # Negative_loss = cls_loss[record_targets == 0]
-                # if num_neg != -1:
-                #     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
-                #     Negative_loss = Negative_loss[neg_idcs]
-                # assert len(Negative_loss) > num_hard
-                # _, keep_idx = torch.topk(Negative_loss, num_hard)
-                # Negative_loss = Negative_loss[keep_idx]
-                # Negative_loss = Negative_loss.sum()
-                # cls_loss = Negative_loss
+                Negative_loss = Negative_loss.sum()
+                cls_loss = Positive_loss + Negative_loss
+
+            else:
+                Negative_loss = cls_loss[record_targets == 0 & background_mask[j]]
+                if num_neg != -1:
+                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
+                    Negative_loss = Negative_loss[neg_idcs]
+                assert len(Negative_loss) > num_hard
+                _, keep_idx = torch.topk(Negative_loss, num_hard)
+                Negative_loss = Negative_loss[keep_idx]
+                Negative_loss = Negative_loss.sum()
+                cls_loss = Negative_loss
+            classification_losses.append(cls_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
         return torch.mean(torch.stack(classification_losses))
     
     @staticmethod
@@ -894,6 +894,7 @@ class Unsupervised_DetectionLoss(nn.Module):
     def forward(self, 
                 output: Dict[str, torch.Tensor], 
                 annotations: torch.Tensor,
+                background_mask: torch.Tensor, # shape = (b, num_points)
                 device):
         """
         Args:
@@ -935,7 +936,10 @@ class Unsupervised_DetectionLoss(nn.Module):
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         fg_mask = target_scores.squeeze(-1).bool()
-        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), 
+        classification_losses = self.cls_loss(pred = pred_scores, 
+                                              target = target_scores, 
+                                              mask_ignore = mask_ignore.int(), 
+                                              background_mask = background_mask,
                                               num_hard=self.cls_num_hard, 
                                               num_neg=self.cls_num_neg,
                                               fn_weight=self.cls_fn_weight, 

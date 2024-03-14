@@ -103,6 +103,7 @@ class TrainDataset(Dataset):
             sample['spacing'] = image_spacing
             if self.transform_post:
                 sample['ctr_transform'] = []
+                sample['feat_transform'] = []
                 sample = self.transform_post(sample)
             sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             random_samples.append(sample)

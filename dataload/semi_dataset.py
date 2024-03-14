@@ -109,6 +109,7 @@ class TrainDataset(Dataset):
             sample['image'] = normalize_raw_image(sample['image'])
             if self.transform_post:
                 sample['ctr_transform'] = []
+                sample['feat_transform'] = []
                 sample = self.transform_post(sample)
             sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             random_samples.append(sample)
@@ -229,6 +230,7 @@ class UnLabeledDataset(Dataset):
             sample['image'] = normalize_raw_image(sample['image'])
             sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             sample['ctr_transform'] = []
+            sample['feat_transform'] = []
     
             weak_samples.append(self.weak_aug(copy.deepcopy(sample)))
             strong_samples.append(self.strong_aug(sample))
