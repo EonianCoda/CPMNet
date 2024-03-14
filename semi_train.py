@@ -105,6 +105,7 @@ def get_args():
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Semi hyper-parameters
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
+    parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.997, help='alpha of ema')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
