@@ -5,6 +5,7 @@ import logging
 import numpy as np
 from typing import Any, Dict, List, Tuple
 
+import time
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -16,12 +17,26 @@ from transform.label import CoordToAnnot
 
 logger = logging.getLogger(__name__)
 
+class Timer:
+    def __init__(self):
+        self.start_time = 0
+        self.end_time = 0
+        self.duration = 0
+    
+    def start(self):
+        self.start_time = time.time()
+    
+    def end(self):
+        self.end_time = time.time()
+        self.duration = self.end_time - self.start_time
+        return self.duration
+
 def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
-    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
-        labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
+    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, device: torch.device, drop=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         # Compute loss
-        outputs = model(image)
+        image = sample['image']
+        labels = sample['annot']
+        outputs = model(image, drop)
         cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, device = device)
         cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
         loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
@@ -48,7 +63,6 @@ def model_predict_wrapper(memory_format):
     return model_predict
 
 def train(args,
-          model_t: nn.modules,
           model_s: nn.modules,
           detection_loss,
           unsupervised_detection_loss,
@@ -58,7 +72,6 @@ def train(args,
           detection_postprocess,
           num_iters: int,
           device: torch.device) -> Dict[str, float]:
-    model_t.eval()
     model_s.train()
     
     avg_cls_loss = AverageMeter()
@@ -91,6 +104,7 @@ def train(args,
     
     num_pseudo_label = 0
     coord_to_annot = CoordToAnnot()
+    timer = Timer()
     with get_progress_bar('Train', num_iters) as progress_bar:
         for sample_u in dataloader_u:         
             optimizer.zero_grad(set_to_none=True)
@@ -101,9 +115,9 @@ def train(args,
             with torch.no_grad():
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
-                        feats_t = model_predict(model_t, weak_u_sample, device) # shape: (bs, top_k, 7)
+                        feats_t = model_predict(model_s, weak_u_sample, device) # shape: (bs, top_k, 7)
                 else:
-                    feats_t = model_predict(model_t, strong_u_sample, device)
+                    feats_t = model_predict(model_s, strong_u_sample, device)
                 # shape: (bs, top_k, 8)
                 # => top_k (default = 60) 
                 # => 8: 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
@@ -188,9 +202,16 @@ def train(args,
                 # raise ValueError('Check the pseudo label')
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
+                        strong_u_sample['image'] = strong_u_sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
+                        strong_u_sample['annot'] = strong_u_sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
                         loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
-                else:
-                    loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
+                        loss_pseu2, cls_pseu_loss2, shape_pseu_loss2, offset_pseu_loss2, iou_pseu_loss2 = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device, drop=0.5)
+                        
+                        loss_pseu = (loss_pseu + loss_pseu2) / 2
+                        cls_pseu_loss = (cls_pseu_loss + cls_pseu_loss2) / 2
+                        shape_pseu_loss = (shape_pseu_loss + shape_pseu_loss2) / 2
+                        offset_pseu_loss = (offset_pseu_loss + offset_pseu_loss2) / 2
+                        iou_pseu_loss = (iou_pseu_loss + iou_pseu_loss2) / 2
                 
                 avg_pseu_cls_loss.update(cls_pseu_loss.item() * args.lambda_pseu_cls)
                 avg_pseu_shape_loss.update(shape_pseu_loss.item() * args.lambda_pseu_shape)
@@ -245,11 +266,6 @@ def train(args,
                                     num_u = num_pseudo_label)
             progress_bar.update()
             
-            with torch.no_grad():
-                # Update teacher model by exponential moving average
-                for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
-                    teacher_param.data.mul_(args.semi_ema_alpha).add_((1 - args.semi_ema_alpha) * param.data)
-                
             ##TODO update BN?
     metrics = {'loss': avg_loss.avg,
                 'cls_loss': avg_cls_loss.avg,
