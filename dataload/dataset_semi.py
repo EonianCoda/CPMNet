@@ -192,10 +192,24 @@ class UnLabeledDataset(Dataset):
         self.mmap_mode = mmap_mode
 
     def set_pseu_labels(self, labels):
+        """
+        the shape in labels is pixel spacing, and the order is [z, y, x]
+        """
         self.labels = labels
+        
+        new_labels = {}
+        keep_indices = []
+        for i, series_name in enumerate(self.series_names):
+            if len(labels[series_name]['all_loc']) > 0:
+                keep_indices.append(i)
+                new_labels[series_name] = labels[series_name]
+                
+        self.labels = new_labels
+        self.dicom_paths = [self.dicom_paths[i] for i in keep_indices]
+        self.series_names = [self.series_names[i] for i in keep_indices]
 
     def __len__(self):
-        return len(self.series_infos)
+        return len(self.dicom_paths)
 
     def load_image(self, dicom_path: str) -> np.ndarray:
         """
@@ -209,16 +223,21 @@ class UnLabeledDataset(Dataset):
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
         series_name = self.series_names[idx]
-        label = self.labels[series_name]
+        label = self.labels[series_name].copy()
 
         image_spacing = self.image_spacing.copy() # z, y, x
         image = self.load_image(dicom_path) # z, y, x
         
         samples = {}
         samples['image'] = image
-        samples['all_loc'] = label['all_loc'] # z, y, x
-        samples['all_rad'] = label['all_rad'] # d, h, w
-        samples['all_cls'] = label['all_cls']
+        # We need to convert pixel spacing to world spacing
+        samples[ALL_LOC] = label[ALL_LOC] # z, y, x
+        if len(label[ALL_RAD]) > 0:
+            samples[ALL_RAD] = label[ALL_RAD] * image_spacing # d, h, w
+        else:
+            samples[ALL_RAD] = label[ALL_RAD] # d, h, w
+        samples[ALL_CLS] = label[ALL_CLS]
+        
         samples['file_name'] = series_name
         samples = self.crop_fn(samples, image_spacing)
         random_samples = []

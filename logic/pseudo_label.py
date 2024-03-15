@@ -8,7 +8,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from utils.box_utils import nms_3D
-from dataload.utils import ALL_LOC, ALL_RAD, ALL_CLS, NODULE_SIZE
+from dataload.utils import ALL_LOC, ALL_RAD, ALL_CLS, ALL_PROB, NODULE_SIZE
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 def pred2label(pred: np.ndarray, prob_threshold: float) -> Dict[str, np.ndarray]:
     pred = pred[..., 1:] # List of [prob, ctr_z, ctr_y, ctr_x, d, h, w]
         
+    all_prob = []
     all_loc = []
     all_rad = []
     all_cls = []
@@ -28,15 +29,18 @@ def pred2label(pred: np.ndarray, prob_threshold: float) -> Dict[str, np.ndarray]
         all_loc.append([ctr_z, ctr_y, ctr_x])
         all_rad.append([d, h, w])
         all_cls.append(0)
+        all_prob.append(prob)
         
     if len(all_loc) == 0:
         label = {ALL_LOC: np.zeros((0, 3)),
                 ALL_RAD: np.zeros((0,)),
-                ALL_CLS: np.zeros((0, 3), dtype=np.int32)}
+                ALL_CLS: np.zeros((0, 3), dtype=np.int32),
+                ALL_PROB: np.zeros((0,))}
     else:
         label = {ALL_LOC: np.array(all_loc),
                 ALL_RAD: np.array(all_rad),
-                ALL_CLS: np.array(all_cls, dtype=np.int32)}
+                ALL_CLS: np.array(all_cls, dtype=np.int32),
+                ALL_PROB: np.array(all_prob)}
     return label
     
 def gen_pseu_labels(model: nn.Module,

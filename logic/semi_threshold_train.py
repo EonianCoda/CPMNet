@@ -225,13 +225,11 @@ def train(args,
             total_loss = loss + loss_pseu * args.lambda_pseu
             if mixed_precision:
                 scaler.scale(total_loss).backward()
-                
                 scaler.step(optimizer)
                 scaler.update()
             else:
                 total_loss.backward()
                 optimizer.step()
-            optimizer.zero_grad(set_to_none=True)
             
             progress_bar.set_postfix(loss_l = avg_loss.avg,
                                     cls_l = avg_cls_loss.avg,

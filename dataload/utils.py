@@ -3,7 +3,6 @@ import json
 import numpy as np
 
 from typing import Dict, List
-from evaluationScript.nodule_typer import compute_nodule_volume
 DEFAULT_WINDOW_LEVEL = -300
 DEFAULT_WINDOW_WIDTH = 1400
 
@@ -12,6 +11,7 @@ NODULE_SIZE = 'nodule_size'
 ALL_LOC = 'all_loc'
 ALL_RAD = 'all_rad'
 ALL_CLS = 'all_cls'
+ALL_PROB = 'all_prob'
 
 def gen_dicom_path(folder: str, series_name: str) -> str:
     return os.path.join(folder, 'npy', f'{series_name}_crop.npy')

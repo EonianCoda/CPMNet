@@ -9,7 +9,7 @@ import numpy as np
 from typing import Tuple
 from networks.ResNet_3D_CPM_semi import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
-from dataload.semi_dataset import TrainDataset, DetDataset, UnLabeledDataset
+from dataload.dataset_semi import TrainDataset, DetDataset, UnLabeledDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_train_collate_fn
 from dataload.split_combine import SplitComb
@@ -106,8 +106,7 @@ def get_args():
     # Semi hyper-parameters
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
-    parser.add_argument('--pseudo_tp_ratio', type=float, default=0.8, help='positive ratio in pseudo label')
-    parser.add_argument('--semi_ema_alpha', type=int, default=0.995, help='alpha of ema')
+    parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -283,79 +282,41 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     rand_trans = [int(s * 2/3) for s in overlap_size]
     pad_value = get_image_padding_value(args.data_norm_method)
     
-    logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}, pseudo_tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio, args.pseudo_tp_ratio))
+    logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
-    if args.not_use_itk_rotate:
-        from dataload.crop_fast import InstanceCrop
-        crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio,
-                                       sample_num=args.unlabeled_num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        mmap_mode = 'c'
-        logger.info('Not use itk rotate')
-    elif args.use_rand_spacing:
-        from dataload.crop_rand_spacing import InstanceCrop
-        crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                     rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                     rand_spacing=args.rand_spacing, sample_num=args.unlabeled_num_samples, blank_side=blank_side, instance_crop=True)
-                                       
-        mmap_mode = None
-        logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
-    elif args.crop_partial:
-        from dataload.crop_partial import InstanceCrop
-        crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        mmap_mode = None
-        logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
-    else:
-        from dataload.crop import InstanceCrop
-        crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-        crop_fn_train_u = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.pseudo_tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.unlabeled_num_samples, blank_side=blank_side, instance_crop=True)
-        mmap_mode = None
-        logger.info('Use itk rotate {}'.format(args.rand_rot))
+    # Build crop function
+    from dataload.crop import InstanceCrop
+    from dataload.crop_semi import InstanceCrop as InstanceCrop_semi
+    crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+    crop_fn_train_u = InstanceCrop_semi(crop_size=crop_size, overlap_ratio=args.overlap_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                sample_num=args.unlabeled_num_samples, blank_side=blank_side)
+    mmap_mode = None
+    logger.info('Use itk rotate {}'.format(args.rand_rot))
 
+    # Build labeled dataloader
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
-    
     train_dataset_l = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train_l, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
                                  min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
-    train_loader_l = DataLoader(train_dataset_l, 
-                              batch_size=args.batch_size, 
-                              shuffle=True,
-                              collate_fn=train_collate_fn,
-                              num_workers=min(args.batch_size, args.max_workers),
-                              pin_memory=True,
-                              drop_last=True, 
-                              persistent_workers=True)
+    train_loader_l = DataLoader(train_dataset_l, batch_size=args.batch_size, shuffle=True, collate_fn=train_collate_fn, num_workers=min(args.batch_size, args.max_workers), 
+                                pin_memory=True, drop_last=True, persistent_workers=True)
     
+    # Build unlabeled dataloader
     weak_aug = build_weak_augmentation(args, crop_size, pad_value, blank_side)
     strong_aug = train_transform
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, 
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
-    train_loader_u = DataLoader(train_dataset_u,
-                                batch_size=args.unlabeled_batch_size, 
-                                shuffle=True,
-                                collate_fn=unlabeled_train_collate_fn,
-                                num_workers=min(args.unlabeled_batch_size, args.max_workers),
-                                pin_memory=True,
-                                drop_last=True)
+    train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_train_collate_fn, 
+                                num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=True)
     
+    # Build unlabeled detection dataloader for generating pseudo labels
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     det_dataset_u = DetDataset(series_list_path = args.unlabeled_train_set, 
                                SplitComb=split_comber, 
                                image_spacing=IMAGE_SPACING, 
                                norm_method=args.data_norm_method)
-    det_loader_u = DataLoader(det_dataset_u, 
-                              batch_size=args.val_batch_size,
-                              shuffle=False, 
-                              num_workers=min(args.unlabeled_batch_size, args.max_workers), 
-                              pin_memory=True,
-                              drop_last=False, 
-                              collate_fn=infer_collate_fn)
+    det_loader_u = DataLoader(det_dataset_u, batch_size=args.val_batch_size, shuffle=False, collate_fn=infer_collate_fn, 
+                              num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=False)
     
     logger.info("There are {} training labeled samples and {} batches in '{}'".format(len(train_loader_l.dataset), len(train_loader_l), args.train_set))
     logger.info("There are {} training unlabeled samples and {} batches in '{}'".format(len(train_loader_u.dataset), len(train_loader_u), args.unlabeled_train_set))
@@ -366,14 +327,16 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method)
-    
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     
+    # Build val dataloader
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
 
+    # Build test dataloader
     test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
+    test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), 
+                             pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
     logger.info("There are {} test samples and {} batches in '{}'".format(len(test_loader.dataset), len(test_loader), args.test_set))
@@ -423,7 +386,7 @@ if __name__ == '__main__':
                                     dataloader = det_loader_u,
                                     device = device,
                                     detection_postprocess = detection_postprocess,
-                                    prob_threshold = 0.5,
+                                    prob_threshold = 0.4,
                                     mixed_precision = args.val_mixed_precision,
                                     memory_format = args.memory_format)
         
@@ -435,7 +398,11 @@ if __name__ == '__main__':
         with open('./pseu_labels.pkl', 'rb') as f:
             pseu_labels = pickle.load(f)
             
+    original_num_unlabeled = len(train_loader_u.dataset)
     train_loader_u.dataset.set_pseu_labels(pseu_labels)
+    new_num_unlabeled = len(train_loader_u.dataset)
+    logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
+    
     for epoch in range(start_epoch, args.epochs + 1):
         train_metrics = train(args = args,
                             model_t = model_t,
@@ -459,8 +426,11 @@ if __name__ == '__main__':
         # Remove the checkpoint of epoch % save_model_interval != 0
         for i in range(epoch):
             ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
-            if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
+            if ((i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path)):
                 os.remove(ckpt_path)
+            #TODO
+            # if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
+            #     os.remove(ckpt_path)
         save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema, model_t = model_t)
         
         if (epoch >= args.start_val_epoch and epoch % args.val_interval == 0) or epoch == args.epochs:

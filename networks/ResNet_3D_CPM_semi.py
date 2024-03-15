@@ -708,9 +708,10 @@ class Unsupervised_DetectionLoss(nn.Module):
             cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
             record_targets = target_b.clone()
             if num_positive_pixels > 0:
-                # FN_weights = 4.0  # 10.0  for ablation study
-                FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
-                cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
+                ##TODO no fn for semi-supervised
+                # # FN_weights = 4.0  # 10.0  for ablation study
+                # FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
+                # cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
                 
                 Positive_loss = cls_loss[record_targets == 1]
                 Negative_loss = cls_loss[record_targets == 0 & background_mask[j]]
