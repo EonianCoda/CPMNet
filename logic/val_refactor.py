@@ -10,37 +10,12 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from utils.box_utils import nms_3D
-from utils.generate_annot_csv_from_series_list import generate_annot_csv
 from evaluationScript.eval_refactor import Evaluation
 
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
 
 logger = logging.getLogger(__name__)
-
-def convert_to_standard_csv(csv_path: str, annot_save_path: str, series_uids_save_path: str, spacing):
-    '''
-    convert [seriesuid	coordX	coordY	coordZ	w	h	d] to 
-    'seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm'
-    spacing:[z, y, x]
-    '''
-    column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'nodule_type']
-    gt_list = []
-    csv_file = pd.read_csv(csv_path)
-    seriesuid = csv_file['seriesuid']
-    coordX, coordY, coordZ = csv_file['coordX'], csv_file['coordY'], csv_file['coordZ']
-    w, h, d = csv_file['w'], csv_file['h'], csv_file['d']
-    nodule_type = csv_file['nodule_type']
-    
-    clean_seriesuid = []
-    for j in range(seriesuid.shape[0]):
-        if seriesuid[j] not in clean_seriesuid: 
-            clean_seriesuid.append(seriesuid[j])
-        gt_list.append([seriesuid[j], coordX[j], coordY[j], coordZ[j], w[j]/spacing[2], h[j]/spacing[1], d[j]/spacing[0], nodule_type[j]])
-    df = pd.DataFrame(gt_list, columns=column_order)
-    df.to_csv(annot_save_path, index=False)
-    df = pd.DataFrame(clean_seriesuid)
-    df.to_csv(series_uids_save_path, index=False, header=None)
 
 def convert_to_standard_output(output: np.ndarray, series_name: str) -> List[List[Any]]:
     """
