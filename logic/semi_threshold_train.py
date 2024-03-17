@@ -25,7 +25,7 @@ def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
         cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, device = device)
         cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
         loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-        return loss, cls_loss, shape_loss, offset_loss, iou_loss
+        return loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
 def train_one_step_wrapper(memory_format, loss_fn):
@@ -37,7 +37,7 @@ def train_one_step_wrapper(memory_format, loss_fn):
         cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, device = device)
         cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
         loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-        return loss, cls_loss, shape_loss, offset_loss, iou_loss
+        return loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
 def model_predict_wrapper(memory_format):
@@ -58,7 +58,7 @@ def train(args,
           detection_postprocess,
           num_iters: int,
           device: torch.device) -> Dict[str, float]:
-    model_t.eval()
+    model_t.train()
     model_s.train()
     
     avg_cls_loss = AverageMeter()
@@ -188,9 +188,9 @@ def train(args,
                 # raise ValueError('Check the pseudo label')
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
-                        loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
+                        loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
                 else:
-                    loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
+                    loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
                 
                 avg_pseu_cls_loss.update(cls_pseu_loss.item() * args.lambda_pseu_cls)
                 avg_pseu_shape_loss.update(shape_pseu_loss.item() * args.lambda_pseu_shape)
@@ -199,12 +199,10 @@ def train(args,
                 avg_pseu_loss.update(loss_pseu.item())
                 
                 num_pseudo_label += len(strong_u_sample['annot'])
-                del strong_u_sample, background_mask
-                
             else:
+                outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
                 
-            del feats_t, weak_u_sample
             ### Labeled data
             try:
                 labeled_sample = next(iter_l)
@@ -214,7 +212,7 @@ def train(args,
             
             if mixed_precision:
                 with torch.cuda.amp.autocast():
-                    loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model_s, labeled_sample, device)
+                    loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs = train_one_step(args, model_s, labeled_sample, device)
             else:
                 loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model_s, labeled_sample, device)
             avg_cls_loss.update(cls_loss.item() * args.lambda_cls)
@@ -245,11 +243,12 @@ def train(args,
                                     num_u = num_pseudo_label)
             progress_bar.update()
             
+            del loss, loss_pseu, outputs, outputs_pseu
             with torch.no_grad():
                 # Update teacher model by exponential moving average
                 for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
                     teacher_param.data.mul_(args.semi_ema_alpha).add_((1 - args.semi_ema_alpha) * param.data)
-                
+            torch.cuda.empty_cache()
             ##TODO update BN?
     metrics = {'loss': avg_loss.avg,
                 'cls_loss': avg_cls_loss.avg,

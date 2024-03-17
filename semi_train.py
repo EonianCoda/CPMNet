@@ -104,8 +104,9 @@ def get_args():
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Semi hyper-parameters
+    parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
-    parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
+    parser.add_argument('--pseudo_background_threshold', type=float, default=0.9, help='threshold of pseudo background')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -181,7 +182,7 @@ def prepare_training(args, device, num_training_steps):
                                    cls_fn_threshold = args.cls_fn_threshold)
 
     unsupervised_detection_loss = Unsupervised_DetectionLoss(crop_size = args.crop_size,
-                                                            pos_target_topk = args.pos_target_topk, 
+                                                            pos_target_topk = args.pos_target_topk_pseu, 
                                                             pos_ignore_ratio = args.pos_ignore_ratio,
                                                             cls_num_neg=args.cls_num_neg,
                                                             cls_num_hard = args.cls_num_hard,
@@ -404,6 +405,11 @@ if __name__ == '__main__':
     logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
     
     for epoch in range(start_epoch, args.epochs + 1):
+        # # Update teacher model
+        # if epoch % 10 == 0:
+        #     for param_t, param_s in zip(model_t.parameters(), model_s.parameters()):
+        #         param_t.data = param_s.data.clone().detach()
+            
         train_metrics = train(args = args,
                             model_t = model_t,
                             model_s = model_s,
