@@ -21,18 +21,15 @@ class RandomBlur(AbstractTransform):
         dict: Transformed sample with the blurred image.
 
     """
-    def __init__(self, sigma_range=(0.4, 0.8), p=0.5, channel_apply=0):
+    def __init__(self, sigma_range=(0.4, 0.8), p=0.5):
         """
         Initializes the RandomBlur transform.
 
         Args:
             sigma_range (tuple): Range of sigma values for Gaussian blur. Default is (0.4, 0.8).
             p (float): Probability of applying the transform. Default is 0.5.
-            channel_apply (int): Index of the channel to apply the transform on. Default is 0.
-
         """
         self.sigma_range = sigma_range
-        self.channel_apply = channel_apply
         self.p = p
 
     def __call__(self, sample):
@@ -49,9 +46,12 @@ class RandomBlur(AbstractTransform):
         if random.random() < self.p:
             image = sample['image']
             sigma = np.random.uniform(self.sigma_range[0], self.sigma_range[1])
-            image_t = ndimage.gaussian_filter(image[self.channel_apply], sigma)
-            image[self.channel_apply] = image_t
-            sample['image'] = image
+            if len(sample['image'].shape) == 3: # depth, height, width
+                image_t = ndimage.gaussian_filter(image, sigma)
+                sample['image'] = image_t
+            elif len(sample['image'].shape) == 4:
+                image_t = ndimage.gaussian_filter(image[0], sigma)
+                sample['image'][0] = image_t
 
         return sample
 
@@ -83,24 +83,19 @@ class RandomGamma(AbstractTransform):
 
 
 class RandomNoise(AbstractTransform):
-    """
-
-    """
-
-    def __init__(self, p=0.5, channel_apply=0, gamma_range=(1e-4, 5e-4)):
-        """
-
-        """
+    def __init__(self, p=0.5, gamma_range=(1e-4, 5e-4)):
         self.p = p
-        self.channel_apply = channel_apply
         self.gamma_range = gamma_range
 
     def __call__(self, sample):
         if random.random() < self.p:
             image = sample['image']
             gamma = np.random.uniform(self.gamma_range[0], self.gamma_range[1])
-            image_t = random_noise(image[self.channel_apply], var=gamma)
-            image[self.channel_apply] = image_t
-            sample['image'] = image
+            if len(sample['image'].shape) == 3: # depth, height, width
+                image_t = random_noise(image, var=gamma)
+                sample['image'] = image_t
+            elif len(sample['image'].shape) == 4: # channel, depth, height, width
+                image_t = random_noise(image[0], var=gamma)
+                sample['image'][0] = image_t
 
         return sample

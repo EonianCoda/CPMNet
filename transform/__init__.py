@@ -4,5 +4,5 @@ from .rotate import RandomRotate, RandomTranspose, RandomMaskRotate, RandomMaskT
 from .rescale import RandomRescale
 from .crop import RandomCrop, RandomMaskCrop
 from .label import CoordToAnnot
-from .intensity import *
+from .intensity import RandomBlur, RandomNoise
 from . import intensity_torch
