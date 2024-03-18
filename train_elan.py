@@ -6,7 +6,7 @@ import os
 import logging
 import numpy as np
 from typing import Tuple
-from networks.ResNet_3D_CPM_elan import Resnet18, DetectionPostprocess, DetectionLoss
+from networks.ResNet_3D_CPM_elan import DetectionPostprocess, DetectionLoss
 ### data ###
 from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
@@ -100,6 +100,7 @@ def get_args():
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # Network
+    parser.add_argument('--model_version', type=int, default=1, help='model version')
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
@@ -119,7 +120,7 @@ def get_args():
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--val_interval', type=int, default=1, help='validate interval')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
-    parser.add_argument('--save_model_interval', type=int, default=10, help='how many epochs to wait before saving model')
+    parser.add_argument('--save_model_interval', type=int, default=20, help='how many epochs to wait before saving model')
     args = parser.parse_args()
     return args
 
@@ -138,7 +139,7 @@ def add_weight_decay(net, weight_decay):
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
 
-def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
+def prepare_training(args, device, num_training_steps):
     # build model
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
@@ -147,7 +148,19 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                                    cls_num_hard = args.cls_num_hard,
                                    cls_fn_weight = args.cls_fn_weight,
                                    cls_fn_threshold = args.cls_fn_threshold)
-                                   
+    model_version = args.model_version
+    if model_version == 1:
+        from networks.ResNet_3D_CPM_elan import Resnet18
+    elif model_version == 2:
+        from networks.ResNet_3D_CPM_elan_v2 import Resnet18
+    elif model_version == 3:
+        from networks.ResNet_3D_CPM_elan_v3 import Resnet18
+    elif model_version == 4:
+        from networks.ResNet_3D_CPM_elan_v4 import Resnet18
+    elif model_version == 5:
+        from networks.ResNet_3D_CPM_elan_v5 import Resnet18
+    elif model_version == 6:
+        from networks.ResNet_3D_CPM_elan_v6 import Resnet18
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
                      act_type = args.act_type, 
