@@ -45,7 +45,12 @@ def generate_annot_csv(series_list_path: str,
         if mode == 'seg_size':
             all_types.append([nodule_typer.get_nodule_type_by_seg_size(s) for s in label[NODULE_SIZE]])
         elif mode == 'dhw':
-            all_types.append([nodule_typer.get_nodule_type_by_dhw(d, h, w) for d, h, w in label[ALL_RAD]])
+            dhws = label[ALL_RAD]
+            if len(dhws) == 0:
+                all_types.append([])
+                continue
+            dhws = np.array(dhws) / spacing
+            all_types.append([nodule_typer.get_nodule_type_by_dhw(d, h, w) for d, h, w in dhws])
         
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     with open(save_path, 'w') as f:

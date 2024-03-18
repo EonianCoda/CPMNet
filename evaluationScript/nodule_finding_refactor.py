@@ -48,17 +48,10 @@ class NoduleFinding:
             if match_nodule_finding is not None:
                 self.match_nodule_finding = copy.deepcopy(match_nodule_finding)
             
-    def get_box(self, dim = 2) -> List[float]:
+    def get_box(self) -> List[float]:
         """
-        Returns the bounding box of the nodule in the format [x1, y1, z1, x2, y2, z2]
-            if dim == 1, returns [x1, y1, z1, x2, y2, z2]
-            if dim == 2, returns [[x1, y1, z1], [x2, y2, z2]]
+        Returns the bounding box of the nodule in the format [[x1, y1, z1], [x2, y2, z2]]
         """
-        if dim == 1:
-            return [self.ctr_x - self.w/2, self.ctr_y - self.h/2, self.ctr_z - self.d/2, 
-                    self.ctr_x + self.w/2, self.ctr_y + self.h/2, self.ctr_z + self.d/2]
-        elif dim == 2:
-            return [[self.ctr_x - self.w/2, self.ctr_y - self.h/2],
-                    [self.ctr_x + self.w/2, self.ctr_y + self.h/2]]
-        else:
-            raise ValueError("dim should be 1 or 2")
+        return [[self.ctr_x - self.w/2, self.ctr_y - self.h/2, self.ctr_z - self.d/2],
+                [self.ctr_x + self.w/2, self.ctr_y + self.h/2, self.ctr_z + self.d/2]]
+    

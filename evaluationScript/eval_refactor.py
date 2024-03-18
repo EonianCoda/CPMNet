@@ -334,6 +334,7 @@ import math
 from collections import defaultdict
 from dataload.utils import load_label, load_series_list, gen_label_path, ALL_CLS, ALL_RAD, ALL_LOC, NODULE_SIZE, compute_bbox3d_iou
 from .nodule_typer import NoduleTyper
+from functools import cmp_to_key
 
 def compute_sphere_volume(diameter: float) -> float:
     if diameter == 0:
@@ -508,6 +509,7 @@ class Evaluation:
             for ctrs, dhws, seg_size in zip(label[ALL_LOC], label[ALL_RAD], label[NODULE_SIZE]):
                 ctr_z, ctr_y, ctr_x = ctrs
                 d, h, w = dhws
+                d, h, w = d / self.image_spacing[0], h / self.image_spacing[1], w / self.image_spacing[2]
                 self.all_gt_nodules[series_name].append(self._build_nodule_finding(series_name, ctr_x, ctr_y, ctr_z, w, h, d, nodule_size=seg_size, is_gt=True))
             
     def _build_nodule_finding(self, series_name: str, ctr_x: float, ctr_y: float, ctr_z: float, 
@@ -544,8 +546,8 @@ class Evaluation:
             gt_nodules = self.all_gt_nodules[series_name]
             
             # Compute the iou between all ground truth nodules and all predicted nodules
-            gt_bboxes = np.array([gt_nodule.get_box(dim=2) for gt_nodule in gt_nodules]) # [M, 2, 3], 3 is for [x, y, z]
-            pred_bboxes = np.array([cand.get_box(dim=2) for cand in pred_cands]) # [N, 2, 3], 3 is for [x, y, z]
+            gt_bboxes = np.array([gt_nodule.get_box() for gt_nodule in gt_nodules]) # [M, 2, 3], 3 is for [x, y, z]
+            pred_bboxes = np.array([cand.get_box() for cand in pred_cands]) # [N, 2, 3], 3 is for [x, y, z]
             
             if len(gt_bboxes) != 0 and len(pred_bboxes) != 0:
                 all_ious = compute_bbox3d_iou(gt_bboxes, pred_bboxes) # [M, N]
@@ -554,10 +556,11 @@ class Evaluation:
             
             # Compute TP and FN
             if len(gt_nodules) != 0:
+                matched_masks = (all_ious >= self.iou_threshold)
                 for gt_idx, gt_nodule in enumerate(gt_nodules):
                     ious = all_ious[gt_idx]
-                    match_mask = (ious >= self.iou_threshold)
-                    if np.any(match_mask):
+                    match_mask = matched_masks[gt_idx]
+                    if np.any(match_mask): # TP
                         # Select the candidate with the highest probability
                         match_cand_ids = np.where(match_mask == True)[0]
                         max_prob_idx = np.argmax([pred_cands[cand_id].prob for cand_id in match_cand_ids])
@@ -569,7 +572,7 @@ class Evaluation:
                         gt_nodule.set_match(max_prob_iou, match_cand)
                         gt_nodule.prob = max_prob
                         froc.add(is_pos=True, is_FN=False, prob=match_cand.prob, series_name=series_name, nodule=gt_nodule)
-                    else:
+                    else: # FN
                         FN_gt_nodules.append(gt_nodule)
                         gt_nodule.set_match(np.max(ious), None)
                         froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
@@ -585,6 +588,7 @@ class Evaluation:
                         froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
                 else:
                     for cand in pred_cands:
+                        cand.set_match(0, None)
                         froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
 
         self._write_predicitions(save_dir, froc)
@@ -707,20 +711,38 @@ class Evaluation:
         return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score), (best_f1_score, best_f1_threshold)
     
     def _write_predicitions(self, save_dir: str, froc: FROC):
+        def sort_by_x(n1, n2):
+            if n1.ctr_x == n2.ctr_x:
+                return 0
+            elif n1.ctr_x > n2.ctr_x:
+                return 1
+            else:
+                return -1
+        
         save_path = os.path.join(save_dir, "predictions.csv")
         
-        header = "series_name,ctr_x,ctr_y,ctr_z,w,h,d,prob, nodule_type, match_iou\n"
+        header = "series_name,ctr_x,ctr_y,ctr_z,w,h,d,prob, nodule_type, match_iou, is_gt\n"
         lines = [header]
+        
+        series_name_cands = defaultdict(list)
         for cand in froc.nodules_list:
+            series_name = cand.series_name
+            series_name_cands[series_name].append(cand)
+        
+        for series_name in sorted(series_name_cands.keys()):
+            for cand in sorted(series_name_cands[series_name], key=cmp_to_key(sort_by_x)):
+            # cand = series_name_cands[series_name]
+        # for cand in froc.nodules_list:
             # if cand is None:
             #     continue
-            series_name = cand.series_name
-            ctr_x, ctr_y, ctr_z = cand.ctr_x, cand.ctr_y, cand.ctr_z
-            w, h, d = cand.w, cand.h, cand.d
-            prob = cand.prob
-            nodule_type = cand.nodule_type
-            match_iou = cand.match_iou
-            lines.append("{},{},{},{},{},{},{},{},{},{}\n".format(series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob, nodule_type, match_iou))
+                series_name = cand.series_name
+                ctr_x, ctr_y, ctr_z = cand.ctr_x, cand.ctr_y, cand.ctr_z
+                w, h, d = cand.w, cand.h, cand.d
+                prob = cand.prob
+                nodule_type = cand.nodule_type
+                match_iou = cand.match_iou
+                is_gt = cand.is_gt
+                lines.append("{},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{},{:.3f},{}\n".format(series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob, nodule_type, match_iou, is_gt))
         
         with open(save_path, 'w') as f:
             f.writelines(lines)
@@ -762,4 +784,4 @@ class Evaluation:
         with open(FN_file_path, 'w') as f:
             f.write(header)
             for nodule in FN_gt_nodules:
-                f.write("{},{},{},{},{},{},{},{},{}\n".format(nodule.series_name, nodule.ctr_x, nodule.ctr_y, nodule.ctr_z, nodule.w, nodule.h, nodule.d, nodule.nodule_type, nodule.match_iou))
+                f.write("{},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{},{:.2f}\n".format(nodule.series_name, nodule.ctr_x, nodule.ctr_y, nodule.ctr_z, nodule.w, nodule.h, nodule.d, nodule.nodule_type, nodule.match_iou))

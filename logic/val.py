@@ -149,6 +149,9 @@ def val(args,
     os.makedirs(output_dir, exist_ok=True)
     header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
     df = pd.DataFrame(all_preds, columns=header)
+    # sort by seriesuid and coordX
+    df = df.sort_values(by=['seriesuid', 'coordX'])
+    # df = df.reset_index(drop=True)
     pred_results_path = os.path.join(output_dir, 'predict_epoch_{}.csv'.format(epoch))
     df.to_csv(pred_results_path, index=False)
     
