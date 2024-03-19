@@ -108,8 +108,8 @@ def train(args,
                 # => 8: 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputs_t = detection_postprocess(feats_t, device=device, threshold = args.pseudo_label_threshold) 
             
-            np.save('weak_image.npy', weak_u_sample['image'].numpy())
-            np.save('outputs_t.npy', outputs_t.cpu().numpy())
+            # np.save('weak_image.npy', weak_u_sample['image'].numpy())
+            # np.save('outputs_t.npy', outputs_t.cpu().numpy())
             
             # Add label
             # Remove the padding, -1 means invalid
@@ -181,10 +181,10 @@ def train(args,
                 background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
                 background_mask = background_mask[valid_mask]
                 
-                np.save('image.npy', strong_u_sample['image'].numpy())
-                np.save('annot.npy', strong_u_sample['annot'].numpy())
-                np.save('background_mask.npy', background_mask.cpu().numpy())
-                raise ValueError('Check the pseudo label')
+                # np.save('image.npy', strong_u_sample['image'].numpy())
+                # np.save('annot.npy', strong_u_sample['annot'].numpy())
+                # np.save('background_mask.npy', background_mask.cpu().numpy())
+                # raise ValueError('Check the pseudo label')
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
                         strong_u_sample['image'] = strong_u_sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
