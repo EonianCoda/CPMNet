@@ -179,13 +179,17 @@ class UnLabeledDataset(Dataset):
         
         self.dicom_paths = []
         self.series_names = []
-        self.labels = None
+        self.labels = dict()
         self.series_infos = load_series_list(series_list_path)
         for folder, series_name in self.series_infos:
+            label_path = gen_label_path(folder, series_name)
+            label = load_label(label_path, self.image_spacing, min_d, min_size)
+            if label[ALL_LOC].shape[0] == 0 and not use_bg:
+                continue
             dicom_path = gen_dicom_path(folder, series_name)
             self.dicom_paths.append(dicom_path)
             self.series_names.append(series_name)
-            
+            self.labels[series_name] = label
         self.weak_aug = weak_aug
         self.strong_aug = strong_aug
         self.crop_fn = crop_fn
@@ -232,10 +236,12 @@ class UnLabeledDataset(Dataset):
         samples['image'] = image
         # We need to convert pixel spacing to world spacing
         samples[ALL_LOC] = label[ALL_LOC] # z, y, x
-        if len(label[ALL_RAD]) > 0:
-            samples[ALL_RAD] = label[ALL_RAD] * image_spacing # d, h, w
-        else:
-            samples[ALL_RAD] = label[ALL_RAD] # d, h, w
+        samples[ALL_RAD] = label[ALL_RAD] # d, h, w
+        ##TODO for prediction, now cheat on original labels
+        # if len(label[ALL_RAD]) > 0:
+        #     samples[ALL_RAD] = label[ALL_RAD] * image_spacing # d, h, w
+        # else:
+        #     samples[ALL_RAD] = label[ALL_RAD] # d, h, w
         samples[ALL_CLS] = label[ALL_CLS]
         
         samples['file_name'] = series_name

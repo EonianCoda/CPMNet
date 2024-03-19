@@ -290,11 +290,12 @@ class Resnet18(nn.Module):
 
         x3 = self.block3(x)
         x = self.block3_dw(x3)
-
         if drop is not None and self.training:
             x3 = F.dropout3d(x3, drop, training=self.training)
 
         x = self.block4(x)
+        if drop is not None and self.training:
+            x = F.dropout3d(x, drop, training=self.training)
 
         "decode"
         x = self.block33_up(x)
@@ -645,7 +646,7 @@ class DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return classification_losses, reg_losses, offset_losses, iou_losses
     
@@ -668,7 +669,7 @@ class Unsupervised_DetectionLoss(nn.Module):
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, background_mask, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, background_mask, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 200, fn_weight = 4.0, fn_threshold = 0.8):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
 
@@ -709,35 +710,33 @@ class Unsupervised_DetectionLoss(nn.Module):
             record_targets = target_b.clone()
             if num_positive_pixels > 0:
                 ##TODO no fn for semi-supervised
-                # # FN_weights = 4.0  # 10.0  for ablation study
+                # FN_weights = 4.0  # 10.0  for ablation study
                 # FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
                 # cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
-                
                 Positive_loss = cls_loss[record_targets == 1]
-                Negative_loss = cls_loss[record_targets == 0 & background_mask[j]]
-                
-                if num_neg != -1:
-                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
-                    Negative_loss = Negative_loss[neg_idcs]
-                _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
-                Negative_loss = Negative_loss[keep_idx] 
+                Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
+                # if num_neg != -1:
+                #     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
+                #     Negative_loss = Negative_loss[neg_idcs]
+                # _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
+                # Negative_loss = Negative_loss[keep_idx]
                 
                 Positive_loss = Positive_loss.sum()
                 Negative_loss = Negative_loss.sum()
                 cls_loss = Positive_loss + Negative_loss
 
             else:
-                Negative_loss = cls_loss[record_targets == 0 & background_mask[j]]
-                if num_neg != -1:
-                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
-                    Negative_loss = Negative_loss[neg_idcs]
-                assert len(Negative_loss) > num_hard
-                _, keep_idx = torch.topk(Negative_loss, num_hard)
-                Negative_loss = Negative_loss[keep_idx]
+                Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
+                # if num_neg != -1:
+                #     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
+                #     Negative_loss = Negative_loss[neg_idcs]
+                # assert len(Negative_loss) > num_hard
+                # _, keep_idx = torch.topk(Negative_loss, num_hard)
+                # Negative_loss = Negative_loss[keep_idx]
                 Negative_loss = Negative_loss.sum()
                 cls_loss = Negative_loss
             classification_losses.append(cls_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
-        return torch.mean(torch.stack(classification_losses))
+        return torch.stack(classification_losses)
     
     @staticmethod
     def target_proprocess(annotations: torch.Tensor, 
@@ -953,7 +952,7 @@ class Unsupervised_DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return classification_losses, reg_losses, offset_losses, iou_losses
 

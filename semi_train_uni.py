@@ -104,6 +104,7 @@ def get_args():
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Semi hyper-parameters
+    parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
@@ -170,7 +171,7 @@ def build_model(args) -> Resnet18:
 
 def prepare_training(args, device, num_training_steps):
     # build model
-    model_s = build_model(args)
+    model = build_model(args)
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
@@ -180,7 +181,7 @@ def prepare_training(args, device, num_training_steps):
                                    cls_fn_threshold = args.cls_fn_threshold)
 
     unsupervised_detection_loss = Unsupervised_DetectionLoss(crop_size = args.crop_size,
-                                                            pos_target_topk = args.pos_target_topk, 
+                                                            pos_target_topk = args.pos_target_topk_pseu, 
                                                             pos_ignore_ratio = args.pos_ignore_ratio,
                                                             cls_num_neg=args.cls_num_neg,
                                                             cls_num_hard = args.cls_num_hard,
@@ -195,10 +196,10 @@ def prepare_training(args, device, num_training_steps):
     
     start_epoch = 0
     memory_format = get_memory_format(getattr(args, 'memory_format', 'channels_first'))
-    model_s = model_s.to(device=device, memory_format=memory_format)
+    model = model.to(device=device, memory_format=memory_format)
 
     # build optimizer and scheduler
-    params = add_weight_decay(model_s, args.weight_decay)
+    params = add_weight_decay(model, args.weight_decay)
     optimizer = AdamW(params=params, lr=args.lr, weight_decay=args.weight_decay)
     
     T_max = args.epochs // args.decay_cycle
@@ -210,7 +211,7 @@ def prepare_training(args, device, num_training_steps):
     if args.apply_ema:
         ema_warmup_steps = int(args.start_val_epoch * num_training_steps * 1.2 + 1)
         logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_decay, ema_warmup_steps))
-        ema = EMA(model_s, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
+        ema = EMA(model, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
         ema.register()
     else:
         ema = None
@@ -226,16 +227,16 @@ def prepare_training(args, device, num_training_steps):
         ckpt_path = os.path.join(model_folder, f'epoch_{start_epoch}.pth')
         logger.info('Load checkpoint from "{}"'.format(ckpt_path))
 
-        load_states(ckpt_path, device, model_s, optimizer, scheduler_warm, ema)
+        load_states(ckpt_path, device, model, optimizer, scheduler_warm, ema)
         # Resume best metric
         global early_stopping
-        early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model_s)
+        early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model)
     
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
-        load_states(args.pretrained_model_path, device, model_s)
+        load_states(args.pretrained_model_path, device, model)
         
-    return start_epoch, model_s, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess
+    return start_epoch, model, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
@@ -257,6 +258,30 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
     transform_list_train.append(transform.CoordToAnnot())
                             
     logger.info('Augmentation: random flip: True, random rotate: {}{}, random crop: {}'.format(args.rot_aug, [True, rot_yz, rot_xz], args.use_crop))
+    train_transform = torchvision.transforms.Compose(transform_list_train)
+    return train_transform
+
+def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
+    if crop_size[0] == crop_size[1] == crop_size[2]:
+        rot_yz = True
+        rot_xz = True
+    else:
+        rot_yz = False
+        rot_xz = False
+        
+    transform_list_train = [transform.RandomFlip(p=0.8, flip_depth=True, flip_height=True, flip_width=True),
+                            transform.RandomBlur(p=0.5, sigma_range=(0.4, 0.6)),
+                            transform.RandomNoise(p=0.5, gamma_range=(4e-4, 8e-4))]
+    if args.rot_aug == 'rot90':
+        transform_list_train.append(transform.RandomRotate90(p=0.8, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
+    elif args.rot_aug == 'transpose':
+        transform_list_train.append(transform.RandomTranspose(p=0.8, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+        
+    if args.use_crop:
+        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
+        
+    transform_list_train.append(transform.CoordToAnnot())
+                            
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -300,7 +325,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     # Build unlabeled dataloader
     weak_aug = build_weak_augmentation(args, crop_size, pad_value, blank_side)
-    strong_aug = train_transform
+    strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, 
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_train_collate_fn, 
@@ -361,11 +386,11 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
-    start_epoch, model_s, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader_u))
+    start_epoch, model, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader_u))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
-        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
+        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model)
 
     # pseu_labels = gen_pseu_labels(model = model_s,
     #                                 dataloader = det_loader_u,
@@ -378,39 +403,43 @@ if __name__ == '__main__':
     # pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
     # with open(pseu_label_save_path, 'wb') as f:
     #     pickle.dump(pseu_labels, f)
-    if not os.path.exists('./pseu_labels.pkl'):
-        pseu_labels = gen_pseu_labels(model = model_s,
-                                    dataloader = det_loader_u,
-                                    device = device,
-                                    detection_postprocess = detection_postprocess,
-                                    prob_threshold = 0.4,
-                                    mixed_precision = args.val_mixed_precision,
-                                    memory_format = args.memory_format)
+    # if not os.path.exists('./pseu_labels.pkl'):
+    #     pseu_labels = gen_pseu_labels(model = model_s,
+    #                                 dataloader = det_loader_u,
+    #                                 device = device,
+    #                                 detection_postprocess = detection_postprocess,
+    #                                 prob_threshold = 0.4,
+    #                                 mixed_precision = args.val_mixed_precision,
+    #                                 memory_format = args.memory_format)
         
-        pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-        with open(pseu_label_save_path, 'wb') as f:
-            pickle.dump(pseu_labels, f)
-    else:
-        logger.info('Load pseudo labels from "./pseu_labels.pkl"')
-        with open('./pseu_labels.pkl', 'rb') as f:
-            pseu_labels = pickle.load(f)
+    #     pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
+    #     with open(pseu_label_save_path, 'wb') as f:
+    #         pickle.dump(pseu_labels, f)
+    # else:
+    #     logger.info('Load pseudo labels from "./pseu_labels.pkl"')
+    #     with open('./pseu_labels.pkl', 'rb') as f:
+    #         pseu_labels = pickle.load(f)
             
-    original_num_unlabeled = len(train_loader_u.dataset)
-    train_loader_u.dataset.set_pseu_labels(pseu_labels)
-    new_num_unlabeled = len(train_loader_u.dataset)
-    logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
+    # original_num_unlabeled = len(train_loader_u.dataset)
+    # train_loader_u.dataset.set_pseu_labels(pseu_labels)
+    # new_num_unlabeled = len(train_loader_u.dataset)
+    # logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
     
+    original_psuedo_label_threshold = float(args.pseudo_label_threshold)
+    final_psuedo_label_threshod = args.pseudo_label_threshold * 1.1
     for epoch in range(start_epoch, args.epochs + 1):
+        args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
+        logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         train_metrics = train(args = args,
-                                model_s = model_s,
-                                detection_loss = detection_loss,
-                                unsupervised_detection_loss =  unsupervised_detection_loss,
-                                optimizer = optimizer,
-                                dataloader_u = train_loader_u,
-                                dataloader_l = train_loader_l,
-                                detection_postprocess = detection_postprocess,
-                                num_iters = len(train_loader_u),
-                                device = device)
+                            model = model,
+                            detection_loss = detection_loss,
+                            unsupervised_detection_loss =  unsupervised_detection_loss,
+                            optimizer = optimizer,
+                            dataloader_u = train_loader_u,
+                            dataloader_l = train_loader_l,
+                            detection_postprocess = detection_postprocess,
+                            num_iters = len(train_loader_u),
+                            device = device)
         scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
         for key, value in train_metrics.items():
@@ -427,7 +456,7 @@ if __name__ == '__main__':
             #TODO
             # if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
             #     os.remove(ckpt_path)
-        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model_s, optimizer, scheduler_warm, ema)
+        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model, optimizer, scheduler_warm, ema)
         
         if (epoch >= args.start_val_epoch and epoch % args.val_interval == 0) or epoch == args.epochs:
             # Use Shadow model to validate and save model
@@ -435,7 +464,7 @@ if __name__ == '__main__':
                 ema.apply_shadow()
             
             val_metrics = val(args = args,
-                            model = model_s,
+                            model = model,
                             detection_postprocess=detection_postprocess,
                             val_loader = val_loader, 
                             device = device,
@@ -460,9 +489,9 @@ if __name__ == '__main__':
     os.makedirs(test_save_dir, exist_ok=True)
     for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
         logger.info('Load best model from "{}"'.format(model_path))
-        load_states(model_path, device, model_s)
+        load_states(model_path, device, model)
         test_metrics = val(args = args,
-                            model = model_s,
+                            model = model,
                             detection_postprocess=detection_postprocess,
                             val_loader = test_loader,
                             device = device,
