@@ -158,3 +158,62 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     samples = {'weak': weak_samples, 
                'strong': strong_samples}
     return samples
+
+
+def unlabeled_focal_train_collate_fn(batches):
+    """
+    Args:
+        batches: Dict[str, List[Dict[str, any]]]
+            A dictionary with keys 'weak' and 'strong', each of which is a list of dictionaries.
+            Each dictionary contains keys 'image', 'annot', 'ctr_transform'.
+    """
+    num_aug = len(batches[0])
+    # Prepare weak and strong batches
+    keys = [f'aug_{i}' for i in range(num_aug)]
+    all_aug_batches = {f'aug_{i}': [] for i in range(num_aug)}
+    
+    for b in batches:
+        for k in keys:
+            all_aug_batches[k].extend(b[k])
+    
+    # Prepare weak and strong images and annotations
+    all_aug_imgs = {k: [] for k in keys}
+    all_aug_annots = {k: [] for k in keys}
+    all_aug_spacings = {k: [] for k in keys}
+    
+    for k, batches in all_aug_batches.items():
+        for b in batches:
+            all_aug_imgs[k].append(b['image'])
+            all_aug_annots[k].append(b['annot'])
+            all_aug_spacings[k].append(b['spacing'])
+    
+    
+    all_max_num_annots = dict()
+    all_ctr_transforms = dict()
+    all_feat_transforms = dict()
+    for k in keys:
+        all_aug_imgs[k] = np.stack(all_aug_imgs[k])
+        all_aug_spacings[k] = np.array(all_aug_spacings[k])
+        all_max_num_annots[k] = max(annot.shape[0] for annot in all_aug_annots[k])
+        all_ctr_transforms[k] = [s['ctr_transform'] for s in all_aug_batches[k]]    
+        all_feat_transforms[k] = [s['feat_transform'] for s in all_aug_batches[k]]
+    
+    all_samples = dict()
+    for k in keys:
+        samples = dict()
+        samples['image'] = torch.from_numpy(all_aug_imgs[k])
+        samples['spacing'] = all_aug_spacings[k]
+        samples['ctr_transform'] = all_ctr_transforms[k]
+        samples['feat_transform'] = all_feat_transforms[k]
+        if all_max_num_annots[k] > 0:
+            aug_annot_padded = np.ones((len(all_aug_annots[k]), all_max_num_annots[k], 10), dtype='float32') * -1
+            for idx, annot in enumerate(all_aug_annots[k]):
+                if annot.shape[0] > 0:
+                    aug_annot_padded[idx, :annot.shape[0], :] = annot        
+        else:
+            aug_annot_padded = np.ones((len(all_aug_annots[k]), 1, 10), dtype='float32') * -1
+            
+        samples['annot'] = torch.from_numpy(aug_annot_padded)
+        all_samples[k] = samples
+    
+    return all_samples
