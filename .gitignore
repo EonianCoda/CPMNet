@@ -14,5 +14,6 @@ bbox01_aneurysm
 *.ipynb
 *.npy
 *.npz
+*.pkl
 data
 !visualize.ipynb

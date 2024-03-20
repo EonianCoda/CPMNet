@@ -59,6 +59,58 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
                 ax.axis('off')
         plt.tight_layout()
         
+def draw_pseu_bbox_and_label_on_image(image: np.ndarray, 
+                                    bboxes: np.ndarray, 
+                                    bboxes_pseu: np.ndarray,
+                                    color = (255, 0, 0), 
+                                    color_pseu = (0, 255, 0),
+                                    half_image = True, 
+                                    axis_off = True) -> None:
+    """
+    """
+    if len(image.shape) == 3:
+        image = image[..., np.newaxis]
+        image = np.repeat(image, 3, axis=-1)
+    
+    bboxed_image = image.copy()
+    for bbox in bboxes:
+        bboxed_image = draw_bbox(bboxed_image, bbox[np.newaxis, ...], color)
+        
+    for bbox_pseu in bboxes_pseu:
+        bboxed_image = draw_bbox(bboxed_image, bbox_pseu[np.newaxis, ...], color_pseu)
+    
+    for bbox in bboxes:
+        z1, y1, x1, z2, y2, x2 = bbox
+        if (z2 - z1) > MAX_IMAGE_IN_ROW:
+            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+        else:
+            zs = list(range(z1, z2))
+        # Draw
+        plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+        for i, z in enumerate(zs):
+            ax = plt.subplot(1, len(zs), i+1)
+            ax.imshow(bboxed_image[z], cmap='gray')
+            ax.set_title(f'z={z}')
+            if axis_off:
+                ax.axis('off')
+        plt.tight_layout()
+        
+    for bbox_pseu in bboxes_pseu:
+        z1, y1, x1, z2, y2, x2 = bbox_pseu
+        if (z2 - z1) > MAX_IMAGE_IN_ROW:
+            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+        else:
+            zs = list(range(z1, z2))
+        # Draw
+        plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+        for i, z in enumerate(zs):
+            ax = plt.subplot(1, len(zs), i+1)
+            ax.imshow(bboxed_image[z], cmap='gray')
+            ax.set_title(f'z={z} pseu')
+            if axis_off:
+                ax.axis('off')
+        plt.tight_layout()
+        
 def draw_bbox_on_image_with_label(img_path: str, label_path: str, color = (255, 0, 0)) -> np.ndarray:
     """
     Args:

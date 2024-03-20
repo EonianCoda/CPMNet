@@ -106,7 +106,7 @@ def get_args():
     # Semi hyper-parameters
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
-    parser.add_argument('--pseudo_background_threshold', type=float, default=0.9, help='threshold of pseudo background')
+    parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -264,6 +264,30 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
+def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
+    if crop_size[0] == crop_size[1] == crop_size[2]:
+        rot_yz = True
+        rot_xz = True
+    else:
+        rot_yz = False
+        rot_xz = False
+        
+    transform_list_train = [transform.RandomFlip(p=0.8, flip_depth=True, flip_height=True, flip_width=True),
+                            transform.RandomBlur(p=0.5, sigma_range=(0.4, 0.6)),
+                            transform.RandomNoise(p=0.5, gamma_range=(4e-4, 8e-4))]
+    if args.rot_aug == 'rot90':
+        transform_list_train.append(transform.RandomRotate90(p=0.8, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
+    elif args.rot_aug == 'transpose':
+        transform_list_train.append(transform.RandomTranspose(p=0.8, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+        
+    if args.use_crop:
+        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
+        
+    transform_list_train.append(transform.CoordToAnnot())
+                            
+    train_transform = torchvision.transforms.Compose(transform_list_train)
+    return train_transform
+
 def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     if crop_size[0] == crop_size[1] == crop_size[2]:
         rot_yz = True
@@ -272,7 +296,8 @@ def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: in
         rot_yz = False
         rot_xz = False
         
-    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    # transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    transform_list_train = []
     transform_list_train.append(transform.CoordToAnnot())
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
@@ -304,7 +329,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     # Build unlabeled dataloader
     weak_aug = build_weak_augmentation(args, crop_size, pad_value, blank_side)
-    strong_aug = train_transform
+    strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, 
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_train_collate_fn, 
@@ -382,34 +407,29 @@ if __name__ == '__main__':
     # pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
     # with open(pseu_label_save_path, 'wb') as f:
     #     pickle.dump(pseu_labels, f)
-    if not os.path.exists('./pseu_labels.pkl'):
-        pseu_labels = gen_pseu_labels(model = model_s,
-                                    dataloader = det_loader_u,
-                                    device = device,
-                                    detection_postprocess = detection_postprocess,
-                                    prob_threshold = 0.4,
-                                    mixed_precision = args.val_mixed_precision,
-                                    memory_format = args.memory_format)
+    # if not os.path.exists('./pseu_labels.pkl'):
+    #     pseu_labels = gen_pseu_labels(model = model_s,
+    #                                 dataloader = det_loader_u,
+    #                                 device = device,
+    #                                 detection_postprocess = detection_postprocess,
+    #                                 prob_threshold = 0.4,
+    #                                 mixed_precision = args.val_mixed_precision,
+    #                                 memory_format = args.memory_format)
         
-        pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-        with open(pseu_label_save_path, 'wb') as f:
-            pickle.dump(pseu_labels, f)
-    else:
-        logger.info('Load pseudo labels from "./pseu_labels.pkl"')
-        with open('./pseu_labels.pkl', 'rb') as f:
-            pseu_labels = pickle.load(f)
+    #     pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
+    #     with open(pseu_label_save_path, 'wb') as f:
+    #         pickle.dump(pseu_labels, f)
+    # else:
+    #     logger.info('Load pseudo labels from "./pseu_labels.pkl"')
+    #     with open('./pseu_labels.pkl', 'rb') as f:
+    #         pseu_labels = pickle.load(f)
             
-    original_num_unlabeled = len(train_loader_u.dataset)
-    train_loader_u.dataset.set_pseu_labels(pseu_labels)
-    new_num_unlabeled = len(train_loader_u.dataset)
-    logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
+    # original_num_unlabeled = len(train_loader_u.dataset)
+    # train_loader_u.dataset.set_pseu_labels(pseu_labels)
+    # new_num_unlabeled = len(train_loader_u.dataset)
+    # logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
     
     for epoch in range(start_epoch, args.epochs + 1):
-        # # Update teacher model
-        # if epoch % 10 == 0:
-        #     for param_t, param_s in zip(model_t.parameters(), model_s.parameters()):
-        #         param_t.data = param_s.data.clone().detach()
-            
         train_metrics = train(args = args,
                             model_t = model_t,
                             model_s = model_s,
