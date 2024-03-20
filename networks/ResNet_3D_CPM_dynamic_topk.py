@@ -9,11 +9,13 @@ import torch.nn.functional as F
 from utils.box_utils import nms_3D
 from .modules import SELayer, Identity, ConvBlock, act_layer, norm_layer3d
 
-def zyxdhw2zyxzyx(box, dim=-1):
-    ctr_zyx, dhw = torch.split(box, 3, dim)
-    z1y1x1 = ctr_zyx - dhw/2
-    z2y2x2 = ctr_zyx + dhw/2
-    return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
+def crack(integer):
+    start = int(np.sqrt(integer))
+    factor = integer / start
+    while int(factor) != factor:
+        start += 1
+        factor = integer / start
+    return int(factor), start
 
 def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
@@ -33,77 +35,8 @@ def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_sh
     center_zyx = (anchor_points + pred_offsets) * stride_tensor
     return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
 
-class Scale(nn.Module):
-    def __init__(self, init_val=1.0):
-        super(Scale, self).__init__()
-        self.scale = nn.Parameter(torch.tensor(data=init_val), requires_grad=True)
-
-    def forward(self, x):
-        return x * self.scale
-
-class SubNetFC(nn.Module):
-    def __init__(self, m_top_k = 4, inner_channel = 64, add_mean = True):
-        super(SubNetFC, self).__init__()
-        self.m_top_k = m_top_k
-        self.add_mean = add_mean
-        total_dim = (m_top_k + 1) if add_mean else m_top_k
-        self.reg_conf = nn.Sequential(nn.Conv3d(total_dim * 3, inner_channel, kernel_size=1),
-                                    nn.ReLU(inplace = True),
-                                    nn.Conv3d(inner_channel, 1, kernel_size=1))
-    def forward(self, x):
-        """
-        Args:
-            x: torch.Tensor
-                The input tensor of shape (bs, 3*(reg_max + 1), d, h, w).
-        """
-        bs, n, d, h, w = x.shape
-        x = x.view(x.shape[0], 3, -1, d, h, w) # [bs, 3, reg_max+1, d, h, w]
-        x = F.softmax(x, dim = 2) # [bs, 3, reg_max+1, d, h, w]
-        prob_topk, _ = x.topk(self.m_top_k, dim = 2)  # shape=[bs, 3, m_top_k, d, h, w]
-        if self.add_mean:
-            stat = torch.cat([prob_topk, prob_topk.mean(dim = 2, keepdim = True)], dim=2) # shape=[bs, 3, m_top_k+1, d, h, w]
-        else:
-            stat = prob_topk # shape=[bs, 3, m_top_k, d, h, w]
-        quality_score = self.reg_conf(stat.view(bs, -1, d, h, w)) # shape=[bs, 1, d, h, w]
-        return quality_score
-    
-class Integral(nn.Module):
-    """A fixed layer for calculating integral result from distribution.
-    This layer calculates the target location by :math: `sum{P(y_i) * y_i}`,
-    P(y_i) denotes the softmax vector that represents the discrete distribution
-    y_i denotes the discrete set, usually {0, 1, 2, ..., reg_max}
-    Args:
-        reg_max (int): The maximal value of the discrete set. Default: 16. You
-            may want to reset it according to your new dataset or related
-            settings.
-
-    From generalized focal loss v2
-
-    """
-
-    def __init__(self, reg_max = 40):
-        super(Integral, self).__init__()
-        self.reg_max = reg_max
-        self.register_buffer(
-            "project", torch.linspace(0, self.reg_max, self.reg_max + 1)
-        )
-
-    def forward(self, x):
-        """Forward feature from the regression head to get integral result of
-        bounding box location.
-        Args:
-        Returns:
-            x (Tensor): Integral result of box locations, i.e., nodule dhw.
-        """
-        bs, n, d, h, w = x.shape
-        num_points = d * h * w
-        x = x.view(bs, n, num_points).permute(0, 2, 1).contiguous().view(bs, num_points, 3, -1) # [bs, z*y*x, 3, reg_max+1]
-        x = F.softmax(x, dim = -1) # [bs, z*y*x, 3, reg_max+1]
-        x = F.linear(x, self.project.type_as(x)) # [bs, z*y*x, 3]
-        x = x.permute(0, 2, 1).contiguous() # [bs, 3, z*y*x]
-        return x
-
 class BasicBlockNew(nn.Module):
+
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):
         super(BasicBlockNew, self).__init__()
 
@@ -210,7 +143,7 @@ class UpsamplingDeconvBlock(nn.Module):
         x = self.norm(x)
         x = self.act(x)
         return x
-    
+
 class UpsamplingBlock(nn.Module):
     def __init__(self, in_channels=None, out_channels=None, stride=2, mode='nearest', norm_type='batchnorm',
                  act_type='ReLU'):
@@ -261,7 +194,7 @@ class ASPP(nn.Module):
 
 class ClsRegHead(nn.Module):
     def __init__(self, in_channels, feature_size=96, conv_num=2,
-                 norm_type='groupnorm', act_type='LeakyReLU', reg_max=40):
+                 norm_type='groupnorm', act_type='LeakyReLU'):
         super(ClsRegHead, self).__init__()
 
         conv_s = []
@@ -282,79 +215,48 @@ class ClsRegHead(nn.Module):
         self.conv_o = nn.Sequential(*conv_o)
         
         self.cls_output = nn.Conv3d(feature_size, 1, kernel_size=3, padding=1)
-        self.shape_output = nn.Conv3d(feature_size, 3 * (reg_max + 1), kernel_size=3, padding=1)
+        self.shape_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
         self.offset_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
         
-        self.intergral = Integral(reg_max=reg_max)
-        self.scale = Scale()
-        self.subnet = SubNetFC(m_top_k = 4, inner_channel = 64, add_mean = True)
-        
     def forward(self, x):
-        Shape_feat = self.scale(self.shape_output(self.conv_r(x))) # [bs, 3*(reg_max+1), d, h, w]
+        Shape = self.shape_output(self.conv_r(x))
         Offset = self.offset_output(self.conv_o(x))
-        Cls = self.cls_output(self.conv_s(x)) # shape = [bs, 1, d, h, w]
+        Cls = self.cls_output(self.conv_s(x))
         dict1 = {}
-        
-        # cls_weight = self.subnet(Shape_feat).sigmoid() # [bs, d*h*w]
-        # cls_weight = cls_weight.view(bs, 1, d, h, w)
-        dict1['Cls'] = Cls * self.subnet(Shape_feat).sigmoid() # [bs, 1, d, h, w]
-        dict1['Shape'] = self.intergral(Shape_feat)
-        dict1['Offset'] = Offset    
-        
-        bs, n, d, h, w = Shape_feat.shape
-        num_points = d * h * w
-        dict1['Shape_feat'] = Shape_feat.view(bs, n, num_points).permute(0, 2, 1).contiguous().view(bs, num_points, 3, -1) # [bs, z*y*x, 3, reg_max+1]
+        dict1['Cls'] = Cls
+        dict1['Shape'] = Shape
+        dict1['Offset'] = Offset
         return dict1
 
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
-                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
-                 first_stride=(2, 2, 2), detection_loss=None, device=None, reg_max=40):
+                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=False, first_stride=(2, 2, 2), detection_loss=None, device=None):
         super(Resnet18, self).__init__()
-        assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
-        assert len(n_filters) == 4, 'The length of n_filters should be 4'
         self.detection_loss = detection_loss
         self.device = device
 
-        # Stem
         self.in_conv = ConvBlock(n_channels, stem_filters, stride=1, norm_type=norm_type, act_type=act_type)
         self.in_dw = ConvBlock(stem_filters, n_filters[0], stride=first_stride, norm_type=norm_type, act_type=act_type)
-        
-        # Encoder
+
         self.block1 = LayerBasic(n_blocks[0], n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
-        
-        dw_block = DownsamplingConvBlock if dw_type == 'conv' else DownsamplingBlock
-        self.block1_dw = dw_block(n_filters[0], n_filters[1], norm_type=norm_type, act_type=act_type)
+        self.block1_dw = DownsamplingConvBlock(n_filters[0], n_filters[1], norm_type=norm_type, act_type=act_type)
 
         self.block2 = LayerBasic(n_blocks[1], n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        self.block2_dw = dw_block(n_filters[1], n_filters[2], norm_type=norm_type, act_type=act_type)
+        self.block2_dw = DownsamplingConvBlock(n_filters[1], n_filters[2], norm_type=norm_type, act_type=act_type)
 
         self.block3 = LayerBasic(n_blocks[2], n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
-        self.block3_dw = dw_block(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
+        self.block3_dw = DownsamplingConvBlock(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
 
-        if aspp:
-            self.block4 = ASPP(n_filters[3], norm_type=norm_type, act_type=act_type)
-        else:
-            self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
+        self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
 
-        # Dropout
-        if dropout > 0:
-            self.dropout = nn.Dropout3d(dropout)
-        else:
-            self.dropout = None
-            
-        # Decoder
-        up_block = UpsamplingDeconvBlock if up_type == 'deconv' else UpsamplingBlock
-        self.block33_up = up_block(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
+        self.block33_up = UpsamplingDeconvBlock(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
         self.block33_res = LayerBasic(1, n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
         self.block33 = LayerBasic(2, n_filters[2] * 2, n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
 
-        self.block22_up = up_block(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
+        self.block22_up = UpsamplingDeconvBlock(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
         self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         self.block22 = LayerBasic(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        
-        # Head
-        self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type, reg_max = reg_max)
+        self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
         self._init_weight()
 
     def forward(self, inputs):
@@ -372,14 +274,8 @@ class Resnet18(nn.Module):
         x2 = self.block2(x)
         x = self.block2_dw(x2)
 
-        if self.dropout is not None:
-            x2 = self.dropout(x2)
-
         x3 = self.block3(x)
         x = self.block3_dw(x3)
-
-        if self.dropout is not None:
-            x3 = self.dropout(x3)
 
         x = self.block4(x)
 
@@ -412,7 +308,7 @@ class Resnet18(nn.Module):
         nn.init.constant_(self.head.cls_output.bias, -math.log((1.0 - prior) / prior))
 
         nn.init.constant_(self.head.shape_output.weight, 0)
-        nn.init.constant_(self.head.shape_output.bias, -math.log((1.0 - prior) / prior))
+        nn.init.constant_(self.head.shape_output.bias, 0.5)
 
         nn.init.constant_(self.head.offset_output.weight, 0)
         nn.init.constant_(self.head.offset_output.bias, 0.05)
@@ -429,7 +325,9 @@ def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0
     """
     dtype, device = feat.dtype, feat.device
     _, _, d, h, w = feat.shape
-    strides = torch.tensor([input_size[0] / d, input_size[1] / h, input_size[2] / w], dtype=dtype, device=device)
+    strides = torch.tensor([input_size[0] / d, 
+                            input_size[1] / h, 
+                            input_size[2] / w]).type(dtype).to(device)
     sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
     sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
     sz = torch.arange(end=d, device=device, dtype=dtype) + grid_cell_offset  # shift z
@@ -442,22 +340,15 @@ class DetectionLoss(nn.Module):
                  crop_size=[64, 128, 128], 
                  pos_target_topk = 7, 
                  pos_ignore_ratio = 3,
-                 cls_num_hard = 100,
-                 cls_fn_weight = 4.0,
-                 cls_fn_threshold = 0.8,
-                 reg_max = 40):
+                 spacing=[2.0, 1.0, 1.0]):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
         self.pos_ignore_ratio = pos_ignore_ratio
-        
-        self.cls_num_hard = cls_num_hard
-        self.cls_fn_weight = cls_fn_weight
-        self.cls_fn_threshold = cls_fn_threshold
-        self.reg_max = reg_max
-        
+        self.spacing = np.array(spacing)
+
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100):
         """
         Args:
             pred: torch.Tensor
@@ -483,9 +374,9 @@ class DetectionLoss(nn.Module):
             cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
             record_targets = target_b.clone()
             if num_positive_pixels > 0:
-                # FN_weights = 4.0  # 10.0  for ablation study
-                FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
-                cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
+                FN_weights = 4.0  # 10.0  for ablation study
+                FN_index = torch.lt(cls_prob, 0.8) & (record_targets == 1)  # 0.9
+                cls_loss[FN_index == 1] = FN_weights * cls_loss[FN_index == 1]
                 
                 Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
@@ -521,8 +412,8 @@ class DetectionLoss(nn.Module):
         
         Args:
             annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
-                (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
+                A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format:
+                (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1). The last index -1 means the annotation is ignored.
             device: torch.device, the device of the model.
             input_size: List[int]
                 A list of length 3 containing the (z, y, x) dimensions of the input.
@@ -531,21 +422,21 @@ class DetectionLoss(nn.Module):
         Returns: 
             A tuple of two tensors:
                 (1) annotations_new: torch.Tensor
-                    A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
-                    (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
+                    A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format:
+                    (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1). The last index -1 means the annotation is ignored.
                 (2) mask_ignore: torch.Tensor
                     A tensor of shape (batch_size, 1, z, y, x) to store the mask ignore.
         """
         batch_size = annotations.shape[0]
-        annotations_new = -1 * torch.ones_like(annotations, device=device)
+        annotations_new = -1 * torch.ones_like(annotations).to(device)
         for sample_i in range(batch_size):
             annots = annotations[sample_i]
             gt_bboxes = annots[annots[:, -1] > -1] # -1 means ignore, it is used to make each sample has same number of bbox (pad with -1)
             bbox_annotation_target = []
             
-            crop_box = torch.tensor([0., 0., 0., input_size[0], input_size[1], input_size[2]], device=device)
+            crop_box = torch.tensor([0., 0., 0., input_size[0], input_size[1], input_size[2]]).to(device) # (z_ctr, y_ctr, x_ctr, d, h, w)
             for s in range(len(gt_bboxes)):
-                each_label = gt_bboxes[s] # (z_ctr, y_ctr, x_ctr, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1)
+                each_label = gt_bboxes[s] # (z_ctr, y_ctr, x_ctr, d, h, w)
                 # coordinate convert zmin, ymin, xmin, d, h, w
                 z1 = (torch.max(each_label[0] - each_label[3]/2., crop_box[0]))
                 y1 = (torch.max(each_label[1] - each_label[4]/2., crop_box[1]))
@@ -562,9 +453,8 @@ class DetectionLoss(nn.Module):
                     continue
                 percent = nw * nh * nd / (each_label[3] * each_label[4] * each_label[5])
                 if (percent > 0.1) and (nw*nh*nd >= 15):
-                    spacing_z, spacing_y, spacing_x = each_label[6:9]
-                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
-                    bbox_annotation_target.append(bbox.view(1, 10))
+                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), 0])).to(device)
+                    bbox_annotation_target.append(bbox.view(1, 7))
                 else:
                     mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
             if len(bbox_annotation_target) > 0:
@@ -574,6 +464,11 @@ class DetectionLoss(nn.Module):
     
     @staticmethod
     def bbox_iou(box1, box2, DIoU=True, eps = 1e-7):
+        def zyxdhw2zyxzyx(box, dim=-1):
+            ctr_zyx, dhw = torch.split(box, 3, dim)
+            z1y1x1 = ctr_zyx - dhw/2
+            z2y2x2 = ctr_zyx + dhw/2
+            return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
         box1 = zyxdhw2zyxzyx(box1)
         box2 = zyxdhw2zyxzyx(box2)
         # Get the coordinates of bounding boxes
@@ -606,20 +501,23 @@ class DetectionLoss(nn.Module):
     def get_pos_target(annotations: torch.Tensor,
                        anchor_points: torch.Tensor,
                        stride: torch.Tensor,
+                       spacing: np.ndarray,
                        pos_target_topk = 7, 
                        ignore_ratio = 3,
-                       reg_max = 40):# larger the ignore_ratio, the more GPU memory is used
+                       center_ratio = 0.3):# larger the ignore_ratio, the more GPU memory is used
         """Get the positive targets for the network.
         Steps:
             1. Calculate the distance between each annotation and each anchor point.
             2. Find the top k anchor points with the smallest distance for each annotation.
         Args:
             annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format: (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1).
+                A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format: (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1)
             anchor_points: torch.Tensor
                 A tensor of shape (num_of_point, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
             stride: torch.Tensor
                 A tensor of shape (1,1,3) containing the strides of each dimension in format (z, y, x).
+            spacing: np.Array
+                A ndarray of shape (3,) containing the spacing of each dimension in format (z, y, x).
         """
         batchsize, num_of_annots, _ = annotations.size()
         # -1 means ignore, larger than 0 means positive
@@ -631,15 +529,20 @@ class DetectionLoss(nn.Module):
         ctr_gt_boxes = annotations[:, :, :3] / stride # z0, y0, x0
         shape = annotations[:, :, 3:6] / 2 # half d h w
         
-        sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
-        sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
+        sp = torch.from_numpy(spacing).to(ctr_gt_boxes.device).view(1, 1, 1, 3)
         
-        # distance (b, n_max_object, anchors)
-        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1))
+        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1)) # (bs, num_annotations, num_of_points)
         _, topk_inds = torch.topk(distance, (ignore_ratio + 1) * pos_target_topk, dim=-1, largest=True, sorted=True)
         
-        mask_topk = F.one_hot(topk_inds[:, :, :pos_target_topk], distance.size()[-1]).sum(-2) # (b, num_annotation, num_of_points), the value is 1 or 0
+        mask_topk = F.one_hot(topk_inds[:, :, :pos_target_topk], distance.size()[-1]).sum(-2) # (bs, num_annotation, num_of_points), the value is 1 or 0
         mask_ignore = -1 * F.one_hot(topk_inds[:, :, pos_target_topk:], distance.size()[-1]).sum(-2) # the value is -1 or 0
+        
+        shape_pixel = shape / stride # shape = (b, num_annotations, 3)
+        radius = shape_pixel.mean(-1) * center_ratio # shape = (b, num_annotations)
+        radius_sq = radius ** 2
+        distance_top = (-distance < radius_sq.unsqueeze(-1)).int()
+        mask_topk = torch.bitwise_or(mask_topk, distance_top) # the value is 1 or 0, shape= (b, num_annotations, num_of_points)
+        mask_ignore = torch.where(distance_top == 1, torch.zeros_like(mask_ignore), mask_ignore)
         
         # the value is 1 or 0, shape= (b, num_annotations, num_of_points)
         # mask_gt is 1 mean the annotation is not ignored, 0 means the annotation is ignored
@@ -658,10 +561,8 @@ class DetectionLoss(nn.Module):
         target_ctr = ctr_gt_boxes.view(-1, 3)[gt_idx]
         target_offset = target_ctr - anchor_points
         target_shape = shape.view(-1, 3)[gt_idx]
-        target_shape = torch.clamp(target_shape, min=None, max=reg_max) # restrict the shape to reg_max, first 0.5 is mean the half of the shape
         
-        target_bboxes = annotations[:, :, :6].view(-1, 6)[gt_idx] # zyxdhw
-        target_bboxes[:, 3:] = torch.clamp(target_bboxes[:, 3:], min=None, max=reg_max * 2) # restrict the shape to reg_max
+        target_bboxes = annotations[:, :, :-1].view(-1, 6)[gt_idx] # zyxdhw
         target_scores, _ = torch.max(mask_pos, 1) # shape = (b, num_of_points), the value is 1 or 0, 1 means the point is assigned to positive
         mask_ignore, _ = torch.min(mask_ignore, 1) # shape = (b, num_of_points), the value is -1 or 0, -1 means the point is ignored
         del target_ctr, distance, mask_topk
@@ -675,14 +576,13 @@ class DetectionLoss(nn.Module):
         Args:
             output: Dict[str, torch.Tensor], the output of the model.
             annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
-                (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
+                A tensor of shape (batch_size, num_annotations, 7) containing the annotations in the format:
+                (ctr_z, ctr_y, ctr_x, d, h, w, 0 or -1). The last index -1 means the annotation is ignored.
             device: torch.device, the device of the model.
         """
-        Cls = output['Cls'] # # shape = [bs, 1, z, y, x]
+        Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
-        Shape_feat = output['Shape_feat'] # [bs, num_points, 3, reg_max+1]
         batch_size = Cls.size()[0]
         target_mask_ignore = torch.zeros(Cls.size()).to(device)
         
@@ -707,53 +607,26 @@ class DetectionLoss(nn.Module):
         target_offset, target_shape, target_bboxes, target_scores, mask_ignore = self.get_pos_target(annotations = process_annotations,
                                                                                                      anchor_points = anchor_points,
                                                                                                      stride = stride_tensor[0].view(1, 1, 3), 
+                                                                                                     spacing = self.spacing, 
                                                                                                      pos_target_topk = self.pos_target_topk,
-                                                                                                     ignore_ratio = self.pos_ignore_ratio,
-                                                                                                     reg_max=self.reg_max)
+                                                                                                     ignore_ratio = self.pos_ignore_ratio)
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
-        fg_mask = target_scores.squeeze(-1).bool() # shape = (b, num_points)
-        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), num_hard=self.cls_num_hard, fn_weight=self.cls_fn_weight, fn_threshold=self.cls_fn_threshold)
+        fg_mask = target_scores.squeeze(-1).bool()
+        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int())
         if fg_mask.sum() == 0:
             reg_losses = torch.tensor(0).float().to(device)
             offset_losses = torch.tensor(0).float().to(device)
             iou_losses = torch.tensor(0).float().to(device)
         else:
-            reg_losses = self.distribution_focal_loss(Shape_feat[fg_mask].view(-1, self.reg_max+1), target_shape[fg_mask].view(-1))
+            reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            # print('ppred:', pred_bboxes[fg_mask][:5])
-            # print('gt:', target_bboxes[fg_mask][:5])
-            iou_losses = -(self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
-            
+            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+        
         return classification_losses, reg_losses, offset_losses, iou_losses
 
-    @staticmethod
-    def distribution_focal_loss(pred, label):
-        r"""Distribution Focal Loss (DFL) is from `Generalized Focal Loss: Learning
-        Qualified and Distributed Bounding Boxes for Dense Object Detection
-        <https://arxiv.org/abs/2006.04388>`_.
-
-        Args:
-            pred (torch.Tensor): Predicted general distribution of bounding boxes
-                (before softmax) with shape (N, n+1), n is the max value of the
-                integral set `{0, ..., n}` in paper.
-            label (torch.Tensor): Target distance label for bounding boxes with
-                shape (N,).
-
-        Returns:
-            torch.Tensor: Loss tensor with shape (N,).
-        """
-        dis_left = label.long()
-        dis_right = dis_left + 1
-        weight_left = dis_right.float() - label
-        weight_right = label - dis_left.float()
-        loss = F.cross_entropy(pred, dis_left, reduction='none') * weight_left \
-            + F.cross_entropy(pred, dis_right, reduction='none') * weight_right
-        return loss
-
-    
 class DetectionPostprocess(nn.Module):
-    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96]):
+    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[64, 96, 96]):
         super(DetectionPostprocess, self).__init__()
         self.topk = topk
         self.threshold = threshold

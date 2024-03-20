@@ -33,76 +33,6 @@ def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_sh
     center_zyx = (anchor_points + pred_offsets) * stride_tensor
     return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
 
-class Scale(nn.Module):
-    def __init__(self, init_val=1.0):
-        super(Scale, self).__init__()
-        self.scale = nn.Parameter(torch.tensor(data=init_val), requires_grad=True)
-
-    def forward(self, x):
-        return x * self.scale
-
-class SubNetFC(nn.Module):
-    def __init__(self, m_top_k = 4, inner_channel = 64, add_mean = True):
-        super(SubNetFC, self).__init__()
-        self.m_top_k = m_top_k
-        self.add_mean = add_mean
-        total_dim = (m_top_k + 1) if add_mean else m_top_k
-        self.reg_conf = nn.Sequential(nn.Conv3d(total_dim * 3, inner_channel, kernel_size=1),
-                                    nn.ReLU(inplace = True),
-                                    nn.Conv3d(inner_channel, 1, kernel_size=1))
-    def forward(self, x):
-        """
-        Args:
-            x: torch.Tensor
-                The input tensor of shape (bs, 3*(reg_max + 1), d, h, w).
-        """
-        bs, n, d, h, w = x.shape
-        x = x.view(x.shape[0], 3, -1, d, h, w) # [bs, 3, reg_max+1, d, h, w]
-        x = F.softmax(x, dim = 2) # [bs, 3, reg_max+1, d, h, w]
-        prob_topk, _ = x.topk(self.m_top_k, dim = 2)  # shape=[bs, 3, m_top_k, d, h, w]
-        if self.add_mean:
-            stat = torch.cat([prob_topk, prob_topk.mean(dim = 2, keepdim = True)], dim=2) # shape=[bs, 3, m_top_k+1, d, h, w]
-        else:
-            stat = prob_topk # shape=[bs, 3, m_top_k, d, h, w]
-        quality_score = self.reg_conf(stat.view(bs, -1, d, h, w)) # shape=[bs, 1, d, h, w]
-        return quality_score
-    
-class Integral(nn.Module):
-    """A fixed layer for calculating integral result from distribution.
-    This layer calculates the target location by :math: `sum{P(y_i) * y_i}`,
-    P(y_i) denotes the softmax vector that represents the discrete distribution
-    y_i denotes the discrete set, usually {0, 1, 2, ..., reg_max}
-    Args:
-        reg_max (int): The maximal value of the discrete set. Default: 16. You
-            may want to reset it according to your new dataset or related
-            settings.
-
-    From generalized focal loss v2
-
-    """
-
-    def __init__(self, reg_max = 40):
-        super(Integral, self).__init__()
-        self.reg_max = reg_max
-        self.register_buffer(
-            "project", torch.linspace(0, self.reg_max, self.reg_max + 1)
-        )
-
-    def forward(self, x):
-        """Forward feature from the regression head to get integral result of
-        bounding box location.
-        Args:
-        Returns:
-            x (Tensor): Integral result of box locations, i.e., nodule dhw.
-        """
-        bs, n, d, h, w = x.shape
-        num_points = d * h * w
-        x = x.view(bs, n, num_points).permute(0, 2, 1).contiguous().view(bs, num_points, 3, -1) # [bs, z*y*x, 3, reg_max+1]
-        x = F.softmax(x, dim = -1) # [bs, z*y*x, 3, reg_max+1]
-        x = F.linear(x, self.project.type_as(x)) # [bs, z*y*x, 3]
-        x = x.permute(0, 2, 1).contiguous() # [bs, 3, z*y*x]
-        return x
-
 class BasicBlockNew(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):
         super(BasicBlockNew, self).__init__()
@@ -164,6 +94,47 @@ class LayerBasic(nn.Module):
         x = self.conv(x)
         return x
 
+class ELAN_Layer(nn.Module):
+    def __init__(self, n_stages: int, in_channels: int, out_channels: int, stride=1, norm_type='batchnorm', act_type='ReLU', se=False, ratio=1):
+        super(ELAN_Layer, self).__init__()
+        self.n_stages = n_stages
+        # self.convs = []
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        
+        for i in range(n_stages):
+            if i == 0:
+                input_channel = self.in_channels // 2
+                out_channels = self.out_channels // ratio
+                stride = stride
+            else:
+                input_channel = self.out_channels // ratio
+                out_channels = self.out_channels // ratio
+                stride = 1
+            setattr(self, f'conv{i}', BasicBlockNew(input_channel, out_channels, stride=stride, norm_type=norm_type, act_type=act_type, se=se))
+
+        if stride > 1:
+            self.skip1 = nn.Sequential(nn.AvgPool3d(kernel_size=2, stride=2), ConvBlock(self.in_channels // 2, self.out_channels // ratio, kernel_size=1, act_type='none', norm_type=norm_type))
+            self.skip2 = nn.Sequential(nn.AvgPool3d(kernel_size=2, stride=2), ConvBlock(self.in_channels // 2, self.out_channels // ratio, kernel_size=1, act_type='none', norm_type=norm_type))
+        else:
+            self.skip1 = ConvBlock(self.in_channels // 2, self.out_channels // ratio, kernel_size=1, act_type='none', norm_type=norm_type)
+            self.skip2 = ConvBlock(self.in_channels // 2, self.out_channels // ratio, kernel_size=1, act_type='none', norm_type=norm_type)
+        
+        self.trans = ConvBlock((n_stages + 2) * self.out_channels // ratio, self.out_channels, kernel_size=1, act_type=act_type, norm_type=norm_type)
+            
+    def forward(self, x):
+        skip1 = self.skip1(x[:, :self.in_channels//2])
+        x = x[:, self.in_channels//2:]
+        skip2 = self.skip2(x)
+        feats = [skip1, skip2]
+        
+        for i in range(self.n_stages):
+            x = getattr(self, f'conv{i}')(x)
+            feats.append(x)
+        x = torch.cat(feats, dim=1)
+        x = self.trans(x)
+        return x
+
 class DownsamplingConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=2, norm_type='batchnorm', act_type='ReLU'):
         super(DownsamplingConvBlock, self).__init__()
@@ -210,7 +181,7 @@ class UpsamplingDeconvBlock(nn.Module):
         x = self.norm(x)
         x = self.act(x)
         return x
-    
+
 class UpsamplingBlock(nn.Module):
     def __init__(self, in_channels=None, out_channels=None, stride=2, mode='nearest', norm_type='batchnorm',
                  act_type='ReLU'):
@@ -228,7 +199,7 @@ class UpsamplingBlock(nn.Module):
 
 class ASPP(nn.Module):
     def __init__(self, channels, ratio=4,
-                 dilations=[1, 2, 3, 4],
+                 dilations=[1, 1, 2, 3],
                  norm_type='batchnorm', act_type='ReLU'):
         super(ASPP, self).__init__()
         # assert dilations[0] == 1, 'The first item in dilations should be `1`'
@@ -261,7 +232,7 @@ class ASPP(nn.Module):
 
 class ClsRegHead(nn.Module):
     def __init__(self, in_channels, feature_size=96, conv_num=2,
-                 norm_type='groupnorm', act_type='LeakyReLU', reg_max=40):
+                 norm_type='groupnorm', act_type='LeakyReLU'):
         super(ClsRegHead, self).__init__()
 
         conv_s = []
@@ -282,34 +253,23 @@ class ClsRegHead(nn.Module):
         self.conv_o = nn.Sequential(*conv_o)
         
         self.cls_output = nn.Conv3d(feature_size, 1, kernel_size=3, padding=1)
-        self.shape_output = nn.Conv3d(feature_size, 3 * (reg_max + 1), kernel_size=3, padding=1)
+        self.shape_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
         self.offset_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
         
-        self.intergral = Integral(reg_max=reg_max)
-        self.scale = Scale()
-        self.subnet = SubNetFC(m_top_k = 4, inner_channel = 64, add_mean = True)
-        
     def forward(self, x):
-        Shape_feat = self.scale(self.shape_output(self.conv_r(x))) # [bs, 3*(reg_max+1), d, h, w]
+        Shape = self.shape_output(self.conv_r(x))
         Offset = self.offset_output(self.conv_o(x))
-        Cls = self.cls_output(self.conv_s(x)) # shape = [bs, 1, d, h, w]
+        Cls = self.cls_output(self.conv_s(x))
         dict1 = {}
-        
-        # cls_weight = self.subnet(Shape_feat).sigmoid() # [bs, d*h*w]
-        # cls_weight = cls_weight.view(bs, 1, d, h, w)
-        dict1['Cls'] = Cls * self.subnet(Shape_feat).sigmoid() # [bs, 1, d, h, w]
-        dict1['Shape'] = self.intergral(Shape_feat)
-        dict1['Offset'] = Offset    
-        
-        bs, n, d, h, w = Shape_feat.shape
-        num_points = d * h * w
-        dict1['Shape_feat'] = Shape_feat.view(bs, n, num_points).permute(0, 2, 1).contiguous().view(bs, num_points, 3, -1) # [bs, z*y*x, 3, reg_max+1]
+        dict1['Cls'] = Cls
+        dict1['Shape'] = Shape
+        dict1['Offset'] = Offset
         return dict1
 
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
                  norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
-                 first_stride=(2, 2, 2), detection_loss=None, device=None, reg_max=40):
+                 first_stride=(2, 2, 2), detection_loss=None, device=None):
         super(Resnet18, self).__init__()
         assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
         assert len(n_filters) == 4, 'The length of n_filters should be 4'
@@ -321,21 +281,21 @@ class Resnet18(nn.Module):
         self.in_dw = ConvBlock(stem_filters, n_filters[0], stride=first_stride, norm_type=norm_type, act_type=act_type)
         
         # Encoder
-        self.block1 = LayerBasic(n_blocks[0], n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
+        self.block1 = ELAN_Layer(n_blocks[0], n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
         
         dw_block = DownsamplingConvBlock if dw_type == 'conv' else DownsamplingBlock
         self.block1_dw = dw_block(n_filters[0], n_filters[1], norm_type=norm_type, act_type=act_type)
 
-        self.block2 = LayerBasic(n_blocks[1], n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
+        self.block2 = ELAN_Layer(n_blocks[1], n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         self.block2_dw = dw_block(n_filters[1], n_filters[2], norm_type=norm_type, act_type=act_type)
 
-        self.block3 = LayerBasic(n_blocks[2], n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
+        self.block3 = ELAN_Layer(n_blocks[2], n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
         self.block3_dw = dw_block(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
 
         if aspp:
             self.block4 = ASPP(n_filters[3], norm_type=norm_type, act_type=act_type)
         else:
-            self.block4 = LayerBasic(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
+            self.block4 = ELAN_Layer(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
 
         # Dropout
         if dropout > 0:
@@ -347,14 +307,14 @@ class Resnet18(nn.Module):
         up_block = UpsamplingDeconvBlock if up_type == 'deconv' else UpsamplingBlock
         self.block33_up = up_block(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
         self.block33_res = LayerBasic(1, n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
-        self.block33 = LayerBasic(2, n_filters[2] * 2, n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
+        self.block33 = ELAN_Layer(2, n_filters[2] * 2, n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
 
         self.block22_up = up_block(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
         self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        self.block22 = LayerBasic(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
+        self.block22 = ELAN_Layer(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         
         # Head
-        self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type, reg_max = reg_max)
+        self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
         self._init_weight()
 
     def forward(self, inputs):
@@ -412,7 +372,7 @@ class Resnet18(nn.Module):
         nn.init.constant_(self.head.cls_output.bias, -math.log((1.0 - prior) / prior))
 
         nn.init.constant_(self.head.shape_output.weight, 0)
-        nn.init.constant_(self.head.shape_output.bias, -math.log((1.0 - prior) / prior))
+        nn.init.constant_(self.head.shape_output.bias, 0.5)
 
         nn.init.constant_(self.head.offset_output.weight, 0)
         nn.init.constant_(self.head.offset_output.bias, 0.05)
@@ -442,26 +402,38 @@ class DetectionLoss(nn.Module):
                  crop_size=[64, 128, 128], 
                  pos_target_topk = 7, 
                  pos_ignore_ratio = 3,
+                 cls_num_neg = 10000,
                  cls_num_hard = 100,
                  cls_fn_weight = 4.0,
-                 cls_fn_threshold = 0.8,
-                 reg_max = 40):
+                 cls_fn_threshold = 0.8):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
         self.pos_ignore_ratio = pos_ignore_ratio
         
+        self.cls_num_neg = cls_num_neg
         self.cls_num_hard = cls_num_hard
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
-        self.reg_max = reg_max
-        
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
         """
+        Calculates the classification loss using focal loss and binary cross entropy.
+
         Args:
-            pred: torch.Tensor
-                The predicted logits of shape (b, num_points, 1)
+            pred (torch.Tensor): The predicted logits of shape (b, num_points, 1)
+            target: The target labels of shape (b, num_points, 1)
+            mask_ignore: The mask indicating which pixels to ignore of shape (b, num_points, 1)
+            alpha (float): The alpha factor for focal loss (default: 0.75)
+            gamma (float): The gamma factor for focal loss (default: 2.0)
+            num_neg (int): The maximum number of negative pixels to consider (default: 10000, if -1, use all negative pixels)
+            num_hard (int): The number of hard negative pixels to keep (default: 100)
+            ratio (int): The ratio of negative to positive pixels to consider (default: 100)
+            fn_weight (float): The weight for false negative pixels (default: 4.0)
+            fn_threshold (float): The threshold for considering a pixel as a false negative (default: 0.8)
+
+        Returns:
+            torch.Tensor: The calculated classification loss
         """
         classification_losses = []
         batch_size = pred.shape[0]
@@ -490,8 +462,9 @@ class DetectionLoss(nn.Module):
                 Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
                 
-                neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
-                Negative_loss = Negative_loss[neg_idcs] 
+                if num_neg != -1:
+                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
+                    Negative_loss = Negative_loss[neg_idcs] 
                 _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
                 Negative_loss = Negative_loss[keep_idx] 
                 
@@ -501,8 +474,9 @@ class DetectionLoss(nn.Module):
 
             else:
                 Negative_loss = cls_loss[record_targets == 0]
-                neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
-                Negative_loss = Negative_loss[neg_idcs]
+                if num_neg != -1:
+                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
+                    Negative_loss = Negative_loss[neg_idcs]
                 assert len(Negative_loss) > num_hard
                 _, keep_idx = torch.topk(Negative_loss, num_hard)
                 Negative_loss = Negative_loss[keep_idx]
@@ -607,8 +581,7 @@ class DetectionLoss(nn.Module):
                        anchor_points: torch.Tensor,
                        stride: torch.Tensor,
                        pos_target_topk = 7, 
-                       ignore_ratio = 3,
-                       reg_max = 40):# larger the ignore_ratio, the more GPU memory is used
+                       ignore_ratio = 3):# larger the ignore_ratio, the more GPU memory is used
         """Get the positive targets for the network.
         Steps:
             1. Calculate the distance between each annotation and each anchor point.
@@ -658,10 +631,8 @@ class DetectionLoss(nn.Module):
         target_ctr = ctr_gt_boxes.view(-1, 3)[gt_idx]
         target_offset = target_ctr - anchor_points
         target_shape = shape.view(-1, 3)[gt_idx]
-        target_shape = torch.clamp(target_shape, min=None, max=reg_max) # restrict the shape to reg_max, first 0.5 is mean the half of the shape
         
         target_bboxes = annotations[:, :, :6].view(-1, 6)[gt_idx] # zyxdhw
-        target_bboxes[:, 3:] = torch.clamp(target_bboxes[:, 3:], min=None, max=reg_max * 2) # restrict the shape to reg_max
         target_scores, _ = torch.max(mask_pos, 1) # shape = (b, num_of_points), the value is 1 or 0, 1 means the point is assigned to positive
         mask_ignore, _ = torch.min(mask_ignore, 1) # shape = (b, num_of_points), the value is -1 or 0, -1 means the point is ignored
         del target_ctr, distance, mask_topk
@@ -679,10 +650,9 @@ class DetectionLoss(nn.Module):
                 (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
             device: torch.device, the device of the model.
         """
-        Cls = output['Cls'] # # shape = [bs, 1, z, y, x]
+        Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
-        Shape_feat = output['Shape_feat'] # [bs, num_points, 3, reg_max+1]
         batch_size = Cls.size()[0]
         target_mask_ignore = torch.zeros(Cls.size()).to(device)
         
@@ -708,50 +678,27 @@ class DetectionLoss(nn.Module):
                                                                                                      anchor_points = anchor_points,
                                                                                                      stride = stride_tensor[0].view(1, 1, 3), 
                                                                                                      pos_target_topk = self.pos_target_topk,
-                                                                                                     ignore_ratio = self.pos_ignore_ratio,
-                                                                                                     reg_max=self.reg_max)
+                                                                                                     ignore_ratio = self.pos_ignore_ratio)
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
-        fg_mask = target_scores.squeeze(-1).bool() # shape = (b, num_points)
-        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), num_hard=self.cls_num_hard, fn_weight=self.cls_fn_weight, fn_threshold=self.cls_fn_threshold)
+        fg_mask = target_scores.squeeze(-1).bool()
+        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), 
+                                              num_hard=self.cls_num_hard, 
+                                              num_neg=self.cls_num_neg,
+                                              fn_weight=self.cls_fn_weight, 
+                                              fn_threshold=self.cls_fn_threshold)
+                                              
         if fg_mask.sum() == 0:
             reg_losses = torch.tensor(0).float().to(device)
             offset_losses = torch.tensor(0).float().to(device)
             iou_losses = torch.tensor(0).float().to(device)
         else:
-            reg_losses = self.distribution_focal_loss(Shape_feat[fg_mask].view(-1, self.reg_max+1), target_shape[fg_mask].view(-1))
+            reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            # print('ppred:', pred_bboxes[fg_mask][:5])
-            # print('gt:', target_bboxes[fg_mask][:5])
-            iou_losses = -(self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
-            
+            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+        
         return classification_losses, reg_losses, offset_losses, iou_losses
 
-    @staticmethod
-    def distribution_focal_loss(pred, label):
-        r"""Distribution Focal Loss (DFL) is from `Generalized Focal Loss: Learning
-        Qualified and Distributed Bounding Boxes for Dense Object Detection
-        <https://arxiv.org/abs/2006.04388>`_.
-
-        Args:
-            pred (torch.Tensor): Predicted general distribution of bounding boxes
-                (before softmax) with shape (N, n+1), n is the max value of the
-                integral set `{0, ..., n}` in paper.
-            label (torch.Tensor): Target distance label for bounding boxes with
-                shape (N,).
-
-        Returns:
-            torch.Tensor: Loss tensor with shape (N,).
-        """
-        dis_left = label.long()
-        dis_right = dis_left + 1
-        weight_left = dis_right.float() - label
-        weight_right = label - dis_left.float()
-        loss = F.cross_entropy(pred, dis_left, reduction='none') * weight_left \
-            + F.cross_entropy(pred, dis_right, reduction='none') * weight_right
-        return loss
-
-    
 class DetectionPostprocess(nn.Module):
     def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96]):
         super(DetectionPostprocess, self).__init__()
