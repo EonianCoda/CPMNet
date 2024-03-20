@@ -52,6 +52,41 @@ def infer_collate_fn(batches) -> Dict[str, torch.Tensor]:
             'series_names': series_names,
             'series_folders': series_folders}
 
+def infer_aug_collate_fn(batches) -> Dict[str, torch.Tensor]:
+    num_splits = []
+    imgs = []
+    nzhws = []
+    spacings = []
+    series_names = []
+    series_folders = []
+    ctr_transforms = []
+    feat_transforms = []
+
+    for b in batches:
+        imgs.append(b['split_images']) # (N, num_aug, 1, crop_z, crop_y, crop_x)
+        num_splits.append(b['split_images'].shape[0])
+        nzhws.append(b['nzhw'])
+        spacings.append(b['spacing'])
+        series_names.append(b['series_name'])
+        series_folders.append(b['series_folder'])
+        
+        # Copy the center and feature transforms
+        ctr_transforms.extend([b['ctr_transform'] for _ in range(b['split_images'].shape[0])])  # (N, num_aug)
+        feat_transforms.extend([b['feat_transform'] for _ in range(b['split_images'].shape[0])]) # (N, num_aug)
+        
+    imgs = np.concatenate(imgs, axis=0)
+    nzhws = np.stack(nzhws)
+    num_splits = np.array(num_splits)
+    
+    return {'split_images': torch.from_numpy(imgs),
+            'nzhws': torch.from_numpy(nzhws), 
+            'num_splits': num_splits, 
+            'spacings': spacings, 
+            'series_names': series_names,
+            'series_folders': series_folders,
+            'ctr_transforms': ctr_transforms,
+            'feat_transforms': feat_transforms}
+
 def infer_refined_collate_fn(batches) -> Dict[str, torch.Tensor]:
     num_splits = []
     crop_images = []
@@ -158,7 +193,6 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     samples = {'weak': weak_samples, 
                'strong': strong_samples}
     return samples
-
 
 def unlabeled_focal_train_collate_fn(batches):
     """
