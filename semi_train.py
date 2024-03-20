@@ -296,7 +296,7 @@ def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: in
         rot_yz = False
         rot_xz = False
         
-    # transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
     transform_list_train = []
     transform_list_train.append(transform.CoordToAnnot())
     train_transform = torchvision.transforms.Compose(transform_list_train)
@@ -430,6 +430,7 @@ if __name__ == '__main__':
     # logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
     
     for epoch in range(start_epoch, args.epochs + 1):
+        logger.info('Pseudo label threshold: {:.4f}'.format(args.pseudo_label_threshold))
         train_metrics = train(args = args,
                             model_t = model_t,
                             model_s = model_s,

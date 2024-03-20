@@ -13,6 +13,7 @@ from utils.average_meter import AverageMeter
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
 from transform.label import CoordToAnnot
+from dataload.utils import compute_bbox3d_iou
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,12 @@ def train(args,
     avg_pseu_offset_loss = AverageMeter()
     avg_pseu_iou_loss = AverageMeter()
     avg_pseu_loss = AverageMeter()
+    
+    # For analysis
+    avg_iou_pseu = AverageMeter()
+    avg_tp_pseu = AverageMeter()
+    avg_fp_pseu = AverageMeter()
+    avg_fn_pseu = AverageMeter()
     
     iters_to_accumulate = args.iters_to_accumulate
     # mixed precision training
@@ -174,8 +181,41 @@ def train(args,
                 else:
                     transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
 
-                transformed_annots_padded = transformed_annots_padded[valid_mask]
+                # (For analysis) Compute iou between pseudo label and original label
+                all_iou_pseu = []
+                tp, fp, fn = 0, 0, 0
+                for annot, pseudo_annot, is_valid in zip(strong_u_sample['annot'].numpy(), transformed_annots_padded, valid_mask):
+                    if not is_valid:
+                        fn += np.count_nonzero((annot[:, -1] != -1))
+                        continue
+                    
+                    annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
+                    pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
+                    
+                    if len(annot) == 0:
+                        fp += len(pseudo_annot)
+                        continue
+                    elif len(pseudo_annot) == 0:
+                        fn += len(annot)
+                        continue
+                    
+                    bboxes = np.stack([annot[:, :3] - annot[:, 3:6] / 2, annot[:, :3] + annot[:, 3:6] / 2], axis=1)
+                    pseudo_bboxes = np.stack([pseudo_annot[:, :3] - pseudo_annot[:, 3:6] / 2, pseudo_annot[:, :3] + pseudo_annot[:, 3:6] / 2], axis=1)
+                    ious = compute_bbox3d_iou(pseudo_bboxes, bboxes)
+                    
+                    iou_pseu = ious.max(axis=1)
+                    iou = ious.max(axis=0)
+                    
+                    all_iou_pseu.extend(iou_pseu.tolist())    
+                    tp += np.count_nonzero(iou > 1e-3)
+                    fp += np.count_nonzero(iou_pseu < 1e-3)
                 
+                avg_iou_pseu.update(np.mean(all_iou_pseu))
+                avg_tp_pseu.update(tp)
+                avg_fp_pseu.update(fp)
+                avg_fn_pseu.update(fn)
+                # Apply valid mask
+                transformed_annots_padded = transformed_annots_padded[valid_mask]
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
                 strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
                 
@@ -183,6 +223,7 @@ def train(args,
                 background_mask = background_mask[valid_mask]
                 
                 # np.save('image.npy', strong_u_sample['image'].numpy())
+                # np.save('original_annot.npy', original_annot)
                 # np.save('annot.npy', strong_u_sample['annot'].numpy())
                 # np.save('background_mask.npy', background_mask.cpu().numpy())
                 # raise ValueError('Check the pseudo label')
@@ -192,10 +233,10 @@ def train(args,
                 else:
                     loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
                 
-                avg_pseu_cls_loss.update(cls_pseu_loss.item() * args.lambda_pseu_cls)
-                avg_pseu_shape_loss.update(shape_pseu_loss.item() * args.lambda_pseu_shape)
-                avg_pseu_offset_loss.update(offset_pseu_loss.item() * args.lambda_pseu_offset)
-                avg_pseu_iou_loss.update(iou_pseu_loss.item() * args.lambda_pseu_iou)
+                avg_pseu_cls_loss.update(cls_pseu_loss.item())
+                avg_pseu_shape_loss.update(shape_pseu_loss.item())
+                avg_pseu_offset_loss.update(offset_pseu_loss.item())
+                avg_pseu_iou_loss.update(iou_pseu_loss.item())
                 avg_pseu_loss.update(loss_pseu.item())
                 
                 num_pseudo_label += len(strong_u_sample['annot'])
@@ -203,6 +244,10 @@ def train(args,
                 outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
                 
+                for annot in strong_u_sample['annot'].numpy():
+                    if len(annot) > 0:
+                        avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
+            del outputs_pseu
             ### Labeled data
             try:
                 labeled_sample = next(iter_l)
@@ -215,10 +260,10 @@ def train(args,
                     loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs = train_one_step(args, model_s, labeled_sample, device)
             else:
                 loss, cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model_s, labeled_sample, device)
-            avg_cls_loss.update(cls_loss.item() * args.lambda_cls)
-            avg_shape_loss.update(shape_loss.item() * args.lambda_shape)
-            avg_offset_loss.update(offset_loss.item() * args.lambda_offset)
-            avg_iou_loss.update(iou_loss.item() * args.lambda_iou)
+            avg_cls_loss.update(cls_loss.item())
+            avg_shape_loss.update(shape_loss.item())
+            avg_offset_loss.update(offset_loss.item())
+            avg_iou_loss.update(iou_loss.item())
             avg_loss.update(loss.item())
             
             # Update model
@@ -230,26 +275,27 @@ def train(args,
             else:
                 total_loss.backward()
                 optimizer.step()
+            del labeled_sample, outputs, loss, loss_pseu
             progress_bar.set_postfix(loss_l = avg_loss.avg,
                                     cls_l = avg_cls_loss.avg,
-                                    shape_l = avg_shape_loss.avg,
-                                    offset_l = avg_offset_loss.avg,
                                     giou_l = avg_iou_loss.avg,
                                     loss_u = avg_pseu_loss.avg,
                                     cls_u = avg_pseu_cls_loss.avg,
-                                    shape_u = avg_pseu_shape_loss.avg,
-                                    offset_u = avg_pseu_offset_loss.avg,
                                     giou_u = avg_pseu_iou_loss.avg,
-                                    num_u = num_pseudo_label)
+                                    num_u = num_pseudo_label,
+                                    tp = avg_tp_pseu.sum,
+                                    fp = avg_fp_pseu.sum,
+                                    fn = avg_fn_pseu.sum)
             progress_bar.update()
             
-            del loss, loss_pseu, outputs, outputs_pseu
             with torch.no_grad():
                 # Update teacher model by exponential moving average
                 for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
                     teacher_param.data.mul_(args.semi_ema_alpha).add_((1 - args.semi_ema_alpha) * param.data)
             torch.cuda.empty_cache()
-            ##TODO update BN?
+            
+    recall = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fn_pseu.sum, 1e-3)
+    precision = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fp_pseu.sum, 1e-3)
     metrics = {'loss': avg_loss.avg,
                 'cls_loss': avg_cls_loss.avg,
                 'shape_loss': avg_shape_loss.avg,
@@ -259,6 +305,11 @@ def train(args,
                 'cls_loss_pseu': avg_pseu_cls_loss.avg,
                 'shape_loss_pseu': avg_pseu_shape_loss.avg,
                 'offset_loss_pseu': avg_pseu_offset_loss.avg,
-                'iou_loss_pseu': avg_pseu_iou_loss.avg}
-    logger.info(f'Num pseudo label: {num_pseudo_label}')
+                'iou_loss_pseu': avg_pseu_iou_loss.avg,
+                'num_pseudo_label':  num_pseudo_label,
+                'pseu_recall': recall,
+                'pseu_precision': precision,
+                'pseu_tp': avg_tp_pseu.sum,
+                'pseu_fp': avg_fp_pseu.sum,
+                'pseu_fn': avg_fn_pseu.sum}
     return metrics

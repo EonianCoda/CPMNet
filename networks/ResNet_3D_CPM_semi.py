@@ -714,11 +714,11 @@ class Unsupervised_DetectionLoss(nn.Module):
                 # cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
                 Positive_loss = cls_loss[record_targets == 1]
                 Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
-                if num_neg != -1:
-                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
-                    Negative_loss = Negative_loss[neg_idcs]
-                _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
-                Negative_loss = Negative_loss[keep_idx]
+                # if num_neg != -1:
+                #     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
+                #     Negative_loss = Negative_loss[neg_idcs]
+                # _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
+                # Negative_loss = Negative_loss[keep_idx]
                 
                 Positive_loss = Positive_loss.sum()
                 Negative_loss = Negative_loss.sum()
@@ -726,12 +726,12 @@ class Unsupervised_DetectionLoss(nn.Module):
 
             else:
                 Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
-                if num_neg != -1:
-                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
-                    Negative_loss = Negative_loss[neg_idcs]
-                assert len(Negative_loss) > num_hard
-                _, keep_idx = torch.topk(Negative_loss, num_hard)
-                Negative_loss = Negative_loss[keep_idx]
+                # if num_neg != -1:
+                #     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
+                #     Negative_loss = Negative_loss[neg_idcs]
+                # assert len(Negative_loss) > num_hard
+                # _, keep_idx = torch.topk(Negative_loss, num_hard)
+                # Negative_loss = Negative_loss[keep_idx]
                 Negative_loss = Negative_loss.sum()
                 cls_loss = Negative_loss
             classification_losses.append(cls_loss / torch.clamp(num_positive_pixels.float(), min=1.0))

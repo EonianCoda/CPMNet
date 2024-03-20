@@ -1,513 +1,317 @@
-# %% -*- coding: utf-8 -*-
-from __future__ import print_function
-import argparse
-import torch
 import os
+import json
+import math
 import logging
-import pickle
 import numpy as np
-from typing import Tuple
-from networks.ResNet_3D_CPM_semi_uni import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
-### data ###
-from dataload.dataset_semi import TrainDataset, DetDataset, UnLabeledDataset
-from dataload.utils import get_image_padding_value
-from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_train_collate_fn
-from dataload.split_combine import SplitComb
+from typing import Any, Dict, List, Tuple
+
+import time
+import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
-import transform as transform
-import torchvision
-from torch.utils.tensorboard import SummaryWriter
-### logic ###
-from logic.semi_uni_train import train
-from logic.val import val
-from logic.pseudo_label import gen_pseu_labels
-from logic.utils import write_metrics, save_states, load_states, get_memory_format
-from logic.early_stopping_save import EarlyStoppingSave
-### optimzer ###
-from optimizer.optim import AdamW
-from optimizer.scheduler import GradualWarmupScheduler
-from optimizer.ema import EMA
-### postprocessing ###
-from utils.logs import setup_logging
-from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
-from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
+
+from utils.average_meter import AverageMeter
+from utils.utils import get_progress_bar
+from .utils import get_memory_format
+from transform.label import CoordToAnnot
+from dataload.utils import compute_bbox3d_iou
 
 logger = logging.getLogger(__name__)
 
-early_stopping = None
+def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
+    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, device: torch.device, drop=None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        # Compute loss
+        image = sample['image']
+        labels = sample['annot']
+        outputs = model(image, drop)
+        cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, device = device)
+        cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
+        loss = args.lambda_pseu_cls * cls_loss + args.lambda_pseu_shape * shape_loss + args.lambda_pseu_offset * offset_loss + args.lambda_pseu_iou * iou_loss
+        return loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs
+    return train_one_step
 
-def get_args():
-    parser = argparse.ArgumentParser()
-    # Training settings
-    parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
-    parser.add_argument('--mixed_precision', action='store_true', default=False, help='use mixed precision')
-    parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
-    parser.add_argument('--batch_size', type=int, default=6, help='input batch size for training (default: 6)')
-    parser.add_argument('--unlabeled_batch_size', type=int, default=6, help='input batch size for training (default: 6)')
-    parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
-    parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 250)')
-    parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
-    parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
-    # Resume
-    parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
-    parser.add_argument('--pretrained_model_path', type=str, default='')
-    # Data
-    parser.add_argument('--train_set', type=str, help='train_list')
-    parser.add_argument('--val_set', type=str, help='val_list')
-    parser.add_argument('--test_set', type=str, help='test_list')
-    parser.add_argument('--unlabeled_train_set', type=str, help='unlabeled_train_list')
-    parser.add_argument('--min_d', type=int, default=0, help="min depth of nodule, if some nodule's depth < min_d, it will be` ignored")
-    parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
-    parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
-    parser.add_argument('--memory_format', type=str, default='channels_first') # for speed up
+def train_one_step_wrapper(memory_format, loss_fn):
+    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
+        labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
+        # Compute loss
+        outputs = model(image)
+        cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, device = device)
+        cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
+        loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        return loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs
+    return train_one_step
+
+def model_predict_wrapper(memory_format):
+    def model_predict(model: nn.modules, sample: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
+        image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
+        outputs = model(image) # Dict[str, torch.Tensor], key: 'Cls', 'Shape', 'Offset'
+        return outputs
+    return model_predict
+
+def train(args,
+          model: nn.modules,
+          detection_loss,
+          unsupervised_detection_loss,
+          optimizer: torch.optim.Optimizer,
+          dataloader_u: DataLoader,
+          dataloader_l: DataLoader,
+          detection_postprocess,
+          num_iters: int,
+          device: torch.device) -> Dict[str, float]:
+    avg_cls_loss = AverageMeter()
+    avg_shape_loss = AverageMeter()
+    avg_offset_loss = AverageMeter()
+    avg_iou_loss = AverageMeter()
+    avg_loss = AverageMeter()
     
-    parser.add_argument('--crop_partial', action='store_true', default=False, help='crop partial nodule')
-    parser.add_argument('--crop_tp_iou', type=float, default=0.5, help='iou threshold for crop tp use if crop_partial is True')
+    avg_pseu_cls_loss = AverageMeter()
+    avg_pseu_shape_loss = AverageMeter()
+    avg_pseu_offset_loss = AverageMeter()
+    avg_pseu_iou_loss = AverageMeter()
+    avg_pseu_loss = AverageMeter()
     
-    parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
-    # Data Augmentation
-    parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
-    parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
-    parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
-    parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
-    parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
-    parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
-    parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
-    # Learning rate
-    parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
-    parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
-    parser.add_argument('--warmup_gamma', type=float, default=0.01, help='warmup gamma')
-    parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
-    parser.add_argument('--decay_gamma', type=float, default=0.05, help='decay gamma')
-    parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
-    parser.add_argument('--apply_ema', action='store_true', default=False, help='apply ema')
-    parser.add_argument('--ema_decay', type=float, default=0.999, help='ema decay')
-    # Loss hyper-parameters
-    parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of seg')
-    parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
-    parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
-    parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
+    # For analysis
+    avg_iou_pseu = AverageMeter()
+    avg_tp_pseu = AverageMeter()
+    avg_fp_pseu = AverageMeter()
+    avg_fn_pseu = AverageMeter()
     
-    parser.add_argument('--lambda_pseu', type=float, default=1.0, help='weights of pseudo label')
-    parser.add_argument('--lambda_pseu_cls', type=float, default=4.0, help='weights of seg')
-    parser.add_argument('--lambda_pseu_offset', type=float, default=1.0,help='weights of offset')
-    parser.add_argument('--lambda_pseu_shape', type=float, default=0.1, help='weights of reg')
-    parser.add_argument('--lambda_pseu_iou', type=float, default=1.0, help='weights of iou loss')
-    # Train hyper-parameters
-    parser.add_argument('--pos_target_topk', type=int, default=7, help='topk grids assigned as positives')
-    parser.add_argument('--pos_ignore_ratio', type=int, default=3)
-    parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
-    parser.add_argument('--unlabeled_num_samples', type=int, default=5, help='number of samples for each instance')
-    parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
-    parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
-    parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
-    parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
-    parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
-    # Semi hyper-parameters
-    parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
-    parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
-    parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
-    parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
-    # Val hyper-parameters
-    parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
-    parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
-    parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
-    parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
-    parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
-    parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
-    # Network
-    parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
-    parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
-    parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
-    parser.add_argument('--first_stride', nargs='+', type=int, default=[2, 2, 2], help='stride of the first layer')
-    parser.add_argument('--n_blocks', nargs='+', type=int, default=[2, 3, 3, 3], help='number of blocks in each layer')
-    parser.add_argument('--n_filters', nargs='+', type=int, default=[64, 96, 128, 160], help='number of filters in each layer')
-    parser.add_argument('--stem_filters', type=int, default=32, help='number of filters in stem layer')
-    parser.add_argument('--dropout', type=float, default=0.0, help='dropout rate')
-    parser.add_argument('--no_se', action='store_true', default=False, help='not use se block')
-    parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
-    parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
-    parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
-    # other
-    parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
-    parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
-    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'froc_mean_recall'], help='metric for validation')
-    parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
-    parser.add_argument('--val_interval', type=int, default=1, help='validate interval')
-    parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
-    parser.add_argument('--save_model_interval', type=int, default=10, help='how many batches to wait before logging training status')
-    args = parser.parse_args()
-    return args
-
-def add_weight_decay(net, weight_decay):
-    """no weight decay on bias and normalization layer
-    """
-    decay, no_decay = [], []
-    for name, param in net.named_parameters():
-        if not param.requires_grad:
-            continue  # skip frozen weights
-        # skip bias and bn layer
-        if ".norm" in name:
-            no_decay.append(param)
-        else:
-            decay.append(param)
-    return [{"params": no_decay, "weight_decay": 0.0},
-            {"params": decay, "weight_decay": weight_decay}]
-
-def build_model(args) -> Resnet18:
-    model = Resnet18(norm_type = args.norm_type,
-                     head_norm = args.head_norm, 
-                     act_type = args.act_type, 
-                     se = not args.no_se, 
-                     aspp = args.aspp,
-                     first_stride=args.first_stride,
-                     n_blocks=args.n_blocks,
-                     n_filters=args.n_filters,
-                     stem_filters=args.stem_filters,
-                     dropout=args.dropout,
-                     dw_type = args.dw_type,
-                     up_type = args.up_type)
-    return model
-
-def prepare_training(args, device, num_training_steps):
-    # build model
-    model = build_model(args)
-    detection_loss = DetectionLoss(crop_size = args.crop_size,
-                                   pos_target_topk = args.pos_target_topk, 
-                                   pos_ignore_ratio = args.pos_ignore_ratio,
-                                   cls_num_neg=args.cls_num_neg,
-                                   cls_num_hard = args.cls_num_hard,
-                                   cls_fn_weight = args.cls_fn_weight,
-                                   cls_fn_threshold = args.cls_fn_threshold)
-
-    unsupervised_detection_loss = Unsupervised_DetectionLoss(crop_size = args.crop_size,
-                                                            pos_target_topk = args.pos_target_topk_pseu, 
-                                                            pos_ignore_ratio = args.pos_ignore_ratio,
-                                                            cls_num_neg=args.cls_num_neg,
-                                                            cls_num_hard = args.cls_num_hard,
-                                                            cls_fn_weight = args.cls_fn_weight,
-                                                            cls_fn_threshold = args.cls_fn_threshold)
-
-    detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
-                                                 threshold = args.det_threshold, 
-                                                 nms_threshold = args.det_nms_threshold,
-                                                 nms_topk = args.det_nms_topk,
-                                                 crop_size = args.crop_size)
+    iters_to_accumulate = args.iters_to_accumulate
+    # mixed precision training
+    mixed_precision = args.mixed_precision
+    if mixed_precision:
+        scaler = torch.cuda.amp.GradScaler()
     
-    start_epoch = 0
-    memory_format = get_memory_format(getattr(args, 'memory_format', 'channels_first'))
-    model = model.to(device=device, memory_format=memory_format)
-
-    # build optimizer and scheduler
-    params = add_weight_decay(model, args.weight_decay)
-    optimizer = AdamW(params=params, lr=args.lr, weight_decay=args.weight_decay)
+    memory_format = get_memory_format(getattr(args, 'memory_format', None))
+    if memory_format == torch.channels_last_3d:
+        logger.info('Use memory format: channels_last_3d to train')
+    train_one_step = train_one_step_wrapper(memory_format, detection_loss)
+    unsupervised_train_one_step = unsupervised_train_one_step_wrapper(memory_format, unsupervised_detection_loss)
+    model_predict = model_predict_wrapper(memory_format)
     
-    T_max = args.epochs // args.decay_cycle
-    scheduler_reduce = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=T_max, eta_min=args.lr * args.decay_gamma)
-    scheduler_warm = GradualWarmupScheduler(optimizer, gamma=args.warmup_gamma, warmup_epochs=args.warmup_epochs, after_scheduler=scheduler_reduce)
-    logger.info('Warmup learning rate from {:.1e} to {:.1e} for {} epochs and then reduce learning rate from {:.1e} to {:.1e} by cosine annealing with {} cycles'.format(args.lr * args.warmup_gamma, args.lr, args.warmup_epochs, args.lr, args.lr * args.decay_gamma, args.decay_cycle))
-
-    # Build EMA
-    if args.apply_ema:
-        ema_warmup_steps = int(args.start_val_epoch * num_training_steps * 1.2 + 1)
-        logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_decay, ema_warmup_steps))
-        ema = EMA(model, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
-        ema.register()
-    else:
-        ema = None
-
-    if args.resume_folder != '':
-        logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
-        model_folder = os.path.join(args.resume_folder, 'model')
-        
-        # Get the latest model
-        model_names = os.listdir(model_folder)
-        model_epochs = [int(name.split('.')[0].split('_')[-1]) for name in model_names]
-        start_epoch = model_epochs[np.argmax(model_epochs)]
-        ckpt_path = os.path.join(model_folder, f'epoch_{start_epoch}.pth')
-        logger.info('Load checkpoint from "{}"'.format(ckpt_path))
-
-        load_states(ckpt_path, device, model, optimizer, scheduler_warm, ema)
-        # Resume best metric
-        global early_stopping
-        early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model)
-    
-    elif args.pretrained_model_path != '':
-        logger.info('Load model from "{}"'.format(args.pretrained_model_path))
-        load_states(args.pretrained_model_path, device, model)
-        
-    return start_epoch, model, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess
-
-def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
-        
-    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    if args.rot_aug == 'rot90':
-        transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
-    elif args.rot_aug == 'transpose':
-        transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
-        
-    if args.use_crop:
-        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
-        
-    transform_list_train.append(transform.CoordToAnnot())
-                            
-    logger.info('Augmentation: random flip: True, random rotate: {}{}, random crop: {}'.format(args.rot_aug, [True, rot_yz, rot_xz], args.use_crop))
-    train_transform = torchvision.transforms.Compose(transform_list_train)
-    return train_transform
-
-def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
-        
-    transform_list_train = [transform.RandomFlip(p=0.8, flip_depth=True, flip_height=True, flip_width=True),
-                            transform.RandomBlur(p=0.5, sigma_range=(0.4, 0.6)),
-                            transform.RandomNoise(p=0.5, gamma_range=(4e-4, 8e-4))]
-    if args.rot_aug == 'rot90':
-        transform_list_train.append(transform.RandomRotate90(p=0.8, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
-    elif args.rot_aug == 'transpose':
-        transform_list_train.append(transform.RandomTranspose(p=0.8, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
-        
-    if args.use_crop:
-        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
-        
-    transform_list_train.append(transform.CoordToAnnot())
-                            
-    train_transform = torchvision.transforms.Compose(transform_list_train)
-    return train_transform
-
-def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
-        
-    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.CoordToAnnot())
-    train_transform = torchvision.transforms.Compose(transform_list_train)
-    return train_transform
-
-def get_train_dataloder(args, blank_side=0) -> DataLoader:
-    crop_size = args.crop_size
-    overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
-    rand_trans = [int(s * 2/3) for s in overlap_size]
-    pad_value = get_image_padding_value(args.data_norm_method)
-    
-    logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
-    
-    # Build crop function
-    from dataload.crop import InstanceCrop
-    from dataload.crop_semi import InstanceCrop as InstanceCrop_semi
-    crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-    crop_fn_train_u = InstanceCrop_semi(crop_size=crop_size, overlap_ratio=args.overlap_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                sample_num=args.unlabeled_num_samples, blank_side=blank_side)
-    mmap_mode = None
-    logger.info('Use itk rotate {}'.format(args.rand_rot))
-
-    # Build labeled dataloader
-    train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
-    train_dataset_l = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train_l, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
-                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
-    train_loader_l = DataLoader(train_dataset_l, batch_size=args.batch_size, shuffle=True, collate_fn=train_collate_fn, num_workers=min(args.batch_size, args.max_workers), 
-                                pin_memory=True, drop_last=True, persistent_workers=True)
-    
-    # Build unlabeled dataloader
-    weak_aug = build_weak_augmentation(args, crop_size, pad_value, blank_side)
-    strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
-    train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, 
-                                       strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
-    train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_train_collate_fn, 
-                                num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=True)
-    
-    # Build unlabeled detection dataloader for generating pseudo labels
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
-    det_dataset_u = DetDataset(series_list_path = args.unlabeled_train_set, 
-                               SplitComb=split_comber, 
-                               image_spacing=IMAGE_SPACING, 
-                               norm_method=args.data_norm_method)
-    det_loader_u = DataLoader(det_dataset_u, batch_size=args.val_batch_size, shuffle=False, collate_fn=infer_collate_fn, 
-                              num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=False)
-    
-    logger.info("There are {} training labeled samples and {} batches in '{}'".format(len(train_loader_l.dataset), len(train_loader_l), args.train_set))
-    logger.info("There are {} training unlabeled samples and {} batches in '{}'".format(len(train_loader_u.dataset), len(train_loader_u), args.unlabeled_train_set))
-    
-    return train_loader_l, train_loader_u, det_loader_u
-
-def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
-    crop_size = args.crop_size
-    overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
-    pad_value = get_image_padding_value(args.data_norm_method)
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
-    
-    # Build val dataloader
-    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
-
-    # Build test dataloader
-    test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), 
-                             pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
-    
-    logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
-    logger.info("There are {} test samples and {} batches in '{}'".format(len(test_loader.dataset), len(test_loader), args.test_set))
-    return val_loader, test_loader
-
-if __name__ == '__main__':
-    args = get_args()
-    
-    if args.resume_folder != '': # resume training
-        exp_folder = args.resume_folder
-        setting_yaml_path = os.path.join(exp_folder, 'setting.yaml')
-        setting = load_yaml(setting_yaml_path)
-        for key, value in setting.items():
-            if key != 'resume_folder':
-                setattr(args, key, value)
-    else:     
-        timestamp = get_local_time_str_in_taiwan()
-        exp_folder = os.path.join(SAVE_ROOT, f'{timestamp}_{args.exp_name}')
-    setup_logging(level='info', log_file=os.path.join(exp_folder, 'log.txt'))
-    init_seed(args.seed)
-    write_yaml(os.path.join(exp_folder, 'setting.yaml'), vars(args))
-    
-    # Prepare training
-    model_save_dir = os.path.join(exp_folder, 'model')
-    writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
-    start_epoch, model, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader_u))
-    val_loader, test_loader = get_val_test_dataloder(args)
-    
-    if early_stopping is None:
-        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model)
-
-    # pseu_labels = gen_pseu_labels(model = model_s,
-    #                                 dataloader = det_loader_u,
-    #                                 device = device,
-    #                                 detection_postprocess = detection_postprocess,
-    #                                 prob_threshold = 0.5,
-    #                                 mixed_precision = args.val_mixed_precision,
-    #                                 memory_format = args.memory_format)
-        
-    # pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-    # with open(pseu_label_save_path, 'wb') as f:
-    #     pickle.dump(pseu_labels, f)
-    # if not os.path.exists('./pseu_labels.pkl'):
-    #     pseu_labels = gen_pseu_labels(model = model_s,
-    #                                 dataloader = det_loader_u,
-    #                                 device = device,
-    #                                 detection_postprocess = detection_postprocess,
-    #                                 prob_threshold = 0.4,
-    #                                 mixed_precision = args.val_mixed_precision,
-    #                                 memory_format = args.memory_format)
-        
-    #     pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-    #     with open(pseu_label_save_path, 'wb') as f:
-    #         pickle.dump(pseu_labels, f)
-    # else:
-    #     logger.info('Load pseudo labels from "./pseu_labels.pkl"')
-    #     with open('./pseu_labels.pkl', 'rb') as f:
-    #         pseu_labels = pickle.load(f)
+    iter_l = iter(dataloader_l)
+    num_pseudo_label = 0
+    coord_to_annot = CoordToAnnot()
+    with get_progress_bar('Train', num_iters) as progress_bar:
+        for sample_u in dataloader_u:         
+            optimizer.zero_grad()
+            ### Unlabeled data
+            weak_u_sample = sample_u['weak']
+            strong_u_sample = sample_u['strong']
+            model.eval()
+            with torch.no_grad():
+                if mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        feats_t = model_predict(model, weak_u_sample, device) # shape: (bs, top_k, 7)
+                    del weak_u_sample['image']
+                else:
+                    feats_t = model_predict(model, strong_u_sample, device)
+                # shape: (bs, top_k, 8)
+                # => top_k (default = 60) 
+                # => 8: 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                outputs_t = detection_postprocess(feats_t, device=device, threshold = args.pseudo_label_threshold) 
+            model.train()
+            # np.save('weak_image.npy', weak_u_sample['image'].numpy())
+            # np.save('outputs_t.npy', outputs_t.cpu().numpy())
             
-    # original_num_unlabeled = len(train_loader_u.dataset)
-    # train_loader_u.dataset.set_pseu_labels(pseu_labels)
-    # new_num_unlabeled = len(train_loader_u.dataset)
-    # logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
-    
-    original_psuedo_label_threshold = float(args.pseudo_label_threshold)
-    final_psuedo_label_threshod = args.pseudo_label_threshold * 1.1
-    for epoch in range(start_epoch, args.epochs + 1):
-        args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
-        logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
-        train_metrics = train(args = args,
-                            model = model,
-                            detection_loss = detection_loss,
-                            unsupervised_detection_loss =  unsupervised_detection_loss,
-                            optimizer = optimizer,
-                            dataloader_u = train_loader_u,
-                            dataloader_l = train_loader_l,
-                            detection_postprocess = detection_postprocess,
-                            num_iters = len(train_loader_u),
-                            device = device)
-        scheduler_warm.step()
-        write_metrics(train_metrics, epoch, 'train', writer)
-        for key, value in train_metrics.items():
-            logger.info('==> Epoch: {} {}: {:.4f}'.format(epoch, key, value))
-        # add learning rate to tensorboard
-        logger.info('==> Epoch: {} lr: {:.6f}'.format(epoch, scheduler_warm.get_lr()[0]))
-        write_metrics({'lr': scheduler_warm.get_lr()[0]}, epoch, 'train', writer)
+            # Add label
+            # Remove the padding, -1 means invalid
+            valid_mask = (outputs_t[..., 0] != -1.0)
+            if torch.count_nonzero(valid_mask) != 0:
+                bs = outputs_t.shape[0]
+                # Calculate background mask
+                cls_prob = feats_t['Cls'].sigmoid() # shape: (bs, 1, d, h, w)
+                background_mask = (cls_prob < (1 - args.pseudo_background_threshold)) # shape: (bs, 1, d, h, w)
+                
+                weak_feat_transforms = weak_u_sample['feat_transform'] # shape = (bs,)
+                strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
+                for b_i in range(bs):
+                    for transform in reversed(weak_feat_transforms[b_i]):
+                        background_mask[b_i] = transform.backward(background_mask[b_i])
+                    for transform in strong_feat_transforms[b_i]:
+                        background_mask[b_i] = transform.forward(background_mask[b_i])
+                
+                outputs_t = outputs_t.cpu().numpy()
+                weak_ctr_transforms = weak_u_sample['ctr_transform'] # shape = (bs,)
+                strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
+                weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
+                
+                transformed_annots = []
+                for b_i in range(bs):
+                    output = outputs_t[b_i]
+                    valid_mask = (output[:, 0] != -1.0)
+                    output = output[valid_mask]
+                    if len(output) == 0:
+                        transformed_annots.append(np.zeros((0, 10), dtype='float32'))
+                        continue
+                    ctrs = output[:, 2:5]
+                    shapes = output[:, 5:8]
+                    spacing = weak_spacings[b_i]
+                    for transform in reversed(weak_ctr_transforms[b_i]):
+                        ctrs = transform.backward_ctr(ctrs)
+                        shapes = transform.backward_rad(shapes)
+                        spacing = transform.backward_spacing(spacing)
+                    
+                    for transform in strong_ctr_transforms[b_i]:
+                        ctrs = transform.forward_ctr(ctrs)
+                        shapes = transform.forward_rad(shapes)
+                        spacing = transform.forward_spacing(spacing)
+                    
+                    sample = {'ctr': ctrs, 
+                            'rad': shapes, 
+                            'cls': np.zeros((len(ctrs), 1), dtype='int32'),
+                            'spacing': spacing}
+                    
+                    sample = coord_to_annot(sample)
+                    transformed_annots.append(sample['annot'])
         
-        # Remove the checkpoint of epoch % save_model_interval != 0
-        for i in range(epoch):
-            ckpt_path = os.path.join(model_save_dir, 'epoch_{}.pth'.format(i))
-            if ((i % args.save_model_interval != 0 or i == 0) and os.path.exists(ckpt_path)):
-                os.remove(ckpt_path)
-            #TODO
-            # if ((i % args.save_model_interval != 0 or i == 0 or i < args.start_val_epoch) and os.path.exists(ckpt_path)):
-            #     os.remove(ckpt_path)
-        save_states(os.path.join(model_save_dir, f'epoch_{epoch}.pth'), model, optimizer, scheduler_warm, ema)
-        
-        if (epoch >= args.start_val_epoch and epoch % args.val_interval == 0) or epoch == args.epochs:
-            # Use Shadow model to validate and save model
-            if ema is not None:
-                ema.apply_shadow()
-            
-            val_metrics = val(args = args,
-                            model = model,
-                            detection_postprocess=detection_postprocess,
-                            val_loader = val_loader, 
-                            device = device,
-                            image_spacing = IMAGE_SPACING,
-                            series_list_path=args.val_set,
-                            exp_folder=exp_folder,
-                            epoch = epoch,
-                            nodule_type_diameters=NODULE_TYPE_DIAMETERS,
-                            min_d=args.min_d,
-                            min_size=args.min_size,
-                            nodule_size_mode=args.nodule_size_mode)
-            
-            early_stopping.step(val_metrics, epoch)
-            write_metrics(val_metrics, epoch, 'val', writer)
+                valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
+                valid_mask = (valid_mask == 1)
+                max_num_annots = max(annot.shape[0] for annot in transformed_annots)
+                if max_num_annots > 0:
+                    transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
+                    for idx, annot in enumerate(transformed_annots):
+                        if annot.shape[0] > 0:
+                            transformed_annots_padded[idx, :annot.shape[0], :] = annot
+                else:
+                    transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
 
-            # Restore model
-            if ema is not None:
-                ema.restore()
-    # Test
-    logger.info('Test the best model')
-    test_save_dir = os.path.join(exp_folder, 'test')
-    os.makedirs(test_save_dir, exist_ok=True)
-    for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
-        logger.info('Load best model from "{}"'.format(model_path))
-        load_states(model_path, device, model)
-        test_metrics = val(args = args,
-                            model = model,
-                            detection_postprocess=detection_postprocess,
-                            val_loader = test_loader,
-                            device = device,
-                            image_spacing = IMAGE_SPACING,
-                            series_list_path=args.test_set,
-                            nodule_type_diameters=NODULE_TYPE_DIAMETERS,
-                            exp_folder=exp_folder,
-                            epoch = 'test_best_{}'.format(target_metric),
-                            min_d=args.min_d,
-                            min_size=args.min_size,
-                            nodule_size_mode=args.nodule_size_mode)
-        write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
-        with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
-            f.write('Best epoch: {}\n'.format(best_epoch))
-            f.write('-' * 30 + '\n')
-            max_length = max([len(key) for key in test_metrics.keys()])
-            for key, value in test_metrics.items():
-                f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
-    writer.close()
+                # (For analysis) Compute iou between pseudo label and original label
+                all_iou_pseu = []
+                tp, fp, fn = 0, 0, 0
+                for annot, pseudo_annot, is_valid in zip(strong_u_sample['annot'].numpy(), transformed_annots_padded, valid_mask):
+                    if not is_valid:
+                        fn += np.count_nonzero((annot[:, -1] != -1))
+                        continue
+                    
+                    annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
+                    pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
+                    
+                    if len(annot) == 0:
+                        fp += len(pseudo_annot)
+                        continue
+                    elif len(pseudo_annot) == 0:
+                        fn += len(annot)
+                        continue
+                    
+                    bboxes = np.stack([annot[:, :3] - annot[:, 3:6] / 2, annot[:, :3] + annot[:, 3:6] / 2], axis=1)
+                    pseudo_bboxes = np.stack([pseudo_annot[:, :3] - pseudo_annot[:, 3:6] / 2, pseudo_annot[:, :3] + pseudo_annot[:, 3:6] / 2], axis=1)
+                    ious = compute_bbox3d_iou(pseudo_bboxes, bboxes)
+                    
+                    iou_pseu = ious.max(axis=1)
+                    iou = ious.max(axis=0)
+                    
+                    all_iou_pseu.extend(iou_pseu.tolist())    
+                    tp += np.count_nonzero(iou > 1e-3)
+                    fp += np.count_nonzero(iou_pseu < 1e-3)
+                
+                avg_iou_pseu.update(np.mean(all_iou_pseu))
+                avg_tp_pseu.update(tp)
+                avg_fp_pseu.update(fp)
+                avg_fn_pseu.update(fn)
+                
+
+                transformed_annots_padded = transformed_annots_padded[valid_mask]
+                
+                strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
+                strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
+                
+                background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
+                background_mask = background_mask[valid_mask]
+                
+                # np.save('image.npy', strong_u_sample['image'].numpy())
+                # np.save('annot.npy', strong_u_sample['annot'].numpy())
+                # np.save('background_mask.npy', background_mask.cpu().numpy())
+                # raise ValueError('Check the pseudo label')
+                if mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        strong_u_sample['image'] = strong_u_sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
+                        strong_u_sample['annot'] = strong_u_sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
+                        loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model, strong_u_sample, background_mask, device)
+                        loss_pseu2, cls_pseu_loss2, shape_pseu_loss2, offset_pseu_loss2, iou_pseu_loss2, outputs_pseu2 = unsupervised_train_one_step(args, model, strong_u_sample, background_mask, device, drop=0.5)
+                        
+                        loss_pseu = (loss_pseu + loss_pseu2) / 2
+                        cls_pseu_loss = (cls_pseu_loss + cls_pseu_loss2) / 2
+                        shape_pseu_loss = (shape_pseu_loss + shape_pseu_loss2) / 2
+                        offset_pseu_loss = (offset_pseu_loss + offset_pseu_loss2) / 2
+                        iou_pseu_loss = (iou_pseu_loss + iou_pseu_loss2) / 2
+
+                    
+                avg_pseu_cls_loss.update(cls_pseu_loss.item())
+                avg_pseu_shape_loss.update(shape_pseu_loss.item())
+                avg_pseu_offset_loss.update(offset_pseu_loss.item())
+                avg_pseu_iou_loss.update(iou_pseu_loss.item())
+                avg_pseu_loss.update(loss_pseu.item())
+                
+                num_pseudo_label += len(strong_u_sample['annot'])
+                del outputs_pseu, outputs_pseu2, strong_u_sample, background_mask
+            else:
+                loss_pseu = torch.tensor(0.0, device=device)
+                for annot in strong_u_sample['annot'].numpy():
+                    if len(annot) > 0:
+                        avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
+                del outputs_t
+                
+            del feats_t, weak_u_sample
+            ### Labeled data
+            try:
+                labeled_sample = next(iter_l)
+            except StopIteration:
+                iter_l = iter(dataloader_l)
+                labeled_sample = next(iter_l)
+            
+            if mixed_precision:
+                with torch.cuda.amp.autocast():
+                    loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs = train_one_step(args, model, labeled_sample, device)
+            else:
+                loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs = train_one_step(args, model, labeled_sample, device)
+                
+            avg_cls_loss.update(cls_loss.item())
+            avg_shape_loss.update(shape_loss.item())
+            avg_offset_loss.update(offset_loss.item())
+            avg_iou_loss.update(iou_loss.item())
+            avg_loss.update(loss.item())
+            
+            # Update model
+            total_loss = loss + loss_pseu * args.lambda_pseu
+            if mixed_precision:
+                scaler.scale(total_loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                total_loss.backward()
+                optimizer.step()
+            del labeled_sample, outputs, loss, loss_pseu
+            progress_bar.set_postfix(loss_l = avg_loss.avg,
+                                    cls_l = avg_cls_loss.avg,
+                                    giou_l = avg_iou_loss.avg,
+                                    loss_u = avg_pseu_loss.avg,
+                                    cls_u = avg_pseu_cls_loss.avg,
+                                    giou_u = avg_pseu_iou_loss.avg,
+                                    num_u = num_pseudo_label,
+                                    tp = avg_tp_pseu.sum,
+                                    fp = avg_fp_pseu.sum,
+                                    fn = avg_fn_pseu.sum)
+            progress_bar.update()
+            torch.cuda.empty_cache()
+            
+    recall = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fn_pseu.sum, 1e-3)
+    precision = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fp_pseu.sum, 1e-3)
+    metrics = {'loss': avg_loss.avg,
+                'cls_loss': avg_cls_loss.avg,
+                'shape_loss': avg_shape_loss.avg,
+                'offset_loss': avg_offset_loss.avg,
+                'iou_loss': avg_iou_loss.avg,
+                'loss_pseu': avg_pseu_loss.avg,
+                'cls_loss_pseu': avg_pseu_cls_loss.avg,
+                'shape_loss_pseu': avg_pseu_shape_loss.avg,
+                'offset_loss_pseu': avg_pseu_offset_loss.avg,
+                'iou_loss_pseu': avg_pseu_iou_loss.avg,
+                'num_pseudo_label':  num_pseudo_label,
+                'pseu_recall': recall,
+                'pseu_precision': precision,
+                'pseu_tp': avg_tp_pseu.sum,
+                'pseu_fp': avg_fp_pseu.sum,
+                'pseu_fn': avg_fn_pseu.sum}
+    return metrics
