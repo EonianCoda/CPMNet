@@ -61,7 +61,7 @@ def infer_aug_collate_fn(batches) -> Dict[str, torch.Tensor]:
     series_folders = []
     ctr_transforms = []
     feat_transforms = []
-
+    transform_weights = []
     for b in batches:
         imgs.append(b['split_images']) # (N, num_aug, 1, crop_z, crop_y, crop_x)
         num_splits.append(b['split_images'].shape[0])
@@ -73,11 +73,11 @@ def infer_aug_collate_fn(batches) -> Dict[str, torch.Tensor]:
         # Copy the center and feature transforms
         ctr_transforms.extend([b['ctr_transform'] for _ in range(b['split_images'].shape[0])])  # (N, num_aug)
         feat_transforms.extend([b['feat_transform'] for _ in range(b['split_images'].shape[0])]) # (N, num_aug)
-        
+        transform_weights.append(np.repeat(b['transform_weight'][np.newaxis, :], b['split_images'].shape[0], axis=0)) # (N, num_aug)
     imgs = np.concatenate(imgs, axis=0)
     nzhws = np.stack(nzhws)
     num_splits = np.array(num_splits)
-    
+    transform_weights = np.concatenate(transform_weights, axis=0)
     return {'split_images': torch.from_numpy(imgs),
             'nzhws': torch.from_numpy(nzhws), 
             'num_splits': num_splits, 
@@ -85,7 +85,8 @@ def infer_aug_collate_fn(batches) -> Dict[str, torch.Tensor]:
             'series_names': series_names,
             'series_folders': series_folders,
             'ctr_transforms': ctr_transforms,
-            'feat_transforms': feat_transforms}
+            'feat_transforms': feat_transforms,
+            'transform_weights': transform_weights}
 
 def infer_refined_collate_fn(batches) -> Dict[str, torch.Tensor]:
     num_splits = []

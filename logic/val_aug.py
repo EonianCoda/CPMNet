@@ -105,9 +105,9 @@ def val(args,
             series_names = sample['series_names']
             all_ctr_transforms = sample['ctr_transforms'] # (N, num_aug)
             all_feat_transforms = sample['feat_transforms'] # (N, num_aug)
-            
+            transform_weights = sample['transform_weights'] # (N, num_aug)
             outputlist = []
-            
+            transform_weights = torch.from_numpy(transform_weights).to(device, non_blocking=True)
             num_aug = data.size(1)
             for i in range(int(math.ceil(data.size(0) / batch_size))):
                 end = (i + 1) * batch_size
@@ -140,7 +140,10 @@ def val(args,
                             for trans in reversed(feat_transforms[b_i][aug_i]):
                                 Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
                 
-                Cls_output = Cls_output.mean(1) # (bs, 1, 24, 24, 24)
+                # Cls_output = Cls_output.mean(1) # (bs, 1, 24, 24, 24)
+                transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
+                Cls_output = (Cls_output * transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5)).sum(1) # (bs, 1, 24, 24, 24)
+                
                 Shape_output = Shape_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 output = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
