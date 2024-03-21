@@ -243,7 +243,6 @@ def reorient(itk_img, mark_matrix, spacing=[1., 1., 1.], interp1=sitk.sitkLinear
     filter_resample = sitk.ResampleImageFilter()
     filter_resample.SetInterpolator(interp1)
     filter_resample.SetOutputSpacing(spacing)
-    # filter_resample.SetDefaultPixelValue
 
     # set origin
     origin_reorient = mark_matrix[0]

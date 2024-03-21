@@ -219,7 +219,8 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
         rot_yz = False
         rot_xz = False
         
-    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    transform_list_train = [transform.Pad(out_size=crop_size),
+                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
     if args.rot_aug == 'rot90':
         transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
     elif args.rot_aug == 'transpose':

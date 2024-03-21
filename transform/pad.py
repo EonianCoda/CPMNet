@@ -43,7 +43,7 @@ class Pad(AbstractTransform):
 
         sample['image'] = image_t
 
-        if 'ctr' in sample:
+        if 'ctr' in sample and np.any(np.array(margin_lower) > 0):
             sample['ctr'] = sample['ctr'].copy() + margin_lower
             sample['ctr_transform'].append(OffsetPlusCTR(margin_lower))
         return sample
