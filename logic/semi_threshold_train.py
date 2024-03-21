@@ -181,10 +181,11 @@ def train(args,
                 else:
                     transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
 
+                # original_annot = strong_u_sample['annot'].numpy()
                 # (For analysis) Compute iou between pseudo label and original label
                 all_iou_pseu = []
                 tp, fp, fn = 0, 0, 0
-                for annot, pseudo_annot, is_valid in zip(strong_u_sample['annot'].numpy(), transformed_annots_padded, valid_mask):
+                for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['annot'].numpy(), transformed_annots_padded, valid_mask)):
                     if not is_valid:
                         fn += np.count_nonzero((annot[:, -1] != -1))
                         continue
@@ -209,12 +210,30 @@ def train(args,
                     all_iou_pseu.extend(iou_pseu.tolist())    
                     tp += np.count_nonzero(iou > 1e-3)
                     fp += np.count_nonzero(iou_pseu < 1e-3)
-                
+
+                    # Cheating, set FP to 0
+                    for j in np.where(iou_pseu < 1e-3)[0]:
+                        transformed_annots_padded[i, j, ...] = -1
+                    
                 avg_iou_pseu.update(np.mean(all_iou_pseu))
                 avg_tp_pseu.update(tp)
                 avg_fp_pseu.update(fp)
                 avg_fn_pseu.update(fn)
                 # Apply valid mask
+                transformed_annots = []
+                for i in range(len(transformed_annots_padded)):
+                    transformed_annots.append(transformed_annots_padded[i][transformed_annots_padded[i, :, -1] != -1])
+                
+                valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
+                valid_mask = (valid_mask == 1)
+                max_num_annots = max(annot.shape[0] for annot in transformed_annots)
+                if max_num_annots > 0:
+                    transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
+                    for idx, annot in enumerate(transformed_annots):
+                        if annot.shape[0] > 0:
+                            transformed_annots_padded[idx, :annot.shape[0], :] = annot
+                else:
+                    transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
                 transformed_annots_padded = transformed_annots_padded[valid_mask]
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
                 strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
@@ -222,6 +241,7 @@ def train(args,
                 background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
                 background_mask = background_mask[valid_mask]
                 
+                # original_annot = original_annot[valid_mask]
                 # np.save('image.npy', strong_u_sample['image'].numpy())
                 # np.save('original_annot.npy', original_annot)
                 # np.save('annot.npy', strong_u_sample['annot'].numpy())
@@ -282,6 +302,7 @@ def train(args,
                                     loss_u = avg_pseu_loss.avg,
                                     cls_u = avg_pseu_cls_loss.avg,
                                     giou_u = avg_pseu_iou_loss.avg,
+                                    avg_iou_pseu = avg_iou_pseu.avg,
                                     num_u = num_pseudo_label,
                                     tp = avg_tp_pseu.sum,
                                     fp = avg_fp_pseu.sum,
@@ -305,6 +326,7 @@ def train(args,
                 'cls_loss_pseu': avg_pseu_cls_loss.avg,
                 'shape_loss_pseu': avg_pseu_shape_loss.avg,
                 'offset_loss_pseu': avg_pseu_offset_loss.avg,
+                'avg_iou_pseu': avg_iou_pseu.avg,
                 'iou_loss_pseu': avg_pseu_iou_loss.avg,
                 'num_pseudo_label':  num_pseudo_label,
                 'pseu_recall': recall,
