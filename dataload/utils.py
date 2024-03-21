@@ -13,6 +13,9 @@ ALL_RAD = 'all_rad'
 ALL_CLS = 'all_cls'
 ALL_PROB = 'all_prob'
 
+ALL_HARD_FP_LOC = 'all_hard_fp_loc'
+ALL_HARD_FP_RAD = 'all_hard_fp_rad'
+
 def gen_dicom_path(folder: str, series_name: str) -> str:
     return os.path.join(folder, 'npy', f'{series_name}_crop.npy')
 

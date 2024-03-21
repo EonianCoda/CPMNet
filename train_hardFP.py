@@ -4,11 +4,12 @@ import argparse
 import torch
 import os
 import logging
+import pickle
 import numpy as np
 from typing import Tuple
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
-from dataload.dataset import TrainDataset, DetDataset
+from dataload.dataset_hardFP import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
 from dataload.split_combine import SplitComb
@@ -19,6 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 ### logic ###
 from logic.train import train
 from logic.val import val
+from logic.generate_hardFP import gen_hard_FP
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
 ### optimzer ###
 from optimizer.optim import AdamW
@@ -62,7 +64,8 @@ def get_args():
     
     parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
     # Data Augmentation
-    parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
+    parser.add_argument('--tp_ratio', type=float, default=0.7, help='positive ratio in instance crop')
+    parser.add_argument('--fp_ratio', type=float, default=0.2, help='negative ratio in instance crop')
     parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
@@ -112,6 +115,10 @@ def get_args():
     parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
+    # Hard FP
+    parser.add_argument('--gen_hard_fp_interval', type=int, default=30, help='generate hard FP interval')
+    parser.add_argument('--hard_fp_prob_threshold', type=float, default=0.5, help='hard FP probability threshold')
+    parser.add_argument('--start_gen_hard_fp_epoch', type=int, default=50, help='start to generate hard FP from this epoch')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
@@ -243,30 +250,30 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
-    if args.not_use_itk_rotate:
-        from dataload.crop_fast import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        mmap_mode = 'c'
-        logger.info('Not use itk rotate')
-    elif args.use_rand_spacing:
-        from dataload.crop_rand_spacing import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                     rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-        mmap_mode = None
-        logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
-    elif args.crop_partial:
-        from dataload.crop_partial import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        mmap_mode = None
-        logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
-    else:
-        from dataload.crop import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-        mmap_mode = None
-        logger.info('Use itk rotate {}'.format(args.rand_rot))
+    # if args.not_use_itk_rotate:
+    #     from dataload.crop_fast import InstanceCrop
+    #     crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
+    #                                 sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+    #     mmap_mode = 'c'
+    #     logger.info('Not use itk rotate')
+    # elif args.use_rand_spacing:
+    #     from dataload.crop_rand_spacing import InstanceCrop
+    #     crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+    #                                  rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+    #     mmap_mode = None
+    #     logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
+    # elif args.crop_partial:
+    #     from dataload.crop_partial import InstanceCrop
+    #     crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+    #                                 sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+    #     mmap_mode = None
+    #     logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
+    # else:
+    from dataload.crop_hardFP import InstanceCrop
+    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, fp_ratio=args.fp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+    mmap_mode = None
+    logger.info('Use itk rotate {}'.format(args.rand_rot))
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
@@ -283,7 +290,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     logger.info("There are {} training samples and {} batches in '{}'".format(len(train_loader.dataset), len(train_loader), args.train_set))
     return train_loader
 
-def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
+def get_hardFP_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method)
@@ -296,9 +303,12 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
+    train_hard_fp_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    train_hard_fp_loader = DataLoader(train_hard_fp_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
+    
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
     logger.info("There are {} test samples and {} batches in '{}'".format(len(test_loader.dataset), len(test_loader), args.test_set))
-    return val_loader, test_loader
+    return val_loader, test_loader, train_hard_fp_loader
 
 if __name__ == '__main__':
     args = get_args()
@@ -323,17 +333,34 @@ if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader = get_train_dataloder(args)
     start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader))
-    val_loader, test_loader = get_val_test_dataloder(args)
+    val_loader, test_loader, train_hard_fp_loader = get_hardFP_val_test_dataloder(args)
     
     if early_stopping is None:
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model)
+    
+    if args.pretrained_model_path != '':
+        args.start_gen_hard_fp_epoch = 0
+    
     for epoch in range(start_epoch, args.epochs + 1):
+        if epoch >= args.start_gen_hard_fp_epoch and epoch % args.gen_hard_fp_interval == 0:
+            hard_FP = gen_hard_FP(model = model,
+                                dataloader = train_hard_fp_loader,
+                                device = device,
+                                detection_postprocess = detection_postprocess,
+                                prob_threshold = args.hard_fp_prob_threshold,
+                                mixed_precision = args.val_mixed_precision,
+                                memory_format = args.memory_format)
+            with open(os.path.join(exp_folder, 'hard_FP.pkl'), 'wb') as f:
+                pickle.dump(hard_FP, f)
+            train_loader.dataset.update_hard_FP(hard_FP)
+            
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,
                             dataloader = train_loader,
                             ema = ema, 
                             device = device)
+        
         scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
         for key, value in train_metrics.items():
