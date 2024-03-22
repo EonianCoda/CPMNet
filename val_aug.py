@@ -45,6 +45,8 @@ def get_args():
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
+    parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
+    
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
@@ -114,6 +116,7 @@ if __name__ == '__main__':
                     exp_folder=exp_folder,
                     nodule_type_diameters=NODULE_TYPE_DIAMETERS,
                     min_d=args.min_d,
+                    nms_keep_top_k=args.det_scan_nms_keep_top_k,
                     min_size=args.min_size,
                     nodule_size_mode=args.nodule_size_mode)
         

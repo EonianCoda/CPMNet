@@ -667,7 +667,7 @@ class DetectionPostprocess(nn.Module):
         self.nms_topk = nms_topk
         self.crop_size = crop_size
 
-    def forward(self, output, device):
+    def forward(self, output, device, is_logits=True):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
@@ -678,7 +678,9 @@ class DetectionPostprocess(nn.Module):
         pred_shapes = Shape.view(batch_size, 3, -1)
         pred_offsets = Offset.view(batch_size, 3, -1)
 
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous().sigmoid()
+        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        if is_logits:
+            pred_scores = pred_scores.sigmoid()
         pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         

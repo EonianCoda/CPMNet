@@ -341,6 +341,14 @@ if __name__ == '__main__':
     if args.pretrained_model_path != '':
         args.start_gen_hard_fp_epoch = 0
     
+    hard_FP_folder = os.path.join(exp_folder, 'hard_FP')
+    os.makedirs(hard_FP_folder, exist_ok=True)
+    if args.resume_folder != '' and os.path.exists(os.path.join(exp_folder, 'hard_FP.pkl')):
+        logger.info('Load hard FP from "{}"'.format(os.path.join(exp_folder, 'hard_FP.pkl')))
+        with open(os.path.join(exp_folder, 'hard_FP.pkl'), 'rb') as f:
+            hard_FP = pickle.load(f)
+        train_loader.dataset.update_hard_FP(hard_FP)
+        
     for epoch in range(start_epoch, args.epochs + 1):
         if epoch >= args.start_gen_hard_fp_epoch and epoch % args.gen_hard_fp_interval == 0:
             hard_FP = gen_hard_FP(model = model,
@@ -351,6 +359,9 @@ if __name__ == '__main__':
                                 mixed_precision = args.val_mixed_precision,
                                 memory_format = args.memory_format)
             with open(os.path.join(exp_folder, 'hard_FP.pkl'), 'wb') as f:
+                pickle.dump(hard_FP, f)
+            
+            with open(os.path.join(hard_FP_folder, f'hard_FP_{epoch}.pkl'), 'wb') as f:
                 pickle.dump(hard_FP, f)
             train_loader.dataset.update_hard_FP(hard_FP)
             

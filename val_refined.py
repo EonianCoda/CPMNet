@@ -19,7 +19,7 @@ from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging
 from utils.utils import init_seed, write_yaml
-from .config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
+from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 logger = logging.getLogger(__name__)
 
 def get_args():

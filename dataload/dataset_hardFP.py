@@ -107,7 +107,6 @@ class TrainDataset(Dataset):
             hard_fp_label = self.hard_FP[series_name].copy()
             samples[ALL_HARD_FP_LOC] = hard_fp_label[ALL_HARD_FP_LOC]
             samples[ALL_HARD_FP_RAD] = hard_fp_label[ALL_HARD_FP_RAD]
-            logger.info('Using hard FP as training data')
         samples['file_name'] = series_name
         samples = self.crop_fn(samples, image_spacing)
         random_samples = []
