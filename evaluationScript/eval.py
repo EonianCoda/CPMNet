@@ -523,7 +523,8 @@ def evaluateCAD(seriesUIDs: List[str],
         plt.tight_layout()
 
         plt.savefig(os.path.join(output_dir, "froc_{}.png".format(iou_threshold)), bbox_inches=0, dpi=300)
-
+        
+        plt.close()
     return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score), (best_f1_score, best_f1_threshold)
     
 def get_nodule(annot: List[Any], 

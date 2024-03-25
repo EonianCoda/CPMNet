@@ -37,44 +37,6 @@ bLogPlot = True
 
 NODULE_TYPE_TEMPLATE = '{:20s}: Recall={:.3f}, Precision={:.3f}, F1={:.3f}, TP={:4d}, FP={:4d}, FN={:4d}'
 
-def box_iou_union_3d(boxes1: List[float], boxes2: List[float], eps: float = 0.001) -> float:
-    """
-    Return intersection-over-union (Jaccard index) and  of boxes.
-    Both sets of boxes are expected to be in (x1, y1, x2, y2, z1, z2) format.
-    
-    Args:
-        boxes1: boxes [x1, x2, y1, y2, z1, z2]
-                boxes2: boxes [x1, x2, y1, y2, z1, z2]
-        eps: optional small constant for numerical stability
-    """
-    vol1 = (boxes1[1] - boxes1[0]) * (boxes1[3] - boxes1[2]) * (boxes1[5] - boxes1[4])
-    vol2 = (boxes2[1] - boxes2[0]) * (boxes2[3] - boxes2[2]) * (boxes2[5] - boxes2[4])
-
-    x1 = max(boxes1[0], boxes2[0])
-    x2 = min(boxes1[1], boxes2[1])
-    y1 = max(boxes1[2], boxes2[2])
-    y2 = min(boxes1[3], boxes2[3]) 
-    z1 = max(boxes1[4], boxes2[4]) 
-    z2 = min(boxes1[5], boxes2[5])
-
-    inter = (max((x2 - x1), 0) * max((y2 - y1), 0) * max((z2 - z1), 0)) + eps
-    union = (vol1 + vol2 - inter)
-    return inter / union
-
-def dynamic_threshold_wrapper(dynamic_ratio: List[float], fixed_prob_threshold: float) -> float:
-    def dynamic_threshold(candidate: NoduleFinding) -> float:
-        if candidate == None:
-            return fixed_prob_threshold
-        if candidate.nodule_type == 'benign':
-            return fixed_prob_threshold * dynamic_ratio[0]
-        elif candidate.nodule_type == 'probably_benign':
-            return fixed_prob_threshold * dynamic_ratio[1]
-        elif candidate.nodule_type == 'probably_suspicious':
-            return fixed_prob_threshold * dynamic_ratio[2]
-        elif candidate.nodule_type == 'suspicious':
-            return fixed_prob_threshold * dynamic_ratio[3]
-    return dynamic_threshold
-
 def gen_bootstrap_set(scan_to_cands_dict: Dict[str, np.ndarray], seriesUIDs_np: np.ndarray) -> np.ndarray:
     """
     Generates bootstrapped version of set(bootstrapping is sampling method with replacement)

@@ -15,7 +15,7 @@ def zyxdhw2zyxzyx(box, dim=-1):
     z2y2x2 = ctr_zyx + dhw/2
     return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
 
-def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
+def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, crop_size: torch.Tensor, dim=-1) -> torch.Tensor:
     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
     anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
     Args:
@@ -27,11 +27,14 @@ def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_sh
             A tensor of shape (bs, num_anchors, 3) containing the predicted shapes in the format (d, h, w).
         stride_tensor: torch.Tensor
             A tensor of shape (bs, 3) containing the strides of each dimension in format (z, y, x).
+        crop_size: torch.Tensor
+            A tensor of shape (bs, 3) containing the size of the crop box in format (z, y, x).
+            
     Returns:
         A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
     """
     center_zyx = (anchor_points + pred_offsets) * stride_tensor
-    return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
+    return torch.cat((center_zyx, pred_shapes * crop_size.unsqueeze(0).unsqueeze(1)), dim)  # zyxdhw bbox
 
 class BasicBlockNew(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):
@@ -364,9 +367,7 @@ class DetectionLoss(nn.Module):
                  cls_num_neg = 10000,
                  cls_num_hard = 100,
                  cls_fn_weight = 4.0,
-                 cls_fn_threshold = 0.8,
-                 iou_type = 'ciou',
-                 iou_focal_alpha = 1.0):
+                 cls_fn_threshold = 0.8):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -376,9 +377,6 @@ class DetectionLoss(nn.Module):
         self.cls_num_hard = cls_num_hard
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
-        self.iou_type = iou_type
-        self.iou_focal_alpha = iou_focal_alpha
-        
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
         """
@@ -579,23 +577,14 @@ class DetectionLoss(nn.Module):
                 eiou = (iou ** gamma) * eiou
             
             return eiou
-        elif iou_type == 'wiou':
-            # distance
-            cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
-            ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
-            cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
-            c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
             
-            weight = torch.exp(rho2 / c2)
-            return iou * weight
-        
         return iou ** focal_alpha # IoU
     
     @staticmethod
     def get_pos_target(annotations: torch.Tensor,
                        anchor_points: torch.Tensor,
                        stride: torch.Tensor,
+                       crop_size: torch.Tensor,
                        pos_target_topk = 7, 
                        ignore_ratio = 3):# larger the ignore_ratio, the more GPU memory is used
         """Get the positive targets for the network.
@@ -618,7 +607,9 @@ class DetectionLoss(nn.Module):
         
         # The coordinates in annotations is on original image, we need to convert it to the coordinates on the feature map.
         ctr_gt_boxes = annotations[:, :, :3] / stride # z0, y0, x0
-        shape = annotations[:, :, 3:6] / 2 # half d h w
+        
+        ##TODO current change to use full d h w
+        shape = annotations[:, :, 3:6] # / 2 # full d h w
         
         sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
         sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
@@ -646,7 +637,7 @@ class DetectionLoss(nn.Module):
         # Generate the targets of each points
         target_ctr = ctr_gt_boxes.view(-1, 3)[gt_idx]
         target_offset = target_ctr - anchor_points
-        target_shape = shape.view(-1, 3)[gt_idx]
+        target_shape = shape.view(-1, 3)[gt_idx] / crop_size.unsqueeze(0)
         
         target_bboxes = annotations[:, :, :6].view(-1, 6)[gt_idx] # zyxdhw
         target_scores, _ = torch.max(mask_pos, 1) # shape = (b, num_of_points), the value is 1 or 0, 1 means the point is assigned to positive
@@ -670,6 +661,7 @@ class DetectionLoss(nn.Module):
         Shape = output['Shape']
         Offset = output['Offset']
         batch_size = Cls.size()[0]
+        crop_size = torch.tensor(self.crop_size, dtype=torch.float32, device=device) # (3,)
         target_mask_ignore = torch.zeros(Cls.size()).to(device)
         
         # view shape
@@ -688,12 +680,13 @@ class DetectionLoss(nn.Module):
         # generate center points. Only support single scale feature
         anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0) # shape = (num_anchors, 3)
         # predict bboxes (zyxdhw)
-        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor) # shape = (b, num_anchors, 6)
+        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor, crop_size) # shape = (b, num_anchors, 6)
         # assigned points and targets (target bboxes zyxdhw)
         target_offset, target_shape, target_bboxes, target_scores, mask_ignore = self.get_pos_target(annotations = process_annotations,
                                                                                                      anchor_points = anchor_points,
                                                                                                      stride = stride_tensor[0].view(1, 1, 3), 
                                                                                                      pos_target_topk = self.pos_target_topk,
+                                                                                                     crop_size=crop_size,
                                                                                                      ignore_ratio = self.pos_ignore_ratio)
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
@@ -711,7 +704,7 @@ class DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], iou_type=self.iou_type, focal_alpha=self.iou_focal_alpha)).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return classification_losses, reg_losses, offset_losses, iou_losses
 
@@ -729,6 +722,7 @@ class DetectionPostprocess(nn.Module):
         Shape = output['Shape']
         Offset = output['Offset']
         batch_size = Cls.size()[0]
+        crop_size = torch.tensor(self.crop_size, dtype=torch.float32, device=Cls.device)
         anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0)
         # view shape
         pred_scores = Cls.view(batch_size, 1, -1)
@@ -742,7 +736,7 @@ class DetectionPostprocess(nn.Module):
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         
         # recale to input_size
-        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor)
+        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor, crop_size)
         # Get the topk scores and indices
         topk_scores, topk_indices = torch.topk(pred_scores.squeeze(), self.topk, dim=-1, largest=True)
         
