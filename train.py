@@ -115,7 +115,7 @@ def get_args():
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
-    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'froc_mean_recall'], help='metric for validation')
+    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'froc_mean_recall'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--val_interval', type=int, default=1, help='validate interval')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')

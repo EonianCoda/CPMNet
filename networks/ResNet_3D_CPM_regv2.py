@@ -367,7 +367,9 @@ class DetectionLoss(nn.Module):
                  cls_num_neg = 10000,
                  cls_num_hard = 100,
                  cls_fn_weight = 4.0,
-                 cls_fn_threshold = 0.8):
+                 cls_fn_threshold = 0.8,
+                 iou_type = 'ciou',
+                 iou_focal_alpha = 1.0):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -377,6 +379,8 @@ class DetectionLoss(nn.Module):
         self.cls_num_hard = cls_num_hard
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
+        self.iou_type = iou_type
+        self.iou_focal_alpha = iou_focal_alpha
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
         """
@@ -509,8 +513,7 @@ class DetectionLoss(nn.Module):
         return annotations_new, mask_ignore
     
     @staticmethod
-    def bbox_iou(box1, box2, iou_type = 'Diou', focal_alpha = 1.0, eps = 1e-7):
-        
+    def bbox_iou(box1, box2, iou_type = 'ciou', focal_alpha = 1.0, eps = 1e-7):
         box1 = zyxdhw2zyxzyx(box1)
         box2 = zyxdhw2zyxzyx(box2)
         # Get the coordinates of bounding boxes
@@ -568,7 +571,7 @@ class DetectionLoss(nn.Module):
             diou = iou - rho2 / c2 
             
             # aspect ratio
-            loss_asp = ((w2 - w1) ** 2) / (cw ** 2 + eps) + ((h2 - h1) ** 2) / (ch ** 2 + eps) + ((d2 - d1) ** 2) / (cd ** 2 + eps)
+            loss_asp = ((w1 - w2) ** 2) / (cw ** 2 + eps) + ((h1 - h2) ** 2) / (ch ** 2 + eps) + ((d1 - d2) ** 2) / (cd ** 2 + eps)
             eiou = diou - loss_asp
             
             # focal
@@ -577,7 +580,17 @@ class DetectionLoss(nn.Module):
                 eiou = (iou ** gamma) * eiou
             
             return eiou
+        elif iou_type == 'wiou':
+            # distance
+            cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
+            ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
+            cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
+            c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
+            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
             
+            weight = torch.exp(rho2.detach() / c2.detach())
+            return iou * weight
+        
         return iou ** focal_alpha # IoU
     
     @staticmethod
@@ -704,7 +717,7 @@ class DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], iou_type=self.iou_type, focal_alpha=self.iou_focal_alpha)).mean()
         
         return classification_losses, reg_losses, offset_losses, iou_losses
 

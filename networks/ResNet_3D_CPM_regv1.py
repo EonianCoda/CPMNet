@@ -511,7 +511,7 @@ class DetectionLoss(nn.Module):
         return annotations_new, mask_ignore
     
     @staticmethod
-    def bbox_iou(box1, box2, iou_type = 'Diou', focal_alpha = 1.0, eps = 1e-7):
+    def bbox_iou(box1, box2, iou_type = 'ciou', focal_alpha = 1.0, eps = 1e-7):
         
         box1 = zyxdhw2zyxzyx(box1)
         box2 = zyxdhw2zyxzyx(box2)
@@ -570,7 +570,7 @@ class DetectionLoss(nn.Module):
             diou = iou - rho2 / c2 
             
             # aspect ratio
-            loss_asp = ((w2 - w1) ** 2) / (cw ** 2 + eps) + ((h2 - h1) ** 2) / (ch ** 2 + eps) + ((d2 - d1) ** 2) / (cd ** 2 + eps)
+            loss_asp = ((w1 - w2) ** 2) / (cw ** 2 + eps) + ((h1 - h2) ** 2) / (ch ** 2 + eps) + ((d1 - d2) ** 2) / (cd ** 2 + eps)
             eiou = diou - loss_asp
             
             # focal
@@ -587,7 +587,7 @@ class DetectionLoss(nn.Module):
             c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
             rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
             
-            weight = torch.exp(rho2 / c2)
+            weight = torch.exp(rho2.detach() / c2.detach())
             return iou * weight
         
         return iou ** focal_alpha # IoU
