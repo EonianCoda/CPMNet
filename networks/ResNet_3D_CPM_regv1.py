@@ -158,7 +158,7 @@ class UpsamplingBlock(nn.Module):
 
 class ASPP(nn.Module):
     def __init__(self, channels, ratio=4,
-                 dilations=[1, 2, 3, 4],
+                 dilations=[1, 1, 2, 3],
                  norm_type='batchnorm', act_type='ReLU'):
         super(ASPP, self).__init__()
         # assert dilations[0] == 1, 'The first item in dilations should be `1`'
@@ -270,11 +270,7 @@ class Resnet18(nn.Module):
 
         self.block22_up = up_block(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
         self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        
-        self.block11_res = LayerBasic(1, n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
-        self.block11_down = dw_block(n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type)
-        
-        self.block22 = LayerBasic(2, n_filters[1] * 2 + n_filters[0], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
+        self.block22 = LayerBasic(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         
         # Head
         self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
@@ -314,8 +310,7 @@ class Resnet18(nn.Module):
 
         x = self.block22_up(x)
         x2 = self.block22_res(x2)
-        x1 = self.block11_down(self.block11_res(x1))
-        x = torch.cat([x, x1, x2], dim=1)
+        x = torch.cat([x, x2], dim=1)
         x = self.block22(x)
 
         out = self.head(x)
@@ -366,6 +361,7 @@ class DetectionLoss(nn.Module):
                  crop_size=[64, 128, 128], 
                  pos_target_topk = 7, 
                  pos_ignore_ratio = 3,
+                 cls_num_neg = 10000,
                  cls_num_hard = 100,
                  cls_fn_weight = 4.0,
                  cls_fn_threshold = 0.8):
@@ -374,15 +370,29 @@ class DetectionLoss(nn.Module):
         self.pos_target_topk = pos_target_topk
         self.pos_ignore_ratio = pos_ignore_ratio
         
+        self.cls_num_neg = cls_num_neg
         self.cls_num_hard = cls_num_hard
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
         """
+        Calculates the classification loss using focal loss and binary cross entropy.
+
         Args:
-            pred: torch.Tensor
-                The predicted logits of shape (b, num_points, 1)
+            pred (torch.Tensor): The predicted logits of shape (b, num_points, 1)
+            target: The target labels of shape (b, num_points, 1)
+            mask_ignore: The mask indicating which pixels to ignore of shape (b, num_points, 1)
+            alpha (float): The alpha factor for focal loss (default: 0.75)
+            gamma (float): The gamma factor for focal loss (default: 2.0)
+            num_neg (int): The maximum number of negative pixels to consider (default: 10000, if -1, use all negative pixels)
+            num_hard (int): The number of hard negative pixels to keep (default: 100)
+            ratio (int): The ratio of negative to positive pixels to consider (default: 100)
+            fn_weight (float): The weight for false negative pixels (default: 4.0)
+            fn_threshold (float): The threshold for considering a pixel as a false negative (default: 0.8)
+
+        Returns:
+            torch.Tensor: The calculated classification loss
         """
         classification_losses = []
         batch_size = pred.shape[0]
@@ -411,8 +421,9 @@ class DetectionLoss(nn.Module):
                 Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
                 
-                neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
-                Negative_loss = Negative_loss[neg_idcs] 
+                if num_neg != -1:
+                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
+                    Negative_loss = Negative_loss[neg_idcs] 
                 _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
                 Negative_loss = Negative_loss[keep_idx] 
                 
@@ -422,8 +433,9 @@ class DetectionLoss(nn.Module):
 
             else:
                 Negative_loss = cls_loss[record_targets == 0]
-                neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
-                Negative_loss = Negative_loss[neg_idcs]
+                if num_neg != -1:
+                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
+                    Negative_loss = Negative_loss[neg_idcs]
                 assert len(Negative_loss) > num_hard
                 _, keep_idx = torch.topk(Negative_loss, num_hard)
                 Negative_loss = Negative_loss[keep_idx]
@@ -494,7 +506,8 @@ class DetectionLoss(nn.Module):
         return annotations_new, mask_ignore
     
     @staticmethod
-    def bbox_iou(box1, box2, DIoU=True, eps = 1e-7):
+    def bbox_iou(box1, box2, iou_type = 'Diou', alpha = 1.0, eps = 1e-7):
+        
         box1 = zyxdhw2zyxzyx(box1)
         box2 = zyxdhw2zyxzyx(box2)
         # Get the coordinates of bounding boxes
@@ -513,15 +526,56 @@ class DetectionLoss(nn.Module):
 
         # IoU
         iou = inter / union
-        if DIoU:
+        
+        iou_type = iou_type.lower()
+        # DIoU
+        if iou_type == 'diou':
             cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
             ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
             cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
             c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + 
-            + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
-            return iou - rho2 / c2  # DIoU
-        return iou  # IoU
+            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
+            
+            diou = (iou ** alpha) - ((rho2 / c2) ** alpha)
+            return diou
+        elif iou_type == 'ciou':
+            # distance
+            cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
+            ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
+            cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
+            c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
+            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
+            
+            diou = (iou ** alpha) - ((rho2 / c2) ** alpha)
+            
+            # aspect ratio
+            v = (4 / math.pi ** 2) * torch.pow((torch.atan(w2 / torch.clamp(h2, min=eps)) - torch.atan(w1 / torch.clamp(h1, min=eps))), 2)
+            alpha = v / torch.clamp((1 - iou + v), min=eps)
+            ciou = diou - ((alpha * v) ** alpha)
+            return ciou
+        elif iou_type == 'eiou' or iou_type == 'eiou_focal':
+            assert alpha == 1.0, 'alpha should be 1.0 for eiou'
+            # distance
+            cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
+            ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
+            cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
+            c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
+            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
+            
+            diou = iou - rho2 / c2 
+            
+            # aspect ratio
+            loss_asp = ((w2 - w1) ** 2) / (cw ** 2 + eps) + ((h2 - h1) ** 2) / (ch ** 2 + eps) + ((d2 - d1) ** 2) / (cd ** 2 + eps)
+            eiou = diou - loss_asp
+            
+            # focal
+            if iou_type == 'eiou_focal':
+                gamma = 0.5
+                eiou = (iou ** gamma) * eiou
+            
+            return eiou
+            
+        return iou ** alpha # IoU
     
     @staticmethod
     def get_pos_target(annotations: torch.Tensor,
@@ -629,7 +683,12 @@ class DetectionLoss(nn.Module):
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         fg_mask = target_scores.squeeze(-1).bool()
-        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), num_hard=self.cls_num_hard, fn_weight=self.cls_fn_weight, fn_threshold=self.cls_fn_threshold)
+        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), 
+                                              num_hard=self.cls_num_hard, 
+                                              num_neg=self.cls_num_neg,
+                                              fn_weight=self.cls_fn_weight, 
+                                              fn_threshold=self.cls_fn_threshold)
+                                              
         if fg_mask.sum() == 0:
             reg_losses = torch.tensor(0).float().to(device)
             offset_losses = torch.tensor(0).float().to(device)
@@ -637,7 +696,7 @@ class DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return classification_losses, reg_losses, offset_losses, iou_losses
 
@@ -650,7 +709,7 @@ class DetectionPostprocess(nn.Module):
         self.nms_topk = nms_topk
         self.crop_size = crop_size
 
-    def forward(self, output, device):
+    def forward(self, output, device, is_logits=True):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
@@ -661,7 +720,9 @@ class DetectionPostprocess(nn.Module):
         pred_shapes = Shape.view(batch_size, 3, -1)
         pred_offsets = Offset.view(batch_size, 3, -1)
 
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous().sigmoid()
+        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        if is_logits:
+            pred_scores = pred_scores.sigmoid()
         pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         
