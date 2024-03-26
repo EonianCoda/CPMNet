@@ -42,7 +42,7 @@ def get_args():
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # detection-hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
-    parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
+    parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     # other
@@ -119,4 +119,7 @@ if __name__ == '__main__':
         
         with open(os.path.join(exp_folder, 'val_metrics.txt'), 'w') as f:
             for k, v in metrics.items():
-                f.write('{}: {}\n'.format(k, v))
+                if int(v) == v:
+                    f.write('{}: {}\n'.format(k, int(v)))
+                else:
+                    f.write('{}: {:4f}\n'.format(k, v))

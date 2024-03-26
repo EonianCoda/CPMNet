@@ -125,7 +125,6 @@ class Rotate90():
             new_image_spacing[rot_axes[1]] = image_spacing[rot_axes[0]]
         return new_ctr_zyx, new_shape_dhw, new_image_spacing
 
-
 class DetDataset(Dataset):
     """Detection dataset for inference
     """
