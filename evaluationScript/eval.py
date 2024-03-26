@@ -418,7 +418,7 @@ class Evaluation:
                  nodule_size_mode = 'dhw', # or 'seg_size'
                  nodule_min_d: int = 0,
                  nodule_min_size: int = 0):
-        
+        self.series_list_path = series_list_path
         self.image_spacing = np.array(image_spacing)
         self.iou_threshold = iou_threshold
         self.prob_threshold = prob_threshold
@@ -433,7 +433,6 @@ class Evaluation:
         self.nodule_typer = NoduleTyper(nodule_type_diameters, image_spacing)
         self._init_nodule_type_volumes()
         self._collect_gt(series_list_path)
-        
         self.sorted_nodule_types = ['benign', 'probably_benign', 'probably_suspicious', 'suspicious']
     
     def _init_nodule_type_volumes(self):
@@ -517,27 +516,33 @@ class Evaluation:
             
             # Compute TP and FN
             if len(gt_nodules) != 0:
-                matched_masks = (all_ious >= self.iou_threshold)
-                for gt_idx, gt_nodule in enumerate(gt_nodules):
-                    ious = all_ious[gt_idx]
-                    match_mask = matched_masks[gt_idx]
-                    if np.any(match_mask): # TP
-                        # Select the candidate with the highest probability
-                        match_cand_ids = np.where(match_mask == True)[0]
-                        max_prob_idx = np.argmax([pred_cands[cand_id].prob for cand_id in match_cand_ids])
-                        match_cand = pred_cands[match_cand_ids[max_prob_idx]]
-                        max_prob = match_cand.prob
-                        
-                        max_prob_iou = ious[match_cand_ids[max_prob_idx]] # iou of the matched candidate with the highest probability
-                        match_cand.set_match(max_prob_iou, gt_nodule)
-                        gt_nodule.set_match(max_prob_iou, match_cand)
-                        gt_nodule.prob = max_prob
-                        froc.add(is_pos=True, is_FN=False, prob=match_cand.prob, series_name=series_name, nodule=gt_nodule)
-                    else: # FN
+                if len(all_ious) != 0:
+                    matched_masks = (all_ious >= self.iou_threshold)
+                    for gt_idx, gt_nodule in enumerate(gt_nodules):
+                        ious = all_ious[gt_idx]
+                        match_mask = matched_masks[gt_idx]
+                        if np.any(match_mask): # TP
+                            # Select the candidate with the highest probability
+                            match_cand_ids = np.where(match_mask == True)[0]
+                            max_prob_idx = np.argmax([pred_cands[cand_id].prob for cand_id in match_cand_ids])
+                            match_cand = pred_cands[match_cand_ids[max_prob_idx]]
+                            max_prob = match_cand.prob
+                            
+                            max_prob_iou = ious[match_cand_ids[max_prob_idx]] # iou of the matched candidate with the highest probability
+                            match_cand.set_match(max_prob_iou, gt_nodule)
+                            gt_nodule.set_match(max_prob_iou, match_cand)
+                            gt_nodule.prob = max_prob
+                            froc.add(is_pos=True, is_FN=False, prob=match_cand.prob, series_name=series_name, nodule=gt_nodule)
+                        else: # FN
+                            FN_gt_nodules.append(gt_nodule)
+                            gt_nodule.set_match(np.max(ious), None)
+                            froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
+                else: # All ground truth nodules are FNs
+                    for gt_idx, gt_nodule in enumerate(gt_nodules):
                         FN_gt_nodules.append(gt_nodule)
                         gt_nodule.set_match(np.max(ious), None)
                         froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
-            
+                
             # Compute FP
             if len(pred_cands) != 0:
                 if len(all_ious) != 0:
@@ -708,8 +713,8 @@ class Evaluation:
                      recall_remove_health_series_based: float, num_of_all_pred_cands: int): 
         
         def generate_prob_iou_table(stats: Dict[str, Dict[str, float]], nodule_type: str) -> List[str]:
-            prob_and_iou_stats_template = "{:20s}, {}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}\n"
-            prob_stats_template = "{:20s}, {}, {:.3f}, {:.3f}, {:.3f}, {:.3f}\n"
+            prob_and_iou_stats_template = "{:20s}, {}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}"
+            prob_stats_template = "{:20s}, {}, {:.3f}, {:.3f}, {:.3f}, {:.3f}"
             
             number_text = str(stats['number'])
             if 'ratio' in stats:
@@ -717,7 +722,8 @@ class Evaluation:
             if len(stats['iou']) == 0:
                 text = prob_stats_template.format(nodule_type, number_text, stats['prob']['mean'], stats['prob']['std'], stats['prob']['min'], stats['prob']['max'])
             else:
-                text = prob_and_iou_stats_template.format(nodule_type, number_text, stats['prob']['mean'], stats['prob']['std'], stats['prob']['min'], stats['prob']['max'])
+                text = prob_and_iou_stats_template.format(nodule_type, number_text, stats['prob']['mean'], stats['prob']['std'], stats['prob']['min'], \
+                                                            stats['prob']['max'], stats['iou']['mean'], stats['iou']['std'], stats['iou']['min'], stats['iou']['max'])
             
             return text.split(",")    
             
@@ -727,27 +733,41 @@ class Evaluation:
         
         with MarkDownWriter(stats_file_path) as f:
             # Write the evaluation statistics
-            f.write_header("Evaluation statistics", 1)
-        
-            f.write("TP: {}".format(froc.tp_count))
-            f.write("FP: {}".format(froc.fp_count))
-            f.write("FN: {}".format(froc.fn_count))
+            f.write_header("Evaluation Setting", 1)
             
-            f.write("Number of all predicted candidates: {}".format(num_of_all_pred_cands))
-            f.write("Average number of candidates per series: {:.2f}".format(num_of_all_pred_cands / len(self.all_gt_nodules)))
-            f.write("Number of all ground truth nodules: {}".format(self.num_of_all_gt_nodules))
-            
-            recall = froc.tp_count / max(froc.tp_count + froc.fn_count, 1e-6)
-            f.write("Recall(Threshold = 0): {:.3f}".format(recall))
-            f.write("Recall(series_based): {:.3f}".format(recall_series_based))
-            f.write("Recall(remove_healthy_series_based): {:.3f}".format(recall_remove_health_series_based))
+            f.write_item("Series list path = {}".format(self.series_list_path))
+            f.write_item("IoU Thresolhd = {}".format(self.iou_threshold))
+            f.write_item("Probability Threshold = {}".format(self.prob_threshold))
+            f.write_item("Nodule size mode = {}".format(self.nodule_size_mode))
+            #      image_spacing: Tuple[float, float, float],
+            #      nodule_type_diameters: Dict[str, float],
+            #      prob_threshold: float = 0.65,
+            #      iou_threshold: float = 0.1,
+            #      nodule_size_mode = 'dhw', # or 'seg_size'
+            #      nodule_min_d: int = 0,
+            #      nodule_min_size: int = 0)
             
             # Write the statistics of the nodules
-            f.write_header("Nodule type statistics", 1)
-            header = "Nodule type, Recall, Precision, F1 score, TP, FP, FN\n"
+            f.write_header("Evaluation statistics", 1)
+            f.write_item("TP: {}".format(froc.tp_count))
+            f.write_item("FP: {}".format(froc.fp_count))
+            f.write_item("FN: {}".format(froc.fn_count))
+            
+            f.write_item("Number of all predicted candidates: {}".format(num_of_all_pred_cands))
+            f.write_item("Average number of candidates per series: {:.2f}".format(num_of_all_pred_cands / len(self.all_gt_nodules)))
+            f.write_item("Number of all ground truth nodules: {}".format(self.num_of_all_gt_nodules))
+            
+            recall = froc.tp_count / max(froc.tp_count + froc.fn_count, 1e-6)
+            f.write_item("Recall(Threshold = 0): {:.3f}".format(recall))
+            f.write_item("Recall(series_based): {:.3f}".format(recall_series_based))
+            f.write_item("Recall(remove_healthy_series_based): {:.3f}".format(recall_remove_health_series_based))
+            f.write_header("Metrics", 1)
+            nodule_stats_template = '{:20s}, {:.3f}, {:.3f}, {:.3f}, {:4d}, {:4d}, {:4d}'
+            header = "Nodule type, Recall, Precision, F1 score, TP, FP, FN"
+            header = header.split(',')
             values = []
             for nodule_type, metrics in classified_metrics.items():
-                text = NODULE_TYPE_TEMPLATE.format(nodule_type, metrics['recall'], metrics['precision'], metrics['f1_score'], metrics['tp'], metrics['fp'], metrics['fn'])
+                text = nodule_stats_template.format(nodule_type, metrics['recall'], metrics['precision'], metrics['f1_score'], metrics['tp'], metrics['fp'], metrics['fn'])
                 values.append(text.split(","))
             f.write_table(header, values)
             
@@ -755,24 +775,32 @@ class Evaluation:
             f.write_header("Prob and IoU statistics", 1)
             
             f.write_header("TP", 2)
-            header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max), IoU(mean), IoU(std), IoU(min), IoU(max)\n"
+            header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max), IoU(mean), IoU(std), IoU(min), IoU(max)"
+            header = header.split(',')
             values = []
             for nodule_type in self.sorted_nodule_types + ['all']:
                 values.append(generate_prob_iou_table(prob_and_iou_stats['TP'][nodule_type], nodule_type))
             f.write_table(header, values)
             
             f.write_header("FP", 2)
-            header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max)\n"
+            header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max)"
+            header = header.split(',')
             values = []
             for nodule_type in self.sorted_nodule_types + ['all']:
                 values.append(generate_prob_iou_table(prob_and_iou_stats['FP'][nodule_type], nodule_type))
             f.write_table(header, values)
             
             f.write_header("FN", 2)
-            header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max)\n"
+            header = "Nodule type, Number"
+            header = header.split(',')
             values = []
             for nodule_type in self.sorted_nodule_types + ['all']:
-                values.append(generate_prob_iou_table(prob_and_iou_stats['FN'][nodule_type], nodule_type))
+                if nodule_type not in prob_and_iou_stats['FN']:
+                    values.append([nodule_type, '0<br>(0.0%)'])
+                else:
+                    number = prob_and_iou_stats['FN'][nodule_type]['number']
+                    ratio = prob_and_iou_stats['FN'][nodule_type]['ratio'] * 100
+                    values.append([nodule_type, '{}<br>({:.1f}%)'.format(number, ratio)])
             f.write_table(header, values)
             
     def _analyze_prob_and_iou(self, froc: FROC) -> Dict[str, Dict[str, float]]:
@@ -819,7 +847,6 @@ class Evaluation:
         tp_stats = get_stats(tps_by_type, analyse_iou=True)
         fp_stats = get_stats(fps_by_type, analyse_iou=False)
         fn_stats = get_stats(fns_by_type, analyse_iou=False)
-        
         return {'TP': tp_stats, 'FP': fp_stats, 'FN': fn_stats}
         
     def _write_FN_csv(self, FN_gt_nodules: List[NoduleFinding], save_dir: str):
