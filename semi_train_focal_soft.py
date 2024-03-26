@@ -105,8 +105,8 @@ def get_args():
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Semi hyper-parameters
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
-    parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
-    parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
+    parser.add_argument('--pseudo_label_threshold', type=float, default=0.6, help='threshold of pseudo label')
+    parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background') #TODO Currently not used
     parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
     parser.add_argument('--num_aug', type=int, default=4, help='number of augmentation times of each unlabeled sample')
     parser.add_argument('--sharpen_temperature', type=float, default=0.5, help='temperature of sharpen')
@@ -188,7 +188,8 @@ def prepare_training(args, device, num_training_steps):
                                                             cls_num_neg=args.cls_num_neg,
                                                             cls_num_hard = args.cls_num_hard,
                                                             cls_fn_weight = args.cls_fn_weight,
-                                                            cls_fn_threshold = args.cls_fn_threshold)
+                                                            cls_fn_threshold = args.cls_fn_threshold,
+                                                            pos_threshold = args.pseudo_label_threshold)
 
     detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                  threshold = args.det_threshold, 

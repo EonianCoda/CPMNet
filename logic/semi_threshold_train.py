@@ -25,7 +25,7 @@ def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
         outputs = model(image)
         cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, device = device)
         cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-        loss = args.lambda_cls * cls_loss + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        loss = args.lambda_pseu_cls * cls_loss + args.lambda_pseu_shape * shape_loss + args.lambda_pseu_offset * offset_loss + args.lambda_pseu_iou * iou_loss
         return loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
@@ -212,28 +212,28 @@ def train(args,
                     fp += np.count_nonzero(iou_pseu < 1e-3)
 
                     # Cheating, set FP to 0
-                    for j in np.where(iou_pseu < 1e-3)[0]:
-                        transformed_annots_padded[i, j, ...] = -1
+                    # for j in np.where(iou_pseu < 1e-3)[0]:
+                    #     transformed_annots_padded[i, j, ...] = -1
                     
                 avg_iou_pseu.update(np.mean(all_iou_pseu))
                 avg_tp_pseu.update(tp)
                 avg_fp_pseu.update(fp)
                 avg_fn_pseu.update(fn)
                 # Apply valid mask
-                transformed_annots = []
-                for i in range(len(transformed_annots_padded)):
-                    transformed_annots.append(transformed_annots_padded[i][transformed_annots_padded[i, :, -1] != -1])
+                # transformed_annots = []
+                # for i in range(len(transformed_annots_padded)):
+                #     transformed_annots.append(transformed_annots_padded[i][transformed_annots_padded[i, :, -1] != -1])
                 
-                valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
-                valid_mask = (valid_mask == 1)
-                max_num_annots = max(annot.shape[0] for annot in transformed_annots)
-                if max_num_annots > 0:
-                    transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
-                    for idx, annot in enumerate(transformed_annots):
-                        if annot.shape[0] > 0:
-                            transformed_annots_padded[idx, :annot.shape[0], :] = annot
-                else:
-                    transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
+                # valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
+                # valid_mask = (valid_mask == 1)
+                # max_num_annots = max(annot.shape[0] for annot in transformed_annots)
+                # if max_num_annots > 0:
+                #     transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
+                #     for idx, annot in enumerate(transformed_annots):
+                #         if annot.shape[0] > 0:
+                #             transformed_annots_padded[idx, :annot.shape[0], :] = annot
+                # else:
+                #     transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
                 transformed_annots_padded = transformed_annots_padded[valid_mask]
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
                 strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)

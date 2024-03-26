@@ -199,8 +199,6 @@ class UnLabeledDataset(Dataset):
         """
         the shape in labels is pixel spacing, and the order is [z, y, x]
         """
-        self.labels = labels
-        
         new_labels = {}
         keep_indices = []
         for i, series_name in enumerate(self.series_names):

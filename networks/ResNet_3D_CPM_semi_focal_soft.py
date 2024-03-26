@@ -645,7 +645,7 @@ class DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return classification_losses, reg_losses, offset_losses, iou_losses
     
@@ -672,7 +672,7 @@ class Unsupervised_DetectionLoss(nn.Module):
         self.pos_threshold = pos_threshold
         
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target: torch.Tensor, alpha: float = 0.75, gamma: float = 2.0, pos_threshold: float = 0.6):
+    def cls_loss(pred: torch.Tensor, target: torch.Tensor, alpha: float = 0.75, gamma: float = 2.0, pos_threshold: float = 0.6, eps=1e-6):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
 
@@ -681,11 +681,17 @@ class Unsupervised_DetectionLoss(nn.Module):
         Returns:
             torch.Tensor: The calculated classification loss
         """
+        def ce_loss(target, pred):
+            pred = pred.sigmoid()
+            ce = - target * torch.log(pred + eps) - (1 - target) * torch.log(1 - pred + eps) # shape = (b, num_points)
+            return ce
         # [a1 + y(a1-a0)] * |y-p| ** gamme * CE(p, y)
-        weight = (1 - alpha) + target * alpha * ((target - pred).abs() ** gamma)
-        ce = - target * torch.log(pred) - (1 - target) * torch.log(1 - pred) # shape = (b, num_points)
+        pred_prob = torch.sigmoid(pred.detach())
+        weight = (1 - alpha) + target * alpha * ((target - pred_prob).abs() ** gamma) + eps
+        
         num_pos_pixels = torch.sum(target >= pos_threshold, dim=1) # (b,)
-        ce = (ce * weight) / torch.clamp(num_pos_pixels.float(), min=1.0)
+        ce = ce_loss(target, pred)
+        ce = (ce * weight) / torch.clamp(num_pos_pixels.float(), min=1.0).unsqueeze(1)
         return torch.mean(ce)
     
     @staticmethod
@@ -739,7 +745,6 @@ class Unsupervised_DetectionLoss(nn.Module):
         Offset_label = labels['Offset']
         
         batch_size = Cls.size()[0]
-        target_mask_ignore = torch.zeros(Cls.size()).to(device)
         
         # view shape
         pred_scores = Cls.view(batch_size, 1, -1) # (b, 1, num_points)
@@ -767,7 +772,7 @@ class Unsupervised_DetectionLoss(nn.Module):
         
         # Calculate the classification loss
         classification_losses = self.cls_loss(pred = pred_scores, target = gt_scores, pos_threshold = self.pos_threshold)
-        fg_mask = (gt_scores > self.pos_threshold)
+        fg_mask = (gt_scores > self.pos_threshold).squeeze(-1).bool()
         if fg_mask.sum() == 0:
             reg_losses = torch.tensor(0).float().to(device)
             offset_losses = torch.tensor(0).float().to(device)
@@ -775,7 +780,7 @@ class Unsupervised_DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - gt_shapes[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - gt_offsets[fg_mask]).mean()
-            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return classification_losses, reg_losses, offset_losses, iou_losses
 

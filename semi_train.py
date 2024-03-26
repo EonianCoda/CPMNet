@@ -272,13 +272,11 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
         rot_yz = False
         rot_xz = False
         
-    transform_list_train = [transform.RandomFlip(p=0.8, flip_depth=True, flip_height=True, flip_width=True),
-                            transform.RandomBlur(p=0.5, sigma_range=(0.4, 0.6)),
-                            transform.RandomNoise(p=0.5, gamma_range=(4e-4, 8e-4))]
+    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
     if args.rot_aug == 'rot90':
-        transform_list_train.append(transform.RandomRotate90(p=0.8, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
+        transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
     elif args.rot_aug == 'transpose':
-        transform_list_train.append(transform.RandomTranspose(p=0.8, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+        transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
         
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
@@ -296,7 +294,7 @@ def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: in
         rot_yz = False
         rot_xz = False
         
-    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    # transform_list_train = [transform.RandomFlip(p=0.3, flip_depth=True, flip_height=True, flip_width=True)]
     transform_list_train = []
     transform_list_train.append(transform.CoordToAnnot())
     train_transform = torchvision.transforms.Compose(transform_list_train)
@@ -429,8 +427,11 @@ if __name__ == '__main__':
     # new_num_unlabeled = len(train_loader_u.dataset)
     # logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
     
-    for epoch in range(start_epoch, args.epochs + 1):
-        logger.info('Pseudo label threshold: {:.4f}'.format(args.pseudo_label_threshold))
+    original_psuedo_label_threshold = float(args.pseudo_label_threshold)
+    final_psuedo_label_threshod = args.pseudo_label_threshold * 1.3
+    for epoch in range(start_epoch, 101):#args.epochs + 1):
+        args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
+        logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         train_metrics = train(args = args,
                             model_t = model_t,
                             model_s = model_s,

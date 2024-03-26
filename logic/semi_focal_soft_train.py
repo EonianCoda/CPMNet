@@ -43,7 +43,7 @@ def model_predict_wrapper(memory_format):
     return model_predict
 
 @torch.no_grad()
-def sharpen_prob(cls_prob, t=0.5):
+def sharpen_prob(cls_prob, t=0.7):
     cls_prob_s = cls_prob ** (1 / t)
     return (cls_prob_s / (cls_prob_s + (1 - cls_prob_s) ** (1 / t)))
 
@@ -103,6 +103,7 @@ def train(args,
                 else:
                     feats = model_predict(model, samples, device)
                 
+                del samples['image']
                 all_feats[key] = feats
                 
                 # Transform back
@@ -132,16 +133,15 @@ def train(args,
             for b_i in range(len(num_transforms_of_samples)):
                 # Get less transformed features
                 idx = np.argmin(num_transforms_of_samples[b_i])
-                ensembled_Shape_feats.append(all_Shape_feats[b_i][idx])
-                ensembled_Offset_feats.append(all_Offset_feats[b_i][idx])
+                ensembled_Shape_feats.append(all_Shape_feats[idx][b_i])
+                ensembled_Offset_feats.append(all_Offset_feats[idx][b_i])
             
             ensembled_Shape_feats = torch.stack(ensembled_Shape_feats, dim=0) # shape: (bs, 3, d, h, w)
             ensembled_Offset_feats = torch.stack(ensembled_Offset_feats, dim=0) # shape: (bs, 3, d, h, w)
-            
             # Sharpening by temperature
             ensembled_Cls_probs = ensembled_Cls_feats.sigmoid()
             ensembled_Cls_probs = sharpen_prob(ensembled_Cls_probs, t=args.sharpen_temperature) # shape: (bs, 1, d, h, w) 
-            
+            ensembled_Cls_probs = torch.clamp(ensembled_Cls_probs, 1e-4, 1 - 1e-4)
             all_loss_pseu = []
             for key in all_feats.keys(): # key: 'aug_0', 'aug_1', ...
                 transformed_ensembled_Cls_probs = ensembled_Cls_probs.clone()
@@ -155,13 +155,29 @@ def train(args,
                         transformed_ensembled_Cls_probs[b_i] = transform.forward(transformed_ensembled_Cls_probs[b_i])
                         transformed_Shape_feats[b_i] = transform.forward(transformed_Shape_feats[b_i])
                         transformed_Offset_feats[b_i] = transform.forward(transformed_Offset_feats[b_i])
-                        
-                labels = {'Cls': transformed_ensembled_Cls_probs.to(device, non_blocking=True, memory_format=memory_format),
-                         'Shape': transformed_Shape_feats.to(device, non_blocking=True, memory_format=memory_format),
-                         'Offset': transformed_Offset_feats.to(device, non_blocking=True, memory_format=memory_format)}
+                
+                ##TODO For Debug
+                # feats = {'Cls': transformed_ensembled_Cls_probs,
+                #         'Shape': transformed_Shape_feats,
+                #         'Offset': transformed_Offset_feats}
+                # outputs_t = detection_postprocess(feats, device=device, threshold = 0.5, is_logits = False)
+                # np.save('outputs_t.npy', outputs_t.cpu().numpy())
+                # np.save('image.npy', sample_u[key]['image'].numpy())
+                # raise ValueError('Check transformed features')
+                
                 feats = all_feats[key]
-                loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_loss_fn(args, feats, labels, device)
-            
+                
+                if mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        labels = {'Cls': transformed_ensembled_Cls_probs.to(device, non_blocking=True, memory_format=memory_format),
+                                'Shape': transformed_Shape_feats.to(device, non_blocking=True, memory_format=memory_format),
+                                'Offset': transformed_Offset_feats.to(device, non_blocking=True, memory_format=memory_format)}
+                        loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_loss_fn(args, feats, labels, device)
+                else:
+                    labels = {'Cls': transformed_ensembled_Cls_probs.to(device, non_blocking=True, memory_format=memory_format),
+                                'Shape': transformed_Shape_feats.to(device, non_blocking=True, memory_format=memory_format),
+                                'Offset': transformed_Offset_feats.to(device, non_blocking=True, memory_format=memory_format)}
+                    loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss = unsupervised_loss_fn(args, feats, labels, device)
                 avg_pseu_cls_loss.update(cls_pseu_loss.item(), 1 / num_aug)
                 avg_pseu_shape_loss.update(shape_pseu_loss.item(), 1 / num_aug)
                 avg_pseu_offset_loss.update(offset_pseu_loss.item(), 1 / num_aug)
@@ -180,7 +196,6 @@ def train(args,
                 iter_l = iter(dataloader_l)
                 labeled_sample = next(iter_l)
             
-            print("start to forward labeled data")
             if mixed_precision:
                 with torch.cuda.amp.autocast():
                     loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs = train_one_step(args, model, labeled_sample, device)
@@ -191,7 +206,6 @@ def train(args,
             avg_offset_loss.update(offset_loss.item())
             avg_iou_loss.update(iou_loss.item())
             avg_loss.update(loss.item())
-            print("end of forward labeled data")
             # Update model
             total_loss = loss + loss_pseu * args.lambda_pseu
             if mixed_precision:
@@ -201,7 +215,6 @@ def train(args,
             else:
                 total_loss.backward()
                 optimizer.step()
-            print("end of backward")
             progress_bar.set_postfix(loss_l = avg_loss.avg,
                                     cls_l = avg_cls_loss.avg,
                                     shape_l = avg_shape_loss.avg,
