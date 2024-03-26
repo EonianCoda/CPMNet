@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from utils.box_utils import nms_3D
 from utils.generate_annot_csv_from_series_list import generate_annot_csv
-from evaluationScript.eval import nodule_evaluation
+from evaluationScript.eval_original import nodule_evaluation
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
 logger = logging.getLogger(__name__)

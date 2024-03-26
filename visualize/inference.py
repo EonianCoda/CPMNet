@@ -7,7 +7,7 @@ import torch
 from networks.ResNet_3D_CPM import DetectionPostprocess
 from utils.box_utils import nms_3D
 from logic.utils import load_model
-from evaluationScript.nodule_finding import NoduleFinding
+from evaluationScript.nodule_finding_original import NoduleFinding
 
 from dataload.split_combine import SplitComb
 from dataload.utils import load_image

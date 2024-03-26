@@ -3,7 +3,7 @@ from typing import List, Tuple, Dict
 import numpy as np
 
 from dataload.utils import ALL_LOC, ALL_RAD
-from evaluationScript.nodule_finding import NoduleFinding
+from evaluationScript.nodule_finding_original import NoduleFinding
 
 from typing import List, Tuple
 

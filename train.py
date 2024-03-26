@@ -353,7 +353,6 @@ if __name__ == '__main__':
             # Use Shadow model to validate and save model
             if ema is not None:
                 ema.apply_shadow()
-            
             val_metrics = val(args = args,
                             model = model,
                             detection_postprocess=detection_postprocess,

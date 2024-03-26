@@ -10,12 +10,37 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from utils.box_utils import nms_3D
-from evaluationScript.eval_refactor import Evaluation
+from utils.generate_annot_csv_from_series_list import generate_annot_csv
+from evaluationScript.eval_original import nodule_evaluation
 
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
 
 logger = logging.getLogger(__name__)
+
+def convert_to_standard_csv(csv_path: str, annot_save_path: str, series_uids_save_path: str, spacing):
+    '''
+    convert [seriesuid	coordX	coordY	coordZ	w	h	d] to 
+    'seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm'
+    spacing:[z, y, x]
+    '''
+    column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'nodule_type']
+    gt_list = []
+    csv_file = pd.read_csv(csv_path)
+    seriesuid = csv_file['seriesuid']
+    coordX, coordY, coordZ = csv_file['coordX'], csv_file['coordY'], csv_file['coordZ']
+    w, h, d = csv_file['w'], csv_file['h'], csv_file['d']
+    nodule_type = csv_file['nodule_type']
+    
+    clean_seriesuid = []
+    for j in range(seriesuid.shape[0]):
+        if seriesuid[j] not in clean_seriesuid: 
+            clean_seriesuid.append(seriesuid[j])
+        gt_list.append([seriesuid[j], coordX[j], coordY[j], coordZ[j], w[j]/spacing[2], h[j]/spacing[1], d[j]/spacing[0], nodule_type[j]])
+    df = pd.DataFrame(gt_list, columns=column_order)
+    df.to_csv(annot_save_path, index=False)
+    df = pd.DataFrame(clean_seriesuid)
+    df.to_csv(series_uids_save_path, index=False, header=None)
 
 def convert_to_standard_output(output: np.ndarray, series_name: str) -> List[List[Any]]:
     """
@@ -33,7 +58,7 @@ def val(args,
         val_loader: DataLoader,
         device: torch.device,
         image_spacing: List[float],
-        # series_list_path: str,
+        series_list_path: str,
         exp_folder: str,
         epoch: int = 0,
         batch_size: int = 16,
@@ -43,22 +68,27 @@ def val(args,
         min_size: int = 0,
         nodule_size_mode: str = 'seg_size') -> Dict[str, float]:
     
-    save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
-    os.makedirs(save_dir, exist_ok=True)
+    annot_dir = os.path.join(exp_folder, 'annotation')
+    os.makedirs(annot_dir, exist_ok=True)
+    state = 'val'
+    origin_annot_path = os.path.join(annot_dir, 'origin_annotation_{}.csv'.format(state))
+    annot_path = os.path.join(annot_dir, 'annotation_{}.csv'.format(state))
+    series_uids_path = os.path.join(annot_dir, 'seriesuid_{}.csv'.format(state))
     if min_d != 0:
         logger.info('When validating, ignore nodules with depth less than {}'.format(min_d))
     if min_size != 0:
         logger.info('When validating, ignore nodules with size less than {}'.format(min_size))
-    
-    evaluator = Evaluation(series_list_path=val_loader.dataset.series_list_path, 
-                           image_spacing=image_spacing,
-                           nodule_type_diameters=nodule_type_diameters,
-                           prob_threshold=args.val_fixed_prob_threshold,
-                           iou_threshold = args.val_iou_threshold,
-                           nodule_size_mode=nodule_size_mode,
-                           nodule_min_d=min_d, 
-                           nodule_min_size=min_size)
-    
+    generate_annot_csv(series_list_path = series_list_path, 
+                       save_path = origin_annot_path,
+                       spacing=image_spacing, 
+                       nodule_type_diameters = nodule_type_diameters,
+                       min_d=min_d, 
+                       min_size=min_size, 
+                       mode=nodule_size_mode)
+    convert_to_standard_csv(csv_path = origin_annot_path, 
+                            annot_save_path=annot_path,
+                            series_uids_save_path=series_uids_path,
+                            spacing = image_spacing)
     
     model.eval()
     split_comber = val_loader.dataset.splitcomb
@@ -115,22 +145,24 @@ def val(args,
                 
             progress_bar.update(1)
     # Save the results to csv
-    # output_dir = os.path.join(annot_dir, f'epoch_{epoch}')
-    # os.makedirs(output_dir, exist_ok=True)
-    # header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
-    # df = pd.DataFrame(all_preds, columns=header)
-    # pred_results_path = os.path.join(output_dir, 'predict_epoch_{}.csv'.format(epoch))
-    # df.to_csv(pred_results_path, index=False)
+    output_dir = os.path.join(annot_dir, f'epoch_{epoch}')
+    os.makedirs(output_dir, exist_ok=True)
+    header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
+    df = pd.DataFrame(all_preds, columns=header)
+    # sort by seriesuid and coordX
+    df = df.sort_values(by=['seriesuid', 'coordX'])
+    # df = df.reset_index(drop=True)
+    pred_results_path = os.path.join(output_dir, 'predict_epoch_{}.csv'.format(epoch))
+    df.to_csv(pred_results_path, index=False)
+    
     
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    froc_out, fixed_out, (best_f1_score, best_f1_threshold) = evaluator.evaluation(preds=all_preds,
-                                                                                   save_dir=save_dir)
-    # froc_out, fixed_out, (best_f1_score, best_f1_threshold) = nodule_evaluation(annot_path = annot_path,
-    #                                                                             series_uids_path = series_uids_path, 
-    #                                                                             pred_results_path = pred_results_path,
-    #                                                                             output_dir = output_dir,
-    #                                                                             iou_threshold = args.val_iou_threshold,
-    #                                                                             fixed_prob_threshold=args.val_fixed_prob_threshold)
+    froc_out, fixed_out, (best_f1_score, best_f1_threshold) = nodule_evaluation(annot_path = annot_path,
+                                                                                series_uids_path = series_uids_path, 
+                                                                                pred_results_path = pred_results_path,
+                                                                                output_dir = output_dir,
+                                                                                iou_threshold = args.val_iou_threshold,
+                                                                                fixed_prob_threshold=args.val_fixed_prob_threshold)
     fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points = froc_out
     
     logger.info('==> Epoch: {}'.format(epoch))

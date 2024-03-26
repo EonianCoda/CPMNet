@@ -5,7 +5,7 @@ import torch
 import os
 import logging
 
-from networks.ResNet_3D_CPM import DetectionPostprocess
+from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess
 ### data ###
 from dataload.dataset import DetDataset
 from dataload.utils import get_image_padding_value
@@ -14,7 +14,7 @@ from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 
-from logic.val_refactor import val
+from logic.val import val
 from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging
@@ -110,7 +110,7 @@ if __name__ == '__main__':
                     val_loader = val_loader, 
                     device = device,
                     image_spacing = IMAGE_SPACING,
-                    # series_list_path=args.val_set,
+                    series_list_path=args.val_set,
                     exp_folder=exp_folder,
                     nodule_type_diameters=NODULE_TYPE_DIAMETERS,
                     min_d=args.min_d,

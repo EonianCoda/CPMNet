@@ -5,7 +5,7 @@ from typing import Dict, List, Tuple
 from matplotlib import pyplot as plt
 
 from dataload.utils import ALL_LOC, ALL_RAD, load_image, load_label, gen_dicom_path, gen_label_path
-from evaluationScript.nodule_finding import NoduleFinding
+from evaluationScript.nodule_finding_original import NoduleFinding
 from .convert import output2nodulefinding, label2nodulefinding, nodule2cude
 
 MAX_IMAGE_IN_ROW = 6

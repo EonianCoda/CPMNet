@@ -554,7 +554,10 @@ class DetectionLoss(nn.Module):
             diou = (iou ** focal_alpha) - ((rho2 / c2) ** focal_alpha)
             
             # aspect ratio
-            v = (4 / math.pi ** 2) * torch.pow((torch.atan(w2 / torch.clamp(h2, min=eps)) - torch.atan(w1 / torch.clamp(h1, min=eps))), 2)
+            # v = (4 / math.pi ** 2) * torch.pow((torch.atan(w2 / torch.clamp(h2, min=eps)) - torch.atan(w1 / torch.clamp(h1, min=eps))), 2)
+            v = (4 / math.pi ** 2) * torch.pow((torch.atan(w2 / torch.clamp(h2, min=eps)) - torch.atan(w1 / torch.clamp(h1, min=eps))), 2) \
+                + (4 / math.pi ** 2) * torch.pow((torch.atan(h2 / torch.clamp(d2, min=eps)) - torch.atan(h1 / torch.clamp(d1, min=eps))), 2) \
+                + (4 / math.pi ** 2) * torch.pow((torch.atan(w2 / torch.clamp(d2, min=eps)) - torch.atan(w1 / torch.clamp(d1, min=eps))), 2)
             alpha = v / torch.clamp((1 - iou + v), min=eps)
             ciou = diou - ((alpha * v) ** focal_alpha)
             return ciou

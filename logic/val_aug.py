@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 
 from utils.box_utils import nms_3D
 from utils.generate_annot_csv_from_series_list import generate_annot_csv
-from evaluationScript.eval import nodule_evaluation
+from evaluationScript.eval_original import nodule_evaluation
 
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
@@ -139,15 +139,79 @@ def val(args,
                         if len(feat_transforms[b_i][aug_i]) > 0:
                             for trans in reversed(feat_transforms[b_i][aug_i]):
                                 Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
-                
+                                # Shape_output[b_i, aug_i, ...] = trans.backward(Shape_output[b_i, aug_i, ...])
+                                # Offset_output[b_i, aug_i, ...] = trans.backward(Offset_output[b_i, aug_i, ...])
                 # Cls_output = Cls_output.mean(1) # (bs, 1, 24, 24, 24)
                 transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
-                Cls_output = (Cls_output * transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5)).sum(1) # (bs, 1, 24, 24, 24)
+                transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
+                Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
+                
+                # Cls_prob = torch.sigmoid(Cls_output)
+                # # arg_max_cls = torch.argmax(Cls_output, dim=1, keepdim=True)
+                # # arg_max_cls = arg_max_cls.repeat(1, 1, 3, 1, 1, 1)
+                # # Shape_output = torch.gather(Shape_output, 1, arg_max_cls)
+                # # Offset_output = torch.gather(Offset_output, 1, arg_max_cls)
+                
+                # shape_stds = torch.std(Shape_output, dim=1) # (bs, 3, d, h, w)
+                # ## Min-Max Normalization along the last 3 dimensions
+                # # Get 5 percentile and 95 percentile to avoid outliers
+                # flatted_shape_stds = shape_stds.view(shape_stds.size(0), 3, -1).type(torch.float32) # (bs, 3, d * h * w)
+                # shape_min = torch.quantile(flatted_shape_stds, 0.05, dim=2) # (bs, 3, 1)
+                # shape_max = torch.quantile(flatted_shape_stds, 0.95, dim=2) # (bs, 3, 1)
+                
+                # shape_min = shape_min.type(shape_stds.dtype)
+                # shape_max = shape_max.type(shape_stds.dtype)
+                
+                # shape_min = shape_min.unsqueeze(2).unsqueeze(3).unsqueeze(4) # (bs, 3, 1, 1, 1)
+                # shape_max = shape_max.unsqueeze(2).unsqueeze(3).unsqueeze(4) # (bs, 3, 1, 1, 1)
+
+                # # Clip the values
+                # shape_stds = torch.clamp(shape_stds, shape_min, shape_max)
+
+                # # Normalize
+                # shape_stds = (shape_stds - shape_min) / (shape_max - shape_min) # (bs, 3, d, h, w)
+                # shape_stds = 1 - torch.mean(shape_stds, dim=(1,), keepdim=True) # (bs, 1, d, h, w)
+
+                ## Min-Max Normalization along the batch dimension on Offset_output
+                # offset_stds = torch.std(Offset_output, dim=1) # (bs, 3, d, h, w)
+                # flatted_offset_stds = offset_stds.view(offset_stds.size(0), 3, -1).type(torch.float32) # (bs, 3, d * h * w)
+                # offset_min = torch.quantile(flatted_offset_stds, 0.05, dim=2) # (bs, 3, 1)
+                # offset_max = torch.quantile(flatted_offset_stds, 0.95, dim=2)
+                
+                # offset_min = offset_min.type(offset_stds.dtype)
+                # offset_max = offset_max.type(offset_stds.dtype)
+                
+                # offset_min = offset_min.unsqueeze(2).unsqueeze(3).unsqueeze(4) # (bs, 3, 1, 1, 1)
+                # offset_max = offset_max.unsqueeze(2).unsqueeze(3).unsqueeze(4)
+                
+                # # Clip the values
+                # offset_stds = torch.clamp(offset_stds, offset_min, offset_max)
+                
+                # # Normalize
+                # offset_stds = (offset_stds - offset_min) / (offset_max - offset_min)
+                # # offset_stds = 1 - torch.mean(offset_stds, dim=(1,), keepdim=True)
+                
+                # Shape and Offset stds are used to adjust the Cls_prob
+                # std_weight = [0.95, 1.05]
+                # # stds = torch.cat([shape_stds, offset_stds], dim=1) # (bs, 6, d, h, w)
+                # # print(torch.min(stds), torch.max(stds))
+                # stds = shape_stds
+                # # # print(torch.min(stds), torch.max(stds), stds.size())
+                # # stds = 0.5 - torch.mean(stds, dim=(1,), keepdim=True) # (bs, 1, d, h, w)
+                # stds = 1.0 - torch.mean(stds, dim=(1,), keepdim=True) # (bs, 1, d, h, w)
+                # # stds = 0.05 * stds
+                # # stds = shape_stds
+                # stds_weight = stds * (std_weight[1] - std_weight[0]) + std_weight[0]
+                # Cls_prob = torch.clamp(Cls_prob * stds_weight, 1e-6, 1 - 1e-6)
+                # Cls_prob = torch.clamp(Cls_prob + stds * 0.05, 1e-6, 1 - 1e-6)
+                
+                # Shape_output = torch.mean(Shape_output, dim=1) # (bs, 3, 24, 24, 24)
+                # Offset_output = torch.mean(Offset_output, dim=1) # (bs, 3, 24, 24, 24)
                 
                 Shape_output = Shape_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 output = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
-                output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                output = detection_postprocess(output, device=device, is_logits=True) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputlist.append(output.data.cpu().numpy())
             
             outputs = np.concatenate(outputlist, 0)

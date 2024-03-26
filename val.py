@@ -5,7 +5,7 @@ import torch
 import os
 import logging
 
-from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess
+from networks.ResNet_3D_CPM import DetectionPostprocess
 ### data ###
 from dataload.dataset import DetDataset
 from dataload.utils import get_image_padding_value
