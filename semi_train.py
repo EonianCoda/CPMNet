@@ -97,6 +97,7 @@ def get_args():
     parser.add_argument('--pos_target_topk', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
+    parser.add_argument('--unlabeled_pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--unlabeled_num_samples', type=int, default=5, help='number of samples for each instance')
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
     parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
@@ -131,11 +132,14 @@ def get_args():
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
-    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'f1_score', 'froc_mean_recall'], help='metric for validation')
+    parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'froc_mean_recall'], help='metric for validation')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--val_interval', type=int, default=1, help='validate interval')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, help='how many batches to wait before logging training status')
+    # Cheating Options
+    parser.add_argument('--use_gt_crop', action='store_true', default=False, help='use gt crop')
+    parser.add_argument('--load_pickle', action='store_true', default=False, help='load pickle')
     args = parser.parse_args()
     return args
 
@@ -183,7 +187,7 @@ def prepare_training(args, device, num_training_steps):
 
     unsupervised_detection_loss = Unsupervised_DetectionLoss(crop_size = args.crop_size,
                                                             pos_target_topk = args.pos_target_topk_pseu, 
-                                                            pos_ignore_ratio = args.pos_ignore_ratio,
+                                                            pos_ignore_ratio = args.unlabeled_pos_ignore_ratio,
                                                             cls_num_neg=args.cls_num_neg,
                                                             cls_num_hard = args.cls_num_hard,
                                                             cls_fn_weight = args.cls_fn_weight,
@@ -366,6 +370,30 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     logger.info("There are {} test samples and {} batches in '{}'".format(len(test_loader.dataset), len(test_loader), args.test_set))
     return val_loader, test_loader
 
+def updata_pseudo_label(args, model, det_dataloader, device, detection_postprocess, updated_dataset, 
+                        pseu_label_save_path: str, prob_threshold = 0.4, load_pickle = False):
+    logger.info('Update pseudo labels with threshold: {:.4f}'.format(prob_threshold))
+    if not os.path.exists('./pseu_labels.pkl') or not load_pickle:
+        pseu_labels = gen_pseu_labels(model = model,
+                                    dataloader = det_dataloader,
+                                    device = device,
+                                    detection_postprocess = detection_postprocess,
+                                    prob_threshold = prob_threshold,
+                                    mixed_precision = args.val_mixed_precision,
+                                    memory_format = args.memory_format)
+        with open(pseu_label_save_path, 'wb') as f:
+            pickle.dump(pseu_labels, f)
+    else:
+        logger.info('Load pseudo labels from "./pseu_labels.pkl"')
+        with open('./pseu_labels.pkl', 'rb') as f:
+            pseu_labels = pickle.load(f)
+
+    # Set pseudo labels
+    original_num_unlabeled = len(updated_dataset)
+    updated_dataset.set_pseu_labels(pseu_labels)
+    new_num_unlabeled = len(updated_dataset)
+    logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
+
 if __name__ == '__main__':
     args = get_args()
     
@@ -394,41 +422,16 @@ if __name__ == '__main__':
     if early_stopping is None:
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
 
-    # pseu_labels = gen_pseu_labels(model = model_s,
-    #                                 dataloader = det_loader_u,
-    #                                 device = device,
-    #                                 detection_postprocess = detection_postprocess,
-    #                                 prob_threshold = 0.5,
-    #                                 mixed_precision = args.val_mixed_precision,
-    #                                 memory_format = args.memory_format)
-        
-    # pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-    # with open(pseu_label_save_path, 'wb') as f:
-    #     pickle.dump(pseu_labels, f)
-    # if not os.path.exists('./pseu_labels.pkl'):
-    #     pseu_labels = gen_pseu_labels(model = model_s,
-    #                                 dataloader = det_loader_u,
-    #                                 device = device,
-    #                                 detection_postprocess = detection_postprocess,
-    #                                 prob_threshold = 0.4,
-    #                                 mixed_precision = args.val_mixed_precision,
-    #                                 memory_format = args.memory_format)
-        
-    #     pseu_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-    #     with open(pseu_label_save_path, 'wb') as f:
-    #         pickle.dump(pseu_labels, f)
-    # else:
-    #     logger.info('Load pseudo labels from "./pseu_labels.pkl"')
-    #     with open('./pseu_labels.pkl', 'rb') as f:
-    #         pseu_labels = pickle.load(f)
-            
-    # original_num_unlabeled = len(train_loader_u.dataset)
-    # train_loader_u.dataset.set_pseu_labels(pseu_labels)
-    # new_num_unlabeled = len(train_loader_u.dataset)
-    # logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
-    
     original_psuedo_label_threshold = float(args.pseudo_label_threshold)
     final_psuedo_label_threshod = args.pseudo_label_threshold * 1.3
+    
+    psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
+    
+    if not args.use_gt_crop:
+        updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, load_pickle=args.load_pickle)
+    else:
+        logger.info('Use ground truth crop')
+        
     for epoch in range(start_epoch, 101):#args.epochs + 1):
         args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))

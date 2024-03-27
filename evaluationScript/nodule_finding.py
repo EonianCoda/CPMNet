@@ -52,6 +52,6 @@ class NoduleFinding:
         """
         Returns the bounding box of the nodule in the format [[x1, y1, z1], [x2, y2, z2]]
         """
-        return [[self.ctr_x - self.w/2, self.ctr_y - self.h/2, self.ctr_z - self.d/2],
-                [self.ctr_x + self.w/2, self.ctr_y + self.h/2, self.ctr_z + self.d/2]]
+        return [[self.ctr_z - self.d/2, self.ctr_y - self.h/2, self.ctr_x - self.w/2],
+                [self.ctr_z + self.d/2, self.ctr_y + self.h/2, self.ctr_x + self.w/2]]
     

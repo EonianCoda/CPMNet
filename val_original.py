@@ -14,7 +14,7 @@ from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 
-from logic.val import val
+from logic.val_original import val
 from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging

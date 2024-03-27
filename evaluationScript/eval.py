@@ -787,7 +787,10 @@ class Evaluation:
             header = header.split(',')
             values = []
             for nodule_type in self.sorted_nodule_types + ['all']:
-                values.append(generate_prob_iou_table(prob_and_iou_stats['FP'][nodule_type], nodule_type))
+                if nodule_type not in prob_and_iou_stats['FP']:
+                    values.append([nodule_type, '0', '0', '0', '0', '0'])
+                else:
+                    values.append(generate_prob_iou_table(prob_and_iou_stats['FP'][nodule_type], nodule_type))
             f.write_table(header, values)
             
             f.write_header("FN", 2)

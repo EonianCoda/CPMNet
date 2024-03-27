@@ -160,7 +160,7 @@ class DetDataset(Dataset):
 
 class UnLabeledDataset(Dataset):
     def __init__(self, series_list_path: str, image_spacing: List[float], weak_aug=None, strong_aug = None, crop_fn=None, 
-                 use_bg=False, min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None):
+                 use_bg=False, min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None, use_gt_crop=True):
         self.series_list_path = series_list_path
         self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
@@ -194,11 +194,15 @@ class UnLabeledDataset(Dataset):
         self.strong_aug = strong_aug
         self.crop_fn = crop_fn
         self.mmap_mode = mmap_mode
-
+        self.use_gt_crop = use_gt_crop
+        
     def set_pseu_labels(self, labels):
         """
         the shape in labels is pixel spacing, and the order is [z, y, x]
         """
+        if self.use_gt_crop:
+            raise ValueError('Cannot set pseudo labels when using ground truth crop')
+            
         new_labels = {}
         keep_indices = []
         for i, series_name in enumerate(self.series_names):
@@ -235,12 +239,12 @@ class UnLabeledDataset(Dataset):
         # We need to convert pixel spacing to world spacing
         samples[ALL_LOC] = label[ALL_LOC] # z, y, x
         samples[ALL_RAD] = label[ALL_RAD] # d, h, w
-        ##TODO for prediction, now cheat on original labels
-        # if len(label[ALL_RAD]) > 0:
-        #     samples[ALL_RAD] = label[ALL_RAD] * image_spacing # d, h, w
-        # else:
-        #     samples[ALL_RAD] = label[ALL_RAD] # d, h, w
         samples[ALL_CLS] = label[ALL_CLS]
+        
+        # Before cropping, we need to convert the pixel spacing to world spacing
+        # If we use ground truth crop, we do not need to convert the pixel spacing to world spacing because this step is done in the `load_label` function
+        if len(samples[ALL_RAD]) > 0 and not self.use_gt_crop:
+            samples[ALL_RAD] = samples[ALL_RAD] * image_spacing # d, h, w
         
         samples['file_name'] = series_name
         samples = self.crop_fn(samples, image_spacing)
