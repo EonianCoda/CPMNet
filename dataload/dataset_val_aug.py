@@ -141,9 +141,9 @@ class DetDataset(Dataset):
             dicom_path = gen_dicom_path(folder, series_name)
             self.dicom_paths.append(dicom_path)
         self.splitcomb = SplitComb
-        if self.norm_method == 'none' and self.splitcomb.pad_value != 0:
-            logger.warning('SplitComb pad_value should be 0 when norm_method is none, and it is set to 0 now')
-            self.splitcomb.pad_value = 0.0
+        
+            
+            
             
         
         transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
