@@ -65,20 +65,38 @@ class OffsetPlusCTR(AbstractCTRTransform):
         return ctr - self.offset    
 
 class TransposeCTR(AbstractCTRTransform):
-    def __init__(self, transpose: np.ndarray):
-        if not isinstance(transpose, np.ndarray):
-            transpose = np.array([transpose], dtype=np.int32)
-        self.transpose = transpose
+    def __init__(self, transpose_order: Tuple[int]):
+        if not isinstance(transpose_order, np.ndarray):
+            transpose_order = np.array([transpose_order], dtype=np.int32)
+        self.transpose_order = transpose_order.astype(np.int32)
         
     def forward_ctr(self, ctr):
         if len(ctr) == 0:
             return ctr
-        return ctr[:, self.transpose]
+        elif len(ctr.shape) == 1:
+            return ctr[self.transpose_order]
+        else:
+            return ctr[..., self.transpose_order]
     
     def backward_ctr(self, ctr):
         if len(ctr) == 0:
             return ctr
-        return ctr[:, self.transpose]
+        elif len(ctr.shape) == 1:
+            return ctr[np.argsort(self.transpose_order)]
+        else:
+            return ctr[..., np.argsort(self.transpose_order)]
+
+    def forward_rad(self, rads):
+        return self.forward_ctr(rads)
+    
+    def backward_rad(self, rads):
+        return self.backward_ctr(rads)
+    
+    def forward_spacing(self, spacing):
+        return spacing[self.transpose_order]
+    
+    def backward_spacing(self, spacing):
+        return spacing[np.argsort(self.transpose_order)]
 
 class RotateCTR(AbstractCTRTransform):
     def __init__(self, angle: float, axes: Tuple[int, int], image_shape: np.ndarray):

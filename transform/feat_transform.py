@@ -38,7 +38,7 @@ class Rot90FeatTransform(AbstractFeatTransform):
         
     def forward(self, feat):
         if isinstance(feat, np.ndarray):
-            return np.rot90(feat, self.rot_angle // 90, self.rot_axes)
+            return np.rot90(feat,  self.rot_angle // 90, self.rot_axes)
         elif isinstance(feat, torch.Tensor):
             return torch.rot90(feat, self.rot_angle // 90, self.rot_axes)
     
@@ -50,18 +50,17 @@ class Rot90FeatTransform(AbstractFeatTransform):
 
 class TransposeFeatTransform(AbstractFeatTransform):
     def __init__(self, transpose_order: Tuple[int]):
-        self.transpose_order = list(transpose_order)
+        self.transpose_order = np.array(transpose_order)
         
     def forward(self, feat):
-        assert len(feat) == 4, "feat must be 4D(C, D, H, W)"
+        assert len(feat.shape) >= 3
+        transpose_order = np.arange(len(feat.shape))
+        transpose_order[-3:] = self.transpose_order
+        transpose_order = transpose_order.tolist()
         if isinstance(feat, np.ndarray):
-            return np.transpose(feat, self.transpose_order)
+            return np.transpose(feat, transpose_order)
         elif isinstance(feat, torch.Tensor):
-            return feat.permute(self.transpose_order)
+            return feat.permute(transpose_order)
         
     def backward(self, feat):
-        assert len(feat) == 4, "feat must be 4D(C, D, H, W)"
-        if isinstance(feat, np.ndarray):
-            return np.transpose(feat, self.transpose_order)
-        elif isinstance(feat, torch.Tensor):
-            return feat.permute(self.transpose_order)
+        return self.forward(feat)

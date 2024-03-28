@@ -63,10 +63,10 @@ def train(args,
             loss.backward()
         
         # Update history
-        avg_cls_loss.update(cls_loss.item() * args.lambda_cls)
-        avg_shape_loss.update(shape_loss.item() * args.lambda_shape)
-        avg_offset_loss.update(offset_loss.item() * args.lambda_offset)
-        avg_iou_loss.update(iou_loss.item() * args.lambda_iou)
+        avg_cls_loss.update(cls_loss.item())
+        avg_shape_loss.update(shape_loss.item())
+        avg_offset_loss.update(offset_loss.item())
+        avg_iou_loss.update(iou_loss.item())
         avg_loss.update(loss.item() * iters_to_accumulate)
         
         # Update model

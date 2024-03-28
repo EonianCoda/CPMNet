@@ -67,7 +67,6 @@ def get_args():
     parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
-    parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation, rot90 or transpose')
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
@@ -255,17 +254,14 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
         rot_xz = False
         
     transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    if args.rot_aug == 'rot90':
-        transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
-    elif args.rot_aug == 'transpose':
-        transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
         
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
         
     transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random rotate: {}{}, random crop: {}'.format(args.rot_aug, [True, rot_yz, rot_xz], args.use_crop))
+    logger.info('Augmentation: random flip: True, random transpose: {}, random crop: {}'.format([True, rot_yz, rot_xz], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -278,10 +274,7 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
         rot_xz = False
         
     transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    if args.rot_aug == 'rot90':
-        transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
-    elif args.rot_aug == 'transpose':
-        transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
         
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
@@ -292,14 +285,6 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
     return train_transform
 
 def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
-        
-    # transform_list_train = [transform.RandomFlip(p=0.3, flip_depth=True, flip_height=True, flip_width=True)]
     transform_list_train = []
     transform_list_train.append(transform.CoordToAnnot())
     train_transform = torchvision.transforms.Compose(transform_list_train)

@@ -199,21 +199,35 @@ class RandomTranspose(AbstractTransform):
         transpose_list = []
 
         if self.trans_zy and random.random() < self.p:
-            transpose_list.append(np.array([0, 2, 1, 3]))
+            # transpose_list.append(np.array([0, 2, 1, 3]))
+            transpose_list.append(np.array([-2, -3]))
         if self.trans_xy and random.random() < self.p:
-            transpose_list.append(np.array([0, 1, 3, 2]))
+            # transpose_list.append(np.array([0, 1, 3, 2]))
+            transpose_list.append(np.array([-1, -2]))
         if self.trans_zx and random.random() < self.p:
-            transpose_list.append(np.array([0, 3, 2, 1]))
+            # transpose_list.append(np.array([0, 3, 2, 1]))
+            transpose_list.append(np.array([-1, -3]))
 
         if len(transpose_list) > 0:
-            transpose_order = np.array([0, 1, 2, 3])
+            num_dims = len(sample['image'].shape)
+            transpose_order = np.arange(num_dims)
+            transpose_order[-3:] = np.array([-3, -2, -1])
+            transpose_order = transpose_order.astype(np.int32)
+            
             for transpose in transpose_list:
-                transpose_order = transpose_order[transpose]
+                a = transpose_order[transpose[0]]
+                b = transpose_order[transpose[1]]
+                transpose_order[transpose[0]] = b
+                transpose_order[transpose[1]] = a
+            
             sample['image'] = np.transpose(sample['image'], transpose_order)
-            sample['ctr'] = sample['ctr'][:, transpose_order[1:] - 1]
-            sample['rad'] = sample['rad'][:, transpose_order[1:] - 1]
-            sample['spacing'] = sample['spacing'][transpose_order[1:] - 1]
-            sample['ctr_transform'].append(TransposeCTR(transpose_order))
+            
+            # Use last 3 dimensions (D, H, W)
+            transpose_order = transpose_order[-3:] 
+            sample['ctr'] = sample['ctr'][:, transpose_order]
+            sample['rad'] = sample['rad'][:, transpose_order]
+            sample['spacing'] = sample['spacing'][transpose_order]
+            sample['ctr_transform'].append(TransposeCTR(transpose_order.copy())) # last 3 dimensions (D, H, W)
             sample['feat_transform'].append(TransposeFeatTransform(transpose_order))
         return sample
 
