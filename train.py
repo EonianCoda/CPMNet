@@ -210,24 +210,20 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
         
     return start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess
 
-def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
+def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: float, blank_side: int):
+    rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
+    rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
-    transform_list_train = [transform.Pad(output_size=crop_size),
+    transform_list_train = [transform.Pad(output_size=crop_size, pad_value=pad_value),
                             transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_zx, trans_zy=rot_zy))
         
     if args.use_crop:
-        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
+        transform_list_train.append(transform.RandomCrop(p=0.5, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
     transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random transpose: {}, random crop: {}'.format([True, rot_yz, rot_xz], args.use_crop))
+    logger.info('Augmentation: random flip: True, random transpose: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 

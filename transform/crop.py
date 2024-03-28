@@ -8,48 +8,6 @@ from .abstract_transform import AbstractTransform
 from .image_process import *
 from .ctr_transform import OffsetPlusCTR
 
-class RandomCrop0(object):
-    """Randomly crop the input image (shape [C, D, H, W] or [C, H, W])
-    """
-
-    def __init__(self, output_size):
-        """
-
-        """
-        self.output_size = output_size
-
-        assert isinstance(self.output_size, (list, tuple))
-
-    def __call__(self, sample):
-        image = sample['image']
-        input_shape = image.shape
-        input_dim = len(input_shape) - 1
-
-        assert (input_dim == len(self.output_size))
-        crop_margin = [input_shape[i + 1] - self.output_size[i] \
-                       for i in range(input_dim)]
-
-        bb_min = [0] * (input_dim + 1)
-        bb_max = image.shape
-        bb_min, bb_max = bb_min[1:], bb_max[1:]
-        crop_min = [random.randint(bb_min[i], bb_max[i]) - int(self.output_size[i] / 2) \
-                    for i in range(input_dim)]
-        crop_min = [max(0, item) for item in crop_min]
-        crop_min = [min(crop_min[i], input_shape[i + 1] - self.output_size[i]) for i in range(input_dim)]
-
-        crop_max = [crop_min[i] + self.output_size[i] for i in range(input_dim)]
-
-        crop_min = [0] + crop_min
-        crop_max = list(input_shape[0:1]) + crop_max
-
-        image_t = crop_ND_volume_with_bounding_box(image, crop_min, crop_max)
-        sample['image'] = image_t
-
-        if 'ctr' in sample:
-            sample['ctr'] = sample['ctr'].copy() - crop_min[1:]
-            sample['ctr_transform'].append(OffsetPlusCTR(-crop_min[1:]))
-        return sample
-
 class RandomCrop(AbstractTransform):
     """Randomly crop the input image (shape [C, D, H, W] or [C, H, W])
     """
@@ -60,9 +18,9 @@ class RandomCrop(AbstractTransform):
                  crop_z: bool = True,
                  crop_y: bool = True,
                  crop_x: bool = True,
-                 padding_value: int = 0):
+                 pad_value: int = 0):
         self.p = p
-        self.padding_value = padding_value
+        self.pad_value = pad_value
         self.crop_z = crop_z
         self.crop_y = crop_y
         self.crop_x = crop_x
@@ -128,7 +86,7 @@ class RandomCrop(AbstractTransform):
             if (not np.all(ctr_min > bb_min)) or (not np.all(ctr_max < bb_max)):
                 return sample
         # Crop the image
-        crop_image = np.ones_like(image) * self.padding_value
+        crop_image = np.ones_like(image) * self.pad_value
         crop_min = ((input_shape - crop_shape) / 2).astype(np.int32)
         crop_max = crop_min + crop_shape
         crop_image[:, crop_min[0]:crop_max[0], crop_min[1]:crop_max[1], crop_min[2]:crop_max[2]] = \
@@ -138,6 +96,8 @@ class RandomCrop(AbstractTransform):
         if 'ctr' in sample and len(sample['ctr']) > 0:
             sample['ctr'] = sample['ctr'].copy() - bb_min[np.newaxis, :] + crop_min[np.newaxis, :]
             sample['ctr_transform'].append(OffsetPlusCTR(-bb_min + crop_min))
+            
+        ##TODO: add feature transform
             
         return sample
 

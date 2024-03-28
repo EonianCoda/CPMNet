@@ -221,14 +221,16 @@ class RandomTranspose(AbstractTransform):
                 transpose_order[transpose[1]] = a
             
             sample['image'] = np.transpose(sample['image'], transpose_order)
-            
             # Use last 3 dimensions (D, H, W)
             transpose_order = transpose_order[-3:] 
-            sample['ctr'] = sample['ctr'][:, transpose_order]
-            sample['rad'] = sample['rad'][:, transpose_order]
-            sample['spacing'] = sample['spacing'][transpose_order]
             sample['ctr_transform'].append(TransposeCTR(transpose_order.copy())) # last 3 dimensions (D, H, W)
             sample['feat_transform'].append(TransposeFeatTransform(transpose_order))
+            
+            if 'ctr' in sample and len(sample['ctr']) > 0:
+                sample['ctr'] = sample['ctr'][:, transpose_order]
+                sample['rad'] = sample['rad'][:, transpose_order]
+                
+            sample['spacing'] = sample['spacing'][transpose_order]
         return sample
 
 class RandomMaskTranspose(AbstractTransform):

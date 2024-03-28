@@ -102,11 +102,11 @@ class TrainDataset(Dataset):
         for i in range(len(samples)):
             sample = samples[i]
             sample['image'] = normalize_raw_image(sample['image'], DEFAULT_WINDOW_LEVEL, DEFAULT_WINDOW_WIDTH)
+            sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             sample['spacing'] = image_spacing
             if self.transform_post:
                 sample['ctr_transform'] = []
                 sample = self.transform_post(sample)
-            sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             random_samples.append(sample)
 
         return random_samples

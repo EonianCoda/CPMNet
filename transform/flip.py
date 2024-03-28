@@ -41,15 +41,14 @@ class RandomFlip(AbstractTransform):
             image_t = np.flip(image, flip_axes).copy()
             sample['image'] = image_t
 
-            if 'ctr' in sample:
-                ctr = sample['ctr'].copy()
-                offset = np.array([0, 0, 0]) # (z, y, x)
-                for axis in flip_axes:
-                    ctr[:, axis] = input_shape[axis] - 1 - ctr[:, axis]
-                    offset[axis] = input_shape[axis] - 1
-                sample['ctr'] = ctr
-                sample['ctr_transform'].append(OffsetMinusCTR(offset))
-                sample['feat_transform'].append(FlipFeatTransform(flip_axes))
+            ctr = sample['ctr'].copy()
+            offset = np.array([0, 0, 0]) # (z, y, x)
+            for axis in flip_axes:
+                ctr[:, axis] = input_shape[axis] - 1 - ctr[:, axis]
+                offset[axis] = input_shape[axis] - 1
+            sample['ctr'] = ctr
+            sample['ctr_transform'].append(OffsetMinusCTR(offset))
+            sample['feat_transform'].append(FlipFeatTransform(flip_axes))
         return sample
 
 class RandomMaskFlip(AbstractTransform):

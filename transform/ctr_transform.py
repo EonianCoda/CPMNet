@@ -55,7 +55,7 @@ class OffsetPlusCTR(AbstractCTRTransform):
         """
         if len(ctr) == 0:
             return ctr
-        return self.offset + ctr
+        return ctr + self.offset
     
     def backward_ctr(self, ctr):
         """old = new - offset

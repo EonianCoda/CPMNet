@@ -5,6 +5,9 @@ import numpy as np
 from typing import Dict, List
 DEFAULT_WINDOW_LEVEL = -300
 DEFAULT_WINDOW_WIDTH = 1400
+# HU MIN is -1000, HU MAX is 400
+# Water value is 0.0 in HU, so the normalized value is (0 - 1000) / (400 - (-1000)) = 0.714
+DEFAULT_WATER_RATIO = 0.714
 
 BBOXES = 'bboxes'
 NODULE_SIZE = 'nodule_size'
@@ -75,11 +78,11 @@ def normalize_processed_image(image: np.ndarray, method: str = 'scale') -> np.nd
 
 def get_image_padding_value(method: str = 'scale') -> float:
     if method == 'mean_std':
-        return -1.0
+        return -1.0 + DEFAULT_WATER_RATIO * 2.0
     elif method == 'scale':
-        return -1.0
+        return -1.0 + DEFAULT_WATER_RATIO * 2.0
     elif method == 'none':
-        return 0.0
+        return 0.0 + DEFAULT_WATER_RATIO
 
 def load_image(dicom_path: str, window_level: int = DEFAULT_WINDOW_LEVEL, window_width: int = DEFAULT_WINDOW_WIDTH) -> np.ndarray:
     """

@@ -63,4 +63,12 @@ class TransposeFeatTransform(AbstractFeatTransform):
             return feat.permute(transpose_order)
         
     def backward(self, feat):
-        return self.forward(feat)
+        assert len(feat.shape) >= 3
+        transpose_order = np.arange(len(feat.shape))
+        
+        transpose_order[-3:] = np.argsort(self.transpose_order) + len(feat.shape) - 3
+        transpose_order = transpose_order.tolist()
+        if isinstance(feat, np.ndarray):
+            return np.transpose(feat, transpose_order)
+        elif isinstance(feat, torch.Tensor):
+            return feat.permute(transpose_order)
