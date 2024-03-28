@@ -109,6 +109,7 @@ def get_args():
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.8, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
+    parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -332,7 +333,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     # Build unlabeled dataloader
     weak_aug = build_weak_augmentation(args, crop_size, pad_value, blank_side)
     strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
-    train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, 
+    train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, use_gt_crop=args.use_gt_crop,
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_train_collate_fn, 
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=True)
@@ -423,7 +424,7 @@ if __name__ == '__main__':
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
 
     original_psuedo_label_threshold = float(args.pseudo_label_threshold)
-    final_psuedo_label_threshod = args.pseudo_label_threshold * 1.3
+    final_psuedo_label_threshod = args.pseudo_label_threshold * args.semi_increase_ratio
     
     psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
     
