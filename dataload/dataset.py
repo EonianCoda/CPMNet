@@ -104,9 +104,9 @@ class TrainDataset(Dataset):
         random_samples = []
 
         for i in range(len(samples)):
+            sample = samples[i]
             sample['image'] = normalize_raw_image(sample['image'])
             sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
-            sample = samples[i]
             if self.transform_post:
                 sample['ctr_transform'] = []
                 sample['feat_transform'] = []

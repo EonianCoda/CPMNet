@@ -187,26 +187,19 @@ def get_bn_modules(model: nn.Module) -> List[nn.Module]:
     return bn_layers
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
+    rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
+    rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
     transform_list_train = [transform.Pad(output_size=crop_size),
                             transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    if args.rot_aug == 'rot90':
-        transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
-    elif args.rot_aug == 'transpose':
-        transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_zx, trans_zy=rot_zy))
         
     if args.use_crop:
-        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, padding_value=pad_value))
+        transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
     transform_list_train.append(transform.CoordToAnnot(blank_side=blank_side))
                             
-    logger.info('Augmentation: random flip: True, random rotate: {}{}, random crop: {}'.format(args.rot_aug, [True, rot_yz, rot_xz], args.use_crop))
+    logger.info('Augmentation: random flip: True, random transpose: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -223,8 +216,7 @@ def get_args():
     
     parser.add_argument('--min_d', type=int, default=1, help='minimum distance between two instances')
     parser.add_argument('--data_norm_method', type=str, default='none', help='data normalization method')
-    parser.add_argument('--rot_aug', type=str, default='rot90', help='rotation augmentation method')
-    parser.add_argument('--rand_rot', nargs='+', type=int, default=[20, 0, 0], help='random rotate')
+    parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
     parser.add_argument('--use_crop', action='store_true', help='use random crop augmentation')
     
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
