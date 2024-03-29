@@ -46,6 +46,7 @@ def get_args():
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
+    parser.add_argument('--no_do_padding', action='store_true', default=False, help='do padding or not')
     
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
@@ -69,11 +70,15 @@ def prepare_validation(args, device):
 def val_data_prepare(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * args.overlap_ratio) for i in range(len(crop_size))]
-    pad_value = get_image_padding_value(args.data_norm_method)
+    pad_value = get_image_padding_value(args.data_norm_method, use_water=False)
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
+    if args.no_do_padding:
+        logger.info('Do padding: False')
+    else:
+        logger.info('Do padding: True, pad value: {}'.format(pad_value))
     
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=not args.no_do_padding)
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_aug_collate_fn, pin_memory=True)
     

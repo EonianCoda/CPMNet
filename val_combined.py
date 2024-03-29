@@ -5,16 +5,16 @@ import torch
 import os
 import logging
 
-from networks.ResNet_3D_CPM import DetectionPostprocess
+from networks.ResNet_3D_CPM_val_combined import DetectionPostprocess
 ### data ###
-from dataload.dataset import DetDataset
+from dataload.dataset_val_combined import DetDataset
 from dataload.utils import get_image_padding_value
-from dataload.collate import infer_collate_fn
-from dataload.split_combine import SplitComb
+from dataload.collate import infer_combined_collate_fn
+from dataload.split_combine_val_combined import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 
-from logic.val import val
+from logic.val_combined import val
 from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging
@@ -27,7 +27,7 @@ def get_args():
     # training settings
     parser.add_argument('--seed', type=int, default=0, help='random seed (default: 0)')
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
-    parser.add_argument('--batch_size', type=int, default=2, help='input batch size for training (default: 2)')
+    parser.add_argument('--batch_size', type=int, default=1, help='input batch size for training (default: 2)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
     parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
     parser.add_argument('--model_path', type=str, default='')
@@ -41,11 +41,10 @@ def get_args():
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # detection-hyper-parameters
-    parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
+    parser.add_argument('--det_topk', type=int, default=300, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
-    parser.add_argument('--no_do_padding', action='store_true', default=False, help='do padding or not')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
@@ -71,14 +70,10 @@ def val_data_prepare(args):
     pad_value = get_image_padding_value(args.data_norm_method, use_water=False)
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
-    if args.no_do_padding:
-        logger.info('Do padding: False')
-    else:
-        logger.info('Do padding: True, pad value: {}'.format(pad_value))
     
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=not args.no_do_padding)
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_collate_fn, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_combined_collate_fn, pin_memory=True)
     
     logger.info("There are {} samples in the val set".format(len(val_loader.dataset)))
     return val_loader

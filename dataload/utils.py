@@ -76,13 +76,13 @@ def normalize_processed_image(image: np.ndarray, method: str = 'scale') -> np.nd
         pass
     return image
 
-def get_image_padding_value(method: str = 'scale') -> float:
+def get_image_padding_value(method: str = 'scale', use_water: bool = True) -> float:
     if method == 'mean_std':
-        return -1.0 + DEFAULT_WATER_RATIO * 2.0
+        return -1.0 + DEFAULT_WATER_RATIO * 2.0 if use_water else -1.0
     elif method == 'scale':
-        return -1.0 + DEFAULT_WATER_RATIO * 2.0
+        return -1.0 + DEFAULT_WATER_RATIO * 2.0 if use_water else -1.0
     elif method == 'none':
-        return 0.0 + DEFAULT_WATER_RATIO
+        return 0.0 + DEFAULT_WATER_RATIO if use_water else 0.0
 
 def load_image(dicom_path: str, window_level: int = DEFAULT_WINDOW_LEVEL, window_width: int = DEFAULT_WINDOW_WIDTH) -> np.ndarray:
     """

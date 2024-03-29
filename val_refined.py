@@ -67,7 +67,7 @@ def prepare_validation(args, device):
 def val_data_prepare(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * args.overlap_ratio) for i in range(len(crop_size))]
-    pad_value = get_image_padding_value(args.data_norm_method)
+    pad_value = get_image_padding_value(args.data_norm_method, use_water=False)
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
     split_comber = ReFineSplitComb(crop_size=crop_size)

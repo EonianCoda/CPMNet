@@ -103,6 +103,7 @@ def val(args,
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
+            image_shapes = sample['image_shapes']
             all_ctr_transforms = sample['ctr_transforms'] # (N, num_aug)
             all_feat_transforms = sample['feat_transforms'] # (N, num_aug)
             transform_weights = sample['transform_weights'] # (N, num_aug)
@@ -220,7 +221,8 @@ def val(args,
             for i in range(len(num_splits)):
                 n_split = num_splits[i]
                 nzhw = nzhws[i]
-                output = split_comber.combine(outputs[start_idx:start_idx + n_split], nzhw)
+                image_shape = image_shapes[i]
+                output = split_comber.combine(outputs[start_idx:start_idx + n_split], nzhw, image_shape)
                 output = torch.from_numpy(output).view(-1, 8)
                 # Remove the padding
                 object_ids = output[:, 0] != -1.0
