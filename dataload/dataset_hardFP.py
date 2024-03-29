@@ -157,10 +157,11 @@ class DetDataset(Dataset):
 
         data = {}
         # split_images [N, 1, crop_z, crop_y, crop_x]
-        split_images, nzhw = self.splitcomb.split(image)
+        split_images, nzhw, image_shape = self.splitcomb.split(image)
         data['split_images'] = np.ascontiguousarray(split_images)
         data['nzhw'] = nzhw
         data['spacing'] = image_spacing
         data['series_name'] = series_name
+        data['image_shape'] = image_shape
         data['series_folder'] = series_folder
         return data

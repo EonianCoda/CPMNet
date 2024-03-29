@@ -81,7 +81,7 @@ def gen_hard_FP(model: nn.Module,
             num_splits = sample['num_splits']
             series_names = sample['series_names']
             series_folders = sample['series_folders']
-            
+            image_shapes = sample['image_shapes']
             preds = []
             for i in range(int(math.ceil(data.size(0) / batch_size))):
                 end = (i + 1) * batch_size
@@ -108,7 +108,8 @@ def gen_hard_FP(model: nn.Module,
                 nzhw = nzhws[i]
                 series_name = series_names[i]
                 series_folder = series_folders[i]
-                pred = split_comber.combine(preds[start_index:start_index + n_split], nzhw)
+                image_shape = image_shapes[i]
+                pred = split_comber.combine(preds[start_index:start_index + n_split], nzhw, image_shape)
                 
                 pred = torch.from_numpy(pred).view(-1, 8)
                 # Remove the padding
