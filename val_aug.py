@@ -47,7 +47,7 @@ def get_args():
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
     parser.add_argument('--no_do_padding', action='store_true', default=False, help='do padding or not')
-    
+    parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
@@ -70,7 +70,7 @@ def prepare_validation(args, device):
 def val_data_prepare(args):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * args.overlap_ratio) for i in range(len(crop_size))]
-    pad_value = get_image_padding_value(args.data_norm_method, use_water=False)
+    pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
     if args.no_do_padding:

@@ -141,11 +141,6 @@ class DetDataset(Dataset):
             dicom_path = gen_dicom_path(folder, series_name)
             self.dicom_paths.append(dicom_path)
         self.splitcomb = SplitComb
-        
-            
-            
-            
-        
         transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
                         [FlipTransform(flip_depth=False, flip_height=True, flip_width=False)],
                         [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)]]
@@ -169,7 +164,7 @@ class DetDataset(Dataset):
         image = normalize_processed_image(image, self.norm_method)
 
         # split_images [N, 1, crop_z, crop_y, crop_x]
-        split_images, nzhw = self.splitcomb.split(image)
+        split_images, nzhw, image_shape = self.splitcomb.split(image)
         split_images = np.squeeze(split_images, axis=1) # (N, crop_z, crop_y, crop_x)
         
         sample = {'image': split_images.copy(), 'ctr_transform': [], 'feat_transform': []}
@@ -185,7 +180,6 @@ class DetDataset(Dataset):
         ctr_transforms = [s['ctr_transform'] for s in all_samples] # (num_aug,)
         feat_transforms = [s['feat_transform'] for s in all_samples] # (num_aug,)
         
-                
         all_samples = {'split_images': split_images, 
                        'ctr_transform': ctr_transforms, 
                        'feat_transform': feat_transforms,
@@ -194,5 +188,6 @@ class DetDataset(Dataset):
         all_samples['spacing'] = image_spacing
         all_samples['series_name'] = series_name
         all_samples['series_folder'] = series_folder
+        all_samples['image_shape'] = image_shape
         
         return all_samples
