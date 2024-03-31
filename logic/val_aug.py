@@ -2,7 +2,6 @@ import os
 import math
 import logging
 import numpy as np
-import pandas as pd
 from typing import List, Any, Dict, Tuple
 
 import torch
@@ -10,37 +9,12 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from utils.box_utils import nms_3D
-from utils.generate_annot_csv_from_series_list import generate_annot_csv
-from evaluationScript.eval_original import nodule_evaluation
+from evaluationScript.eval import Evaluation
 
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
 
 logger = logging.getLogger(__name__)
-
-def convert_to_standard_csv(csv_path: str, annot_save_path: str, series_uids_save_path: str, spacing):
-    '''
-    convert [seriesuid	coordX	coordY	coordZ	w	h	d] to 
-    'seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm'
-    spacing:[z, y, x]
-    '''
-    column_order = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'w', 'h', 'd', 'nodule_type']
-    gt_list = []
-    csv_file = pd.read_csv(csv_path)
-    seriesuid = csv_file['seriesuid']
-    coordX, coordY, coordZ = csv_file['coordX'], csv_file['coordY'], csv_file['coordZ']
-    w, h, d = csv_file['w'], csv_file['h'], csv_file['d']
-    nodule_type = csv_file['nodule_type']
-    
-    clean_seriesuid = []
-    for j in range(seriesuid.shape[0]):
-        if seriesuid[j] not in clean_seriesuid: 
-            clean_seriesuid.append(seriesuid[j])
-        gt_list.append([seriesuid[j], coordX[j], coordY[j], coordZ[j], w[j]/spacing[2], h[j]/spacing[1], d[j]/spacing[0], nodule_type[j]])
-    df = pd.DataFrame(gt_list, columns=column_order)
-    df.to_csv(annot_save_path, index=False)
-    df = pd.DataFrame(clean_seriesuid)
-    df.to_csv(series_uids_save_path, index=False, header=None)
 
 def convert_to_standard_output(output: np.ndarray, series_name: str) -> List[List[Any]]:
     """
@@ -60,35 +34,29 @@ def val(args,
         image_spacing: List[float],
         series_list_path: str,
         exp_folder: str,
-        epoch: int = 0,
-        batch_size: int = 4,
+        epoch = 0,
+        batch_size: int = 16,
         nms_keep_top_k: int = 40,
         nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
         min_size: int = 0,
         nodule_size_mode: str = 'seg_size') -> Dict[str, float]:
     
-    annot_dir = os.path.join(exp_folder, 'annotation')
-    os.makedirs(annot_dir, exist_ok=True)
-    state = 'val'
-    origin_annot_path = os.path.join(annot_dir, 'origin_annotation_{}.csv'.format(state))
-    annot_path = os.path.join(annot_dir, 'annotation_{}.csv'.format(state))
-    series_uids_path = os.path.join(annot_dir, 'seriesuid_{}.csv'.format(state))
+    save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
+    os.makedirs(save_dir, exist_ok=True)
     if min_d != 0:
         logger.info('When validating, ignore nodules with depth less than {}'.format(min_d))
     if min_size != 0:
         logger.info('When validating, ignore nodules with size less than {}'.format(min_size))
-    generate_annot_csv(series_list_path = series_list_path, 
-                       save_path = origin_annot_path,
-                       spacing=image_spacing, 
-                       nodule_type_diameters = nodule_type_diameters,
-                       min_d=min_d, 
-                       min_size=min_size, 
-                       mode=nodule_size_mode)
-    convert_to_standard_csv(csv_path = origin_annot_path, 
-                            annot_save_path=annot_path,
-                            series_uids_save_path=series_uids_path,
-                            spacing = image_spacing)
+    
+    evaluator = Evaluation(series_list_path=series_list_path, 
+                           image_spacing=image_spacing,
+                           nodule_type_diameters=nodule_type_diameters,
+                           prob_threshold=args.val_fixed_prob_threshold,
+                           iou_threshold = args.val_iou_threshold,
+                           nodule_size_mode=nodule_size_mode,
+                           nodule_min_d=min_d, 
+                           nodule_min_size=min_size)
     
     model.eval()
     split_comber = val_loader.dataset.splitcomb
@@ -146,69 +114,6 @@ def val(args,
                 transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
                 Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
-                
-                # Cls_prob = torch.sigmoid(Cls_output)
-                # # arg_max_cls = torch.argmax(Cls_output, dim=1, keepdim=True)
-                # # arg_max_cls = arg_max_cls.repeat(1, 1, 3, 1, 1, 1)
-                # # Shape_output = torch.gather(Shape_output, 1, arg_max_cls)
-                # # Offset_output = torch.gather(Offset_output, 1, arg_max_cls)
-                
-                # shape_stds = torch.std(Shape_output, dim=1) # (bs, 3, d, h, w)
-                # ## Min-Max Normalization along the last 3 dimensions
-                # # Get 5 percentile and 95 percentile to avoid outliers
-                # flatted_shape_stds = shape_stds.view(shape_stds.size(0), 3, -1).type(torch.float32) # (bs, 3, d * h * w)
-                # shape_min = torch.quantile(flatted_shape_stds, 0.05, dim=2) # (bs, 3, 1)
-                # shape_max = torch.quantile(flatted_shape_stds, 0.95, dim=2) # (bs, 3, 1)
-                
-                # shape_min = shape_min.type(shape_stds.dtype)
-                # shape_max = shape_max.type(shape_stds.dtype)
-                
-                # shape_min = shape_min.unsqueeze(2).unsqueeze(3).unsqueeze(4) # (bs, 3, 1, 1, 1)
-                # shape_max = shape_max.unsqueeze(2).unsqueeze(3).unsqueeze(4) # (bs, 3, 1, 1, 1)
-
-                # # Clip the values
-                # shape_stds = torch.clamp(shape_stds, shape_min, shape_max)
-
-                # # Normalize
-                # shape_stds = (shape_stds - shape_min) / (shape_max - shape_min) # (bs, 3, d, h, w)
-                # shape_stds = 1 - torch.mean(shape_stds, dim=(1,), keepdim=True) # (bs, 1, d, h, w)
-
-                ## Min-Max Normalization along the batch dimension on Offset_output
-                # offset_stds = torch.std(Offset_output, dim=1) # (bs, 3, d, h, w)
-                # flatted_offset_stds = offset_stds.view(offset_stds.size(0), 3, -1).type(torch.float32) # (bs, 3, d * h * w)
-                # offset_min = torch.quantile(flatted_offset_stds, 0.05, dim=2) # (bs, 3, 1)
-                # offset_max = torch.quantile(flatted_offset_stds, 0.95, dim=2)
-                
-                # offset_min = offset_min.type(offset_stds.dtype)
-                # offset_max = offset_max.type(offset_stds.dtype)
-                
-                # offset_min = offset_min.unsqueeze(2).unsqueeze(3).unsqueeze(4) # (bs, 3, 1, 1, 1)
-                # offset_max = offset_max.unsqueeze(2).unsqueeze(3).unsqueeze(4)
-                
-                # # Clip the values
-                # offset_stds = torch.clamp(offset_stds, offset_min, offset_max)
-                
-                # # Normalize
-                # offset_stds = (offset_stds - offset_min) / (offset_max - offset_min)
-                # # offset_stds = 1 - torch.mean(offset_stds, dim=(1,), keepdim=True)
-                
-                # Shape and Offset stds are used to adjust the Cls_prob
-                # std_weight = [0.95, 1.05]
-                # # stds = torch.cat([shape_stds, offset_stds], dim=1) # (bs, 6, d, h, w)
-                # # print(torch.min(stds), torch.max(stds))
-                # stds = shape_stds
-                # # # print(torch.min(stds), torch.max(stds), stds.size())
-                # # stds = 0.5 - torch.mean(stds, dim=(1,), keepdim=True) # (bs, 1, d, h, w)
-                # stds = 1.0 - torch.mean(stds, dim=(1,), keepdim=True) # (bs, 1, d, h, w)
-                # # stds = 0.05 * stds
-                # # stds = shape_stds
-                # stds_weight = stds * (std_weight[1] - std_weight[0]) + std_weight[0]
-                # Cls_prob = torch.clamp(Cls_prob * stds_weight, 1e-6, 1 - 1e-6)
-                # Cls_prob = torch.clamp(Cls_prob + stds * 0.05, 1e-6, 1 - 1e-6)
-                
-                # Shape_output = torch.mean(Shape_output, dim=1) # (bs, 3, 24, 24, 24)
-                # Offset_output = torch.mean(Offset_output, dim=1) # (bs, 3, 24, 24, 24)
-                
                 Shape_output = Shape_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 output = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
@@ -239,25 +144,10 @@ def val(args,
                 start_idx += n_split
                 
             progress_bar.update(1)
-    # Save the results to csv
-    output_dir = os.path.join(annot_dir, f'epoch_{epoch}')
-    os.makedirs(output_dir, exist_ok=True)
-    header = ['seriesuid', 'coordX', 'coordY', 'coordZ', 'probability', 'w', 'h', 'd']
-    df = pd.DataFrame(all_preds, columns=header)
-    # sort by seriesuid and coordX
-    df = df.sort_values(by=['seriesuid', 'coordX'])
-    # df = df.reset_index(drop=True)
-    pred_results_path = os.path.join(output_dir, 'predict_epoch_{}.csv'.format(epoch))
-    df.to_csv(pred_results_path, index=False)
-    
     
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    froc_out, fixed_out, (best_f1_score, best_f1_threshold) = nodule_evaluation(annot_path = annot_path,
-                                                                                series_uids_path = series_uids_path, 
-                                                                                pred_results_path = pred_results_path,
-                                                                                output_dir = output_dir,
-                                                                                iou_threshold = args.val_iou_threshold,
-                                                                                fixed_prob_threshold=args.val_fixed_prob_threshold)
+    froc_out, fixed_out, (best_f1_score, best_f1_threshold) = evaluator.evaluation(preds=all_preds,
+                                                                                   save_dir=save_dir)
     fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points = froc_out
     
     logger.info('==> Epoch: {}'.format(epoch))
