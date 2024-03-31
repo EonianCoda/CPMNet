@@ -214,9 +214,10 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: f
     rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
-    transform_list_train = [transform.Pad(output_size=crop_size, pad_value=pad_value),
-                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_zx, trans_zy=rot_zy))
+    transform_list_train = [transform.Pad(output_size=crop_size, pad_value=pad_value)]
+                            # transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    # transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_zx, trans_zy=rot_zy))
+    transform_list_train.append(transform.RandomRotate90(rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.5, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         

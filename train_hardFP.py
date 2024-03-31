@@ -210,7 +210,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
         # Resume best metric
         global early_stopping
         early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model)
-    
+        start_epoch = start_epoch + 1
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model)
@@ -296,7 +296,7 @@ def get_hardFP_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     train_hard_fp_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
-    train_hard_fp_loader = DataLoader(train_hard_fp_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
+    train_hard_fp_loader = DataLoader(train_hard_fp_dataset, batch_size=1, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
     logger.info("There are {} test samples and {} batches in '{}'".format(len(test_loader.dataset), len(test_loader), args.test_set))
@@ -340,7 +340,6 @@ if __name__ == '__main__':
         with open(os.path.join(exp_folder, 'hard_FP.pkl'), 'rb') as f:
             hard_FP = pickle.load(f)
         train_loader.dataset.update_hard_FP(hard_FP)
-        
     for epoch in range(start_epoch, args.epochs + 1):
         if epoch >= args.start_gen_hard_fp_epoch and epoch % args.gen_hard_fp_interval == 0:
             hard_FP = gen_hard_FP(model = model,

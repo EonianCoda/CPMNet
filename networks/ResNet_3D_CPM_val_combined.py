@@ -348,7 +348,8 @@ def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0
     """
     dtype, device = feat.dtype, feat.device
     _, _, d, h, w = feat.shape
-    strides = torch.tensor([input_size[0] / d, input_size[1] / h, input_size[2] / w], dtype=dtype, device=device)
+    # strides = torch.tensor([input_size[0] / d, input_size[1] / h, input_size[2] / w], dtype=dtype, device=device)
+    strides = torch.tensor([4, 4, 4], dtype=dtype, device=device)
     sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
     sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
     sz = torch.arange(end=d, device=device, dtype=dtype) + grid_cell_offset  # shift z
@@ -567,10 +568,12 @@ class DetectionLoss(nn.Module):
         sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
         
         # distance (b, n_max_object, anchors)
-        distance = (((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1))
+        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1))
+        _, topk_inds = torch.topk(distance, (ignore_ratio + 1) * pos_target_topk, dim=-1, largest=True, sorted=True)
         
-        mask_topk = (distance <= 1.21).float()
-        mask_ignore = torch.logical_and((distance > 1.21), (distance <= 2.89)).float() * -1
+        mask_topk = F.one_hot(topk_inds[:, :, :pos_target_topk], distance.size()[-1]).sum(-2) # (b, num_annotation, num_of_points), the value is 1 or 0
+        mask_ignore = -1 * F.one_hot(topk_inds[:, :, pos_target_topk:], distance.size()[-1]).sum(-2) # the value is -1 or 0
+        
         # the value is 1 or 0, shape= (b, num_annotations, num_of_points)
         # mask_gt is 1 mean the annotation is not ignored, 0 means the annotation is ignored
         # mask_topk is 1 means the point is assigned to positive

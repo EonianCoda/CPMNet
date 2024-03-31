@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Tuple
 import torch
+import logging
 
 class AbstractFeatTransform(object):
     def __init__(self, params):
@@ -18,14 +19,36 @@ class FlipFeatTransform(AbstractFeatTransform):
             if i > 0:
                 raise ValueError("flip_axes should be negative index")
         
-    def forward(self, feat):
+    def forward(self, feat, sign_value=False):
+        if sign_value:
+            sign = [1, 1, 1]
+            for i in self.flip_axes:
+                sign[i] = -1
+            sign = np.array(sign)
         if isinstance(feat, np.ndarray):
-            return np.flip(feat, self.flip_axes)
+            if sign_value:
+                for _ in range(3):
+                    sign = np.expand_dims(sign, -1)
+                if len(feat.shape) > 4:
+                    for _ in range(len(feat.shape) - 4):
+                        sign = np.expand_dims(sign, 0)
+                return np.flip(feat * sign, self.flip_axes) 
+            else:
+                return np.flip(feat, self.flip_axes)
         elif isinstance(feat, torch.Tensor):
-            return torch.flip(feat, self.flip_axes)
+            if sign_value:
+                sign = torch.from_numpy(sign).to(feat.device).to(feat.dtype)
+                for _ in range(3):
+                    sign = sign.unsqueeze(-1)
+                if len(feat.shape) > 4:
+                    for _ in range(len(feat.shape) - 4):
+                        sign = sign.unsqueeze(0)
+                return torch.flip(feat * sign, self.flip_axes)
+            else:
+                return torch.flip(feat, self.flip_axes)
     
-    def backward(self, feat):
-        return self.forward(feat)
+    def backward(self, feat, sign_value=False):
+        return self.forward(feat, sign_value)
 
 class Rot90FeatTransform(AbstractFeatTransform):
     def __init__(self, rot_angle: int, rot_axes: Tuple[int]):
