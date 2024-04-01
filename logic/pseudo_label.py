@@ -70,6 +70,7 @@ def gen_pseu_labels(model: nn.Module,
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
+            image_shapes = sample['image_shapes']
             
             preds = []
             for i in range(int(math.ceil(data.size(0) / batch_size))):
@@ -95,8 +96,9 @@ def gen_pseu_labels(model: nn.Module,
             for i in range(len(num_splits)):
                 n_split = num_splits[i]
                 nzhw = nzhws[i]
+                image_shape = image_shapes[i]
                 series_name = series_names[i]
-                pred = split_comber.combine(preds[start_index:start_index + n_split], nzhw)
+                pred = split_comber.combine(preds[start_index:start_index + n_split], nzhw, image_shape)
                 
                 pred = torch.from_numpy(pred).view(-1, 8)
                 # Remove the padding

@@ -366,6 +366,7 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
                                     prob_threshold = prob_threshold,
                                     mixed_precision = args.val_mixed_precision,
                                     memory_format = args.memory_format)
+        os.makedirs(os.path.dirname(pseu_label_save_path), exist_ok=True)
         with open(pseu_label_save_path, 'wb') as f:
             pickle.dump(pseu_labels, f)
     else:

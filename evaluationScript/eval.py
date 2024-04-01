@@ -40,6 +40,7 @@ FROC_MINX = 0.125 # Mininum value of x-axis of FROC curve
 FROC_MAXX = 8 # Maximum value of x-axis of FROC curve
 bLogPlot = True
 
+FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
 NODULE_TYPE_TEMPLATE = '{:20s}: Recall={:.3f}, Precision={:.3f}, F1={:.3f}, TP={:4d}, FP={:4d}, FN={:4d}'
 
 def gen_bootstrap_set(scan_to_cands_dict: Dict[str, np.ndarray], seriesUIDs_np: np.ndarray) -> np.ndarray:
@@ -185,117 +186,6 @@ def compute_FROC(FROC_is_pos_list: List[float],
     precisions = (tp_ratio * num_of_detected_pos) / np.maximum(1, tp_ratio * num_of_detected_pos + fp_ratio * (num_of_cand - num_of_detected_pos)) # precision
     return fp_per_scans, sens, precisions, thresholds
 
-def evaluateCAD(seriesUIDs: List[str], 
-                results_path: str,
-                output_dir: str,
-                all_gt_nodules: Dict[str, List[NoduleFinding]],
-                max_num_of_nodule_candidate_in_series: int = -1,
-                iou_threshold = 0.1,
-                fixed_prob_threshold = 0.8):
-    """
-    function to evaluate a CAD algorithm
-    """
-    # compute FROC
-    fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
-                                                    FROC_prob_list = FROC_prob_list, 
-                                                    total_num_of_series = len(seriesUIDs), 
-                                                    FROC_is_FN_list = FROC_is_FN_list)
-    
-    if PERFORMBOOTSTRAPPING:  # True
-        (fps_bs_itp, thresholds_mean), senstitivity_info, precision_info = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
-                                                                                                FROC_prob_list = FROC_prob_list,
-                                                                                                FROC_series_uids = FROC_series_uids,
-                                                                                                seriesUIDs = seriesUIDs,
-                                                                                                FROC_is_FN_list = FROC_is_FN_list,
-                                                                                                numberOfBootstrapSamples = NUMBEROFBOOTSTRAPSAMPLES, 
-                                                                                                confidence = CONFIDENCE)
-        sens_bs_mean, sens_bs_lb, sens_bs_up = senstitivity_info
-        prec_bs_mean, prec_bs_lb, prec_bs_up = precision_info
-        f1_score_mean = 2 * prec_bs_mean * sens_bs_mean / np.maximum(1e-6, prec_bs_mean + sens_bs_mean)
-        
-        best_f1_index = np.argmax(f1_score_mean)
-        best_f1_threshold = thresholds_mean[best_f1_index]
-        best_f1_sens = sens_bs_mean[best_f1_index]
-        best_f1_prec = prec_bs_mean[best_f1_index]
-        best_f1_score = f1_score_mean[best_f1_index]
-        logger.info('Best F1 score: {:.4f} at threshold: {:.3f}, Sens: {:.3f}, Prec: {:.3f}'.format(best_f1_score, best_f1_threshold, best_f1_sens, best_f1_prec))
-        # Write FROC curve
-        with open(os.path.join(output_dir, "froc_{}.txt".format(iou_threshold)), 'w') as f:
-            f.write("FPrate,Sensivity,Precision,f1_score,Threshold\n")
-            for i in range(len(fps_bs_itp)):
-                f.write("%.5f,%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], prec_bs_mean[i], f1_score_mean[i], thresholds_mean[i]))
-    # Write FROC vectors to disk as well
-    with open(os.path.join(output_dir, "froc_gt_prob_vectors_{}.csv".format(iou_threshold)), 'w') as f:
-        f.write("is_pos, prob\n")
-        for i in range(len(FROC_is_pos_list)):
-            f.write("%d,%.4f\n" % (FROC_is_pos_list[i], FROC_prob_list[i]))
-
-    fps_itp = np.linspace(FROC_MINX, FROC_MAXX, num=10001)
-    
-    sens_itp = np.interp(fps_itp, fps, sens)
-    prec_itp = np.interp(fps_itp, fps, precisions)
-    
-    sens_points = []
-    prec_points = []
-    
-    if PERFORMBOOTSTRAPPING: # True
-        # Write mean, lower, and upper bound curves to disk
-        with open(os.path.join(output_dir, "froc_bootstrapping_{}.csv".format(iou_threshold)), 'w') as f:
-            f.write("FPrate,Sensivity[Mean],Sensivity[Lower bound],Sensivity[Upper bound]\n")
-            for i in range(len(fps_bs_itp)):
-                f.write("%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], sens_bs_lb[i], sens_bs_up[i]))
-            FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-            total_sens = 0
-            nodule_output_file.write('-'*20 + '\n')
-            nodule_output_file.write("FP/Scan, Sensitivity, Precision\n")
-            for fp_point in FPS:
-                index = np.argmin(abs(fps_bs_itp - fp_point))
-                nodule_output_file.write('{:.3f}, {:.3f}, {:.3f}\n'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
-                sens_points.append(sens_bs_mean[index])
-                prec_points.append(prec_bs_mean[index])
-                total_sens += sens_bs_mean[index]
-            nodule_output_file.write("\n")
-            nodule_output_file.write("Froc_mean = {:.2f}\n".format(total_sens / len(FPS)))
-    else:
-        fps_bs_itp = None
-        sens_bs_mean = None
-        sens_bs_lb = None
-        sens_bs_up = None
-
-    # create FROC graphs
-    if int(total_num_of_nodules) > 0:
-        fig1 = plt.figure()
-        ax = plt.gca()
-        clr = 'b'
-        plt.plot(fps_itp, sens_itp, color=clr, lw=2)
-        if PERFORMBOOTSTRAPPING:
-            plt.plot(fps_bs_itp, sens_bs_mean, color=clr, ls='--')
-            plt.plot(fps_bs_itp, sens_bs_lb, color=clr, ls=':') # , label = "lb")
-            plt.plot(fps_bs_itp, sens_bs_up, color=clr, ls=':') # , label = "ub")
-            ax.fill_between(fps_bs_itp, sens_bs_lb, sens_bs_up, facecolor=clr, alpha=0.05)
-        xmin = FROC_MINX
-        xmax = FROC_MAXX
-        plt.xlim(xmin, xmax)
-        plt.ylim(0, 1)
-        plt.xlabel('Average number of false positives per scan')
-        plt.ylabel('Sensitivity')
-        plt.title('FROC performance')
-        
-        if bLogPlot:
-            plt.xscale('log')
-            ax.xaxis.set_major_locator(plt.FixedLocator([0.125,0.25,0.5,1,2,4,8]))
-            ax.xaxis.set_major_formatter(FixedFormatter([0.125,0.25,0.5,1,2,4,8]))
-        
-        # set your ticks manually
-        ax.xaxis.set_ticks([0.125,0.25,0.5,1,2,4,8])
-        ax.yaxis.set_ticks(np.arange(0, 1.1, 0.1))
-        plt.grid(which='both')
-        plt.tight_layout()
-
-        plt.savefig(os.path.join(output_dir, "froc_{}.png".format(iou_threshold)), bbox_inches=0, dpi=300)
-
-    return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score), (best_f1_score, best_f1_threshold)
-    
 def compute_sphere_volume(diameter: float) -> float:
     if diameter == 0:
         return 0
@@ -535,12 +425,13 @@ class Evaluation:
                             froc.add(is_pos=True, is_FN=False, prob=match_cand.prob, series_name=series_name, nodule=gt_nodule)
                         else: # FN
                             FN_gt_nodules.append(gt_nodule)
-                            gt_nodule.set_match(np.max(ious), None)
+                            max_iou = np.max(ious)
+                            if max_iou > 0:
+                                gt_nodule.set_match(max_iou, None)
                             froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
                 else: # All ground truth nodules are FNs
                     for gt_idx, gt_nodule in enumerate(gt_nodules):
                         FN_gt_nodules.append(gt_nodule)
-                        gt_nodule.set_match(np.max(ious), None)
                         froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
                 
             # Compute FP
@@ -560,7 +451,6 @@ class Evaluation:
         self._write_predicitions(save_dir, froc)
         self._write_FN_csv(FN_gt_nodules, save_dir)
         classified_metrics, recall_series_based, recall_remove_health_series_based = froc.get_metrics(self.prob_threshold)
-        self._write_stats(froc, save_dir, classified_metrics, recall_series_based, recall_remove_health_series_based, num_of_all_pred_cands)
         ##TODO: refactor this part
         # compute FROC
         FROC_is_pos_list = froc.is_pos_list
@@ -610,62 +500,58 @@ class Evaluation:
         
         sens_points = []
         prec_points = []
-        
+        thresholds_points = []
         if PERFORMBOOTSTRAPPING: # True
             # Write mean, lower, and upper bound curves to disk
             with open(os.path.join(save_dir, "froc_bootstrapping_{}.csv".format(self.iou_threshold)), 'w') as f:
                 f.write("FPrate,Sensivity[Mean],Sensivity[Lower bound],Sensivity[Upper bound]\n")
                 for i in range(len(fps_bs_itp)):
                     f.write("%.5f,%.5f,%.5f,%.5f\n" % (fps_bs_itp[i], sens_bs_mean[i], sens_bs_lb[i], sens_bs_up[i]))
-                FPS = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-                total_sens = 0
-                # nodule_output_file.write('-'*20 + '\n')
-                # nodule_output_file.write("FP/Scan, Sensitivity, Precision\n")
                 for fp_point in FPS:
                     index = np.argmin(abs(fps_bs_itp - fp_point))
-                    # nodule_output_file.write('{:.3f}, {:.3f}, {:.3f}\n'.format(fp_point, sens_bs_mean[index], prec_bs_mean[index]))
                     sens_points.append(sens_bs_mean[index])
                     prec_points.append(prec_bs_mean[index])
-                    total_sens += sens_bs_mean[index]
-                # nodule_output_file.write("\n")
-                # nodule_output_file.write("Froc_mean = {:.2f}\n".format(total_sens / len(FPS)))
+                    thresholds_points.append(thresholds_mean[index])
         else:
             fps_bs_itp = None
             sens_bs_mean = None
             sens_bs_lb = None
             sens_bs_up = None
 
+        froc_info = (sens_points, prec_points, thresholds_points)
+        self._write_stats(froc, save_dir, classified_metrics, recall_series_based, recall_remove_health_series_based, num_of_all_pred_cands, froc_info)
+        
         # create FROC graphs
         # if int(total_num_of_nodules) > 0:
-        fig1 = plt.figure()
-        ax = plt.gca()
-        clr = 'b'
-        plt.plot(fps_itp, sens_itp, color=clr, lw=2)
-        if PERFORMBOOTSTRAPPING:
-            plt.plot(fps_bs_itp, sens_bs_mean, color=clr, ls='--')
-            plt.plot(fps_bs_itp, sens_bs_lb, color=clr, ls=':') # , label = "lb")
-            plt.plot(fps_bs_itp, sens_bs_up, color=clr, ls=':') # , label = "ub")
-            ax.fill_between(fps_bs_itp, sens_bs_lb, sens_bs_up, facecolor=clr, alpha=0.05)
-        xmin = FROC_MINX
-        xmax = FROC_MAXX
-        plt.xlim(xmin, xmax)
-        plt.ylim(0, 1)
-        plt.xlabel('Average number of false positives per scan')
-        plt.ylabel('Sensitivity')
-        plt.title('FROC performance')
+        # fig1 = plt.figure()
+        # ax = plt.gca()
+        # clr = 'b'
+        # plt.plot(fps_itp, sens_itp, color=clr, lw=2)
+        # if PERFORMBOOTSTRAPPING:
+        #     plt.plot(fps_bs_itp, sens_bs_mean, color=clr, ls='--')
+        #     plt.plot(fps_bs_itp, sens_bs_lb, color=clr, ls=':') # , label = "lb")
+        #     plt.plot(fps_bs_itp, sens_bs_up, color=clr, ls=':') # , label = "ub")
+        #     ax.fill_between(fps_bs_itp, sens_bs_lb, sens_bs_up, facecolor=clr, alpha=0.05)
+        # xmin = FROC_MINX
+        # xmax = FROC_MAXX
+        # plt.xlim(xmin, xmax)
+        # plt.ylim(0, 1)
+        # plt.xlabel('Average number of false positives per scan')
+        # plt.ylabel('Sensitivity')
+        # plt.title('FROC performance')
         
-        if bLogPlot:
-            plt.xscale('log')
-            ax.xaxis.set_major_locator(plt.FixedLocator([0.125,0.25,0.5,1,2,4,8]))
-            ax.xaxis.set_major_formatter(FixedFormatter([0.125,0.25,0.5,1,2,4,8]))
+        # if bLogPlot:
+        #     plt.xscale('log')
+        #     ax.xaxis.set_major_locator(plt.FixedLocator([0.125,0.25,0.5,1,2,4,8]))
+        #     ax.xaxis.set_major_formatter(FixedFormatter([0.125,0.25,0.5,1,2,4,8]))
         
-        # set your ticks manually
-        ax.xaxis.set_ticks([0.125,0.25,0.5,1,2,4,8])
-        ax.yaxis.set_ticks(np.arange(0, 1.1, 0.1))
-        plt.grid(which='both')
-        plt.tight_layout()
+        # # set your ticks manually
+        # ax.xaxis.set_ticks([0.125,0.25,0.5,1,2,4,8])
+        # ax.yaxis.set_ticks(np.arange(0, 1.1, 0.1))
+        # plt.grid(which='both')
+        # plt.tight_layout()
 
-        plt.savefig(os.path.join(save_dir, "froc_{}.png".format(self.iou_threshold)), bbox_inches=0, dpi=300)
+        # plt.savefig(os.path.join(save_dir, "froc_{}.png".format(self.iou_threshold)), bbox_inches=0, dpi=300)
 
         fixed_tp = classified_metrics['all']['tp']
         fixed_fp = classified_metrics['all']['fp']
@@ -673,7 +559,7 @@ class Evaluation:
         fixed_recall = classified_metrics['all']['recall']
         fixed_precision = classified_metrics['all']['precision']
         fixed_f1_score = classified_metrics['all']['f1_score']
-        plt.close()
+        # plt.close()
         return (fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points), (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score), (best_f1_score, best_f1_threshold)
     
     def _write_predicitions(self, save_dir: str, froc: FROC):
@@ -687,7 +573,7 @@ class Evaluation:
         
         save_path = os.path.join(save_dir, "predictions.csv")
         
-        header = "series_name,ctr_x,ctr_y,ctr_z,w,h,d,prob, nodule_type, match_iou, is_gt\n"
+        header = "series_name,ctr_x,ctr_y,ctr_z,w,h,d,prob, nodule_type, match_iou, is_gt, gt_ctr_x, gt_ctr_y, gt_ctr_z, gt_w, gt_h, gt_d\n"
         lines = [header]
         
         series_name_cands = defaultdict(list)
@@ -704,13 +590,23 @@ class Evaluation:
                 nodule_type = cand.nodule_type
                 match_iou = cand.match_iou
                 is_gt = cand.is_gt
-                lines.append("{},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{},{:.3f},{}\n".format(series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob, nodule_type, match_iou, is_gt))
+                if not is_gt or (is_gt and prob == -1):
+                    pred_line = "{},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{},{:.3f},{}\n".format(series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob, nodule_type, match_iou, is_gt)
+                else:
+                    pred_cand = cand.match_nodule_finding
+                    gt_ctr_x, gt_ctr_y, gt_ctr_z = ctr_x, ctr_y, ctr_z
+                    gt_w, gt_h, gt_d = w, h, d
+                    
+                    ctr_x, ctr_y, ctr_z = pred_cand.ctr_x, pred_cand.ctr_y, pred_cand.ctr_z
+                    w, h, d = pred_cand.w, pred_cand.h, pred_cand.d
+                    pred_line = "{},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{},{:.3f},{},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f}\n".format(series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob, nodule_type, match_iou, is_gt, gt_ctr_x, gt_ctr_y, gt_ctr_z, gt_w, gt_h, gt_d)
+                lines.append(pred_line)
         
         with open(save_path, 'w') as f:
             f.writelines(lines)
             
-    def _write_stats(self, froc: FROC, save_dir: str, classified_metrics: Dict[str, Dict[str, float]], recall_series_based: float, 
-                     recall_remove_health_series_based: float, num_of_all_pred_cands: int): 
+    def _write_stats(self, froc: FROC, save_dir: str, classified_metrics: Dict[str, Dict[str, float]], recall_series_based: float,
+                     recall_remove_health_series_based: float, num_of_all_pred_cands: int, froc_info):
         
         def generate_prob_iou_table(stats: Dict[str, Dict[str, float]], nodule_type: str) -> List[str]:
             prob_and_iou_stats_template = "{:20s}, {}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}"
@@ -727,6 +623,7 @@ class Evaluation:
             
             return text.split(",")    
             
+        (sens_points, prec_points, thresholds_points) = froc_info
         stats_file_path = os.path.join(save_dir, "stats.md".format(self.iou_threshold))
         
         prob_and_iou_stats = self._analyze_prob_and_iou(froc)
@@ -734,18 +631,10 @@ class Evaluation:
         with MarkDownWriter(stats_file_path) as f:
             # Write the evaluation statistics
             f.write_header("Evaluation Setting", 1)
-            
             f.write_item("Series list path = {}".format(self.series_list_path))
             f.write_item("IoU Thresolhd = {}".format(self.iou_threshold))
             f.write_item("Probability Threshold = {}".format(self.prob_threshold))
             f.write_item("Nodule size mode = {}".format(self.nodule_size_mode))
-            #      image_spacing: Tuple[float, float, float],
-            #      nodule_type_diameters: Dict[str, float],
-            #      prob_threshold: float = 0.65,
-            #      iou_threshold: float = 0.1,
-            #      nodule_size_mode = 'dhw', # or 'seg_size'
-            #      nodule_min_d: int = 0,
-            #      nodule_min_size: int = 0)
             
             # Write the statistics of the nodules
             f.write_header("Evaluation statistics", 1)
@@ -761,7 +650,12 @@ class Evaluation:
             f.write_item("Recall(Threshold = 0): {:.3f}".format(recall))
             f.write_item("Recall(series_based): {:.3f}".format(recall_series_based))
             f.write_item("Recall(remove_healthy_series_based): {:.3f}".format(recall_remove_health_series_based))
+            
+            # Write metrics
             f.write_header("Metrics", 1)
+            
+            # Write the metrics of the nodules when the probability threshold is fixed
+            f.write_header("Fixed confidence = {:.2f}".format(self.prob_threshold), 2)
             nodule_stats_template = '{:20s}, {:.3f}, {:.3f}, {:.3f}, {:4d}, {:4d}, {:4d}'
             header = "Nodule type, Recall, Precision, F1 score, TP, FP, FN"
             header = header.split(',')
@@ -771,9 +665,24 @@ class Evaluation:
                 values.append(text.split(","))
             f.write_table(header, values)
             
+            # Write froc metrics
+            f.write_header("FROC", 2)
+            header = "FPrate, Recall, Precision, Threshold"
+            froc_template = '{:.3f}, {:.4f}, {:.4f}, {:.3f}'
+            values = []
+            for FPrate, recall, precision, threshold in zip(FPS, sens_points, prec_points, thresholds_points):
+                text = froc_template.format(FPrate, recall, precision, threshold)
+                values.append(text.split(","))
+            
+            mean_recall = np.mean(sens_points)
+            mean_precision = np.mean(prec_points)
+            text = '{}, {:.4f}, {:.4f}, {}'.format('Mean', mean_recall, mean_precision, 'N/A')
+            values.append(text.split(","))
+                
+            f.write_table(header.split(','), values)
+            
             # Write the statistics of the probability and iou of the matched candidates
             f.write_header("Prob and IoU statistics", 1)
-            
             f.write_header("TP", 2)
             header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max), IoU(mean), IoU(std), IoU(min), IoU(max)"
             header = header.split(',')
@@ -806,6 +715,7 @@ class Evaluation:
                     values.append([nodule_type, '{}<br>({:.1f}%)'.format(number, ratio)])
             f.write_table(header, values)
             
+            
     def _analyze_prob_and_iou(self, froc: FROC) -> Dict[str, Dict[str, float]]:
         """
         Analyze the mean, std, min, max of the probability and iou of the matched candidates of different nodule types.
@@ -813,7 +723,7 @@ class Evaluation:
         Returns: A dictionary containing the statistics of the probability and iou of the matched candidates of different nodule types.
         """
         def get_stats(nodules_by_type: Dict[str, List[NoduleFinding]], analyse_iou: bool = False) -> Dict[str, Dict[str, Dict[str, float]]]:
-            stats = {}
+            stats = defaultdict(list)
             total_number_of_nodules = sum([len(nodules) for nodules in nodules_by_type.values()])
             for nodule_type, nodules in nodules_by_type.items():
                 probs = [n.prob for n in nodules]
