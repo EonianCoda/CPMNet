@@ -254,14 +254,14 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
         rot_xz = False
         
     transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
-        
+    transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
+    # transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
     transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random transpose: {}, random crop: {}'.format([True, rot_yz, rot_xz], args.use_crop))
+    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}'.format([True, rot_yz, rot_xz], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -274,8 +274,7 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
         rot_xz = False
         
     transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
-        
+    transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
@@ -418,7 +417,7 @@ if __name__ == '__main__':
     else:
         logger.info('Use ground truth crop')
         
-    for epoch in range(start_epoch, 101):#args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         train_metrics = train(args = args,
