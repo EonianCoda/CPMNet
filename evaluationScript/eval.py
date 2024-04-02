@@ -650,7 +650,7 @@ class Evaluation:
             f.write_item("Number of all ground truth nodules: {}".format(self.num_of_all_gt_nodules))
             
             recall = froc.tp_count / max(froc.tp_count + froc.fn_count, 1e-6)
-            f.write_item("Recall(Threshold = {:.3f}): {:.3f}".format(det_threshold, recall))
+            f.write_item("Recall(Threshold = {:.3f}): {:.3f}".format(froc_det_thresholds[0], recall))
             f.write_item("Recall(series_based): {:.3f}".format(recall_series_based))
             f.write_item("Recall(remove_healthy_series_based): {:.3f}".format(recall_remove_health_series_based))
             

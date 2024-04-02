@@ -35,7 +35,7 @@ def val(args,
         series_list_path: str,
         exp_folder: str,
         epoch = 0,
-        batch_size: int = 16,
+        batch_size: int = 8,
         nms_keep_top_k: int = 40,
         nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
@@ -67,7 +67,7 @@ def val(args,
         
     with get_progress_bar('Validation', len(val_loader)) as progress_bar:
         for sample in val_loader:
-            data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format) # (bs, num_aug, 1, crop_z, crop_y, crop_x)
+            data = sample['split_images'] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
@@ -83,7 +83,7 @@ def val(args,
                 if end > data.size(0):
                     end = data.size(0)
                 input = data[i * batch_size:end] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
-                input = input.view(-1, 1, *input.size()[3:]) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
+                input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                 if args.val_mixed_precision:
                     with torch.cuda.amp.autocast():
                         with torch.no_grad():
@@ -130,7 +130,8 @@ def val(args,
                 output = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
                 output = detection_postprocess(output, device=device, is_logits=False) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputlist.append(output.data.cpu().numpy())
-            
+                del input, Cls_output, Shape_output, Offset_output, output
+
             outputs = np.concatenate(outputlist, 0)
             
             start_idx = 0
