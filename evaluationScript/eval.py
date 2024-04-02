@@ -677,6 +677,12 @@ class Evaluation:
                 for FPrate, recall, precision, f1_score, threshold in zip(FPS, froc_info[0], froc_info[1], froc_info[2], froc_info[3]):
                     text = '{:.3f}, {:.2f}, {:.2f}, {:.2f}, {:.3f}'.format(FPrate, recall * 100, precision * 100, f1_score * 100, threshold)
                     values.append(text.split(","))
+                
+                mean_recall = np.mean(froc_info[0])
+                mean_precision = np.mean(froc_info[1])
+                mean_f1_score = np.mean(froc_info[2])
+                mean_text = 'Mean, {:.2f}, {:.2f}, {:.2f}, '.format(mean_recall * 100, mean_precision * 100, mean_f1_score * 100)
+                values.append(mean_text.split(","))
                 f.write_table(header.split(','), values)
             
             ### Write the statistics of the probability and iou of the matched candidates
@@ -686,34 +692,50 @@ class Evaluation:
                 f.write_header("Confidence Threshold = {:.3f}".format(det_threshold), 2)
                 
                 f.write_header("TP and FN", 3)
-                header = "Nodule type, TP, FN, Prob(mean), Prob(std), Prob_range(95%), Prob(min), Prob(max), IoU(mean), IoU(std), IoU_range(95%), IoU(min), IoU(max)"
+                header = "Nodule type, TP, FN, Recall, Prob(mean), Prob(std), Prob_range(95%), Prob(min), Prob(max), IoU(mean), IoU(std), IoU_range(95%), IoU(min), IoU(max)"
                 header = header.split(',')
                 values = []
                 for nodule_type in self.sorted_nodule_types + ['all']:
                     if nodule_type not in prob_and_iou_stats['FN']:
-                        fn = '0<br>(0.0%)'
+                        fn = 0
+                        fn_text = '0<br>(0.0%)'
                     else:
                         number = prob_and_iou_stats['FN'][nodule_type]['number']
                         ratio = prob_and_iou_stats['FN'][nodule_type]['ratio'] * 100
-                        fn = '{}<br>({:.1f}%)'.format(number, ratio)
+                        fn = number
+                        fn_text = '{}<br>({:.1f}%)'.format(number, ratio)
                     
                     if nodule_type not in prob_and_iou_stats['TP']:
-                        values.append([nodule_type, '0<br>(0%)', fn,'0', '0', '0', '0', '0', '0', '0', '0', '0', '0'])
+                        recall = 0
+                        values.append([nodule_type, '0<br>(0%)', fn_text, recall,'0', '0', '0', '0', '0', '0', '0', '0', '0', '0'])
                     else:
                         values.append(generate_prob_iou_table(prob_and_iou_stats['TP'][nodule_type], nodule_type))
-                        values[-1].insert(2, fn)
+                        tp = prob_and_iou_stats['TP'][nodule_type]['number']
+                        recall = tp / max(tp + fn, 1e-6)
+                        recall_text = '{:.2f}'.format(recall * 100)
+                        values[-1].insert(2, fn_text)
+                        values[-1].insert(3, recall_text)
                 f.write_table(header, values)
             
                 ## Write FPs
                 f.write_header("FP", 3)
-                header = "Nodule type, Number, Prob(mean), Prob(std), Prob_range(95%), Prob(min), Prob(max)"
+                header = "Nodule type, FP, Precision, Prob(mean), Prob(std), Prob_range(95%), Prob(min), Prob(max)"
                 header = header.split(',')
                 values = []
                 for nodule_type in self.sorted_nodule_types + ['all']:
                     if nodule_type not in prob_and_iou_stats['FP']:
-                        values.append([nodule_type, '0', '0', '0', '0', '0', '0'])
+                        values.append([nodule_type, '0', '0', '0', '0', '0', '0', '0'])
                     else:
+                        if nodule_type not in prob_and_iou_stats['TP']:
+                            tp = 0
+                        else:
+                            tp = prob_and_iou_stats['TP'][nodule_type]['number']
+                            
+                        fp = prob_and_iou_stats['FP'][nodule_type]['number']
+                        precision = tp / max(tp + fp, 1e-6)
+                        precision_text = '{:.2f}'.format(precision * 100)
                         values.append(generate_prob_iou_table(prob_and_iou_stats['FP'][nodule_type], nodule_type))
+                        values[-1].insert(2, precision_text)
                 f.write_table(header, values)
             
     def _analyze_prob_and_iou(self, froc: FROC, conf_threshold: float) -> Dict[str, Dict[str, Dict[str, float]]]:
