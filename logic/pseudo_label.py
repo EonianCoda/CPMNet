@@ -48,7 +48,7 @@ def gen_pseu_labels(model: nn.Module,
                     device: torch.device,
                     detection_postprocess,
                     prob_threshold: float = 0.8,
-                    batch_size: int = 16,
+                    batch_size: int = 8,
                     nms_keep_top_k: int = 40,
                     mixed_precision: bool = False,
                     memory_format: str = None) -> Dict[str, np.ndarray]:
@@ -66,40 +66,75 @@ def gen_pseu_labels(model: nn.Module,
     
     with get_progress_bar('Pseu-Label Generation', len(dataloader)) as pbar:
         for sample in dataloader:
-            data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format)
+            data = sample['split_images'] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
             image_shapes = sample['image_shapes']
-            
+            all_ctr_transforms = sample['ctr_transforms'] # (N, num_aug)
+            all_feat_transforms = sample['feat_transforms'] # (N, num_aug)
+            transform_weights = sample['transform_weights'] # (N, num_aug)
             preds = []
+            transform_weights = torch.from_numpy(transform_weights).to(device, non_blocking=True)
+            num_aug = data.size(1)
             for i in range(int(math.ceil(data.size(0) / batch_size))):
                 end = (i + 1) * batch_size
                 if end > data.size(0):
                     end = data.size(0)
-                input = data[i * batch_size:end]
-                
+                input = data[i * batch_size:end] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
+                input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                 with torch.no_grad():
                     if mixed_precision:
                         with torch.cuda.amp.autocast():
                             pred = model(input)
-                            pred = detection_postprocess(pred, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                     else:
                         pred = model(input)
-                        pred = detection_postprocess(pred, device=device)
-                        
+                # Ensemble the augmentations
+                Cls_output = pred['Cls'] # (bs * num_aug, 1, 24, 24, 24)
+                Shape_output = pred['Shape'] # (bs * num_aug, 3, 24, 24, 24)
+                Offset_output = pred['Offset'] # (bs * num_aug, 3, 24, 24, 24)
+                
+                _, _, d, h, w = Cls_output.size()
+                Cls_output = Cls_output.view(-1, num_aug, 1, d, h, w)
+                Shape_output = Shape_output.view(-1, num_aug, 3, d, h, w)
+                Offset_output = Offset_output.view(-1, num_aug, 3, d, h, w)
+                
+                # ctr_transforms = all_ctr_transforms[i * batch_size:end] # (bs, num_aug)
+                feat_transforms = all_feat_transforms[i * batch_size:end] # (bs, num_aug)
+                for b_i in range(len(feat_transforms)):
+                    for aug_i in range(num_aug):
+                        if len(feat_transforms[b_i][aug_i]) > 0:
+                            for trans in reversed(feat_transforms[b_i][aug_i]):
+                                Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
+                                Shape_output[b_i, aug_i, ...] = trans.backward(Shape_output[b_i, aug_i, ...])
+                transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
+                transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
+                Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
+                Cls_output = Cls_output.sigmoid()
+                ignore_offset = 2
+                Cls_output[:, :, 0:ignore_offset, :, :] = 0
+                Cls_output[:, :, :, 0:ignore_offset, :] = 0
+                Cls_output[:, :, :, :, 0:ignore_offset] = 0
+                Cls_output[:, :, -ignore_offset:, :, :] = 0
+                Cls_output[:, :, :, -ignore_offset:, :] = 0
+                Cls_output[:, :, :, :, -ignore_offset:] = 0
+                
+                Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
+                Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
+                pred = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
+                pred = detection_postprocess(pred, device=device, is_logits=False) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 preds.append(pred.data.cpu().numpy())
+                del input, Cls_output, Shape_output, Offset_output, pred
+            del data
+            preds = np.concatenate(preds, 0)
             
-            preds = np.concatenate(preds, 0) # [n, 8]
-            
-            start_index = 0
+            start_idx = 0
             for i in range(len(num_splits)):
                 n_split = num_splits[i]
                 nzhw = nzhws[i]
                 image_shape = image_shapes[i]
                 series_name = series_names[i]
-                pred = split_comber.combine(preds[start_index:start_index + n_split], nzhw, image_shape)
-                
+                pred = split_comber.combine(preds[start_idx:start_idx + n_split], nzhw, image_shape)
                 pred = torch.from_numpy(pred).view(-1, 8)
                 # Remove the padding
                 valid_mask = (pred[:, 0] != -1.0)
@@ -110,6 +145,6 @@ def gen_pseu_labels(model: nn.Module,
                     pred = pred[keep]
                 pred = pred.numpy()
                 pseudo_labels[series_name] = pred2label(pred, prob_threshold)
-                start_index += n_split
+                start_idx += n_split
             pbar.update(1)
     return pseudo_labels

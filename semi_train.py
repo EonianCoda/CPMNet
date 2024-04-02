@@ -10,8 +10,9 @@ from typing import Tuple
 from networks.ResNet_3D_CPM_semi import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
 from dataload.dataset_semi import TrainDataset, DetDataset, UnLabeledDataset
+from dataload.dataset_val_aug import DetDataset as AugDetDataset
 from dataload.utils import get_image_padding_value
-from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_train_collate_fn
+from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_train_collate_fn, infer_aug_collate_fn
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
@@ -331,11 +332,11 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     # Build unlabeled detection dataloader for generating pseudo labels
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
-    det_dataset_u = DetDataset(series_list_path = args.unlabeled_train_set, 
+    det_dataset_u = AugDetDataset(series_list_path = args.unlabeled_train_set, 
                                SplitComb=split_comber, 
                                image_spacing=IMAGE_SPACING, 
                                norm_method=args.data_norm_method)
-    det_loader_u = DataLoader(det_dataset_u, batch_size=args.val_batch_size, shuffle=False, collate_fn=infer_collate_fn, 
+    det_loader_u = DataLoader(det_dataset_u, batch_size=1, shuffle=False, collate_fn=infer_aug_collate_fn, 
                               num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=False)
     
     logger.info("There are {} training labeled samples and {} batches in '{}'".format(len(train_loader_l.dataset), len(train_loader_l), args.train_set))
