@@ -114,7 +114,7 @@ def train(args,
                 # shape: (bs, top_k, 8)
                 # => top_k (default = 60) 
                 # => 8: 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-                outputs_t = detection_postprocess(feats_t, device=device, threshold = args.pseudo_label_threshold) 
+                outputs_t = detection_postprocess(feats_t, device=device, threshold = args.pseudo_label_threshold, nms_topk=args.pseudo_nms_topk)
             
             # np.save('weak_image.npy', weak_u_sample['image'].numpy())
             # np.save('outputs_t.npy', outputs_t.cpu().numpy())
@@ -185,7 +185,7 @@ def train(args,
                 # (For analysis) Compute iou between pseudo label and original label
                 all_iou_pseu = []
                 tp, fp, fn = 0, 0, 0
-                for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['annot'].numpy(), transformed_annots_padded, valid_mask)):
+                for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['gt_annot'].numpy(), transformed_annots_padded, valid_mask)):
                     if not is_valid:
                         fn += np.count_nonzero((annot[:, -1] != -1))
                         continue
@@ -215,7 +215,8 @@ def train(args,
                     # for j in np.where(iou_pseu < 1e-3)[0]:
                     #     transformed_annots_padded[i, j, ...] = -1
                     
-                avg_iou_pseu.update(np.mean(all_iou_pseu))
+                if len(all_iou_pseu) > 0:
+                    avg_iou_pseu.update(np.mean(all_iou_pseu))
                 avg_tp_pseu.update(tp)
                 avg_fp_pseu.update(fp)
                 avg_fn_pseu.update(fn)

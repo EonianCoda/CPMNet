@@ -116,9 +116,11 @@ def val(args,
             progress_bar.update(1)
     
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    froc_out, fixed_out, (best_f1_score, best_f1_threshold) = evaluator.evaluation(preds=all_preds,
-                                                                                   save_dir=save_dir)
-    fps, sens, thresholds, fps_bs_itp, sens_bs_mean, sens_bs_lb, sens_bs_up, sens_points = froc_out
+    froc_info, froc_info_05, fixed_out = evaluator.evaluation(preds=all_preds,
+                                                                save_dir=save_dir,
+                                                                det_threshold = detection_postprocess.threshold)
+    sens_points, prec_points, f1_points, thresholds_points = froc_info
+    sens_points_05, prec_points_05, f1_points_, thresholds_points_05 = froc_info_05
     
     logger.info('==> Epoch: {}'.format(epoch))
     for i in range(len(sens_points)):
@@ -131,9 +133,8 @@ def val(args,
                 'fn': fixed_fn,
                 'recall': fixed_recall,
                 'precision': fixed_precision,
-                'f1_score': fixed_f1_score,
-                'best_f1_score': best_f1_score,
-                'best_f1_threshold': best_f1_threshold}
+                'f1_score': fixed_f1_score}
+    
     mean_recall = np.mean(np.array(sens_points))
     metrics['froc_mean_recall'] = float(mean_recall)
     for fp_ratio, sens_p in zip(FP_ratios, sens_points):

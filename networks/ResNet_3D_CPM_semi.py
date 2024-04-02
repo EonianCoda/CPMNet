@@ -964,7 +964,7 @@ class DetectionPostprocess(nn.Module):
         self.nms_topk = nms_topk
         self.crop_size = crop_size
 
-    def forward(self, output, device, threshold=None):
+    def forward(self, output, device, threshold=None, nms_topk=None):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
@@ -1004,7 +1004,9 @@ class DetectionPostprocess(nn.Module):
                 det[:, 0] = 1
                 det[:, 1] = keep_topk_score
                 det[:, 2:] = pred_bboxes[j][keep_topk_idx]
-            
-                keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
+                if nms_topk is not None:
+                    keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=nms_topk)
+                else:
+                    keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
                 dets[j][:len(keep)] = det[keep.long()]
         return dets

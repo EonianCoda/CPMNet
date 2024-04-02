@@ -74,6 +74,15 @@ class InstanceCrop(object):
         all_rad = sample['all_rad']
         all_cls = sample['all_cls']
         
+        gt_all_loc = sample['gt_all_loc']
+        gt_all_rad = sample['gt_all_rad']
+        gt_all_cls = sample['gt_all_cls']
+        
+        if len(gt_all_loc) != 0:
+            gt_instance_loc = gt_all_loc[np.sum([gt_all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
+        else:
+            gt_instance_loc = []
+        
         if len(all_loc) != 0:
             instance_loc = all_loc[np.sum([all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
         else:
@@ -140,6 +149,16 @@ class InstanceCrop(object):
                     in_idx.append(False)
             in_idx = np.array(in_idx)
 
+            gt_all_loc = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in gt_all_loc]
+            gt_all_loc = np.array(gt_all_loc)
+            in_idx_gt = []
+            for j in range(gt_all_loc.shape[0]):
+                if (gt_all_loc[j] <= np.array(image_itk_crop.GetSize()[::-1])).all() and (gt_all_loc[j] >= np.zeros([3])).all():
+                    in_idx_gt.append(True)
+                else:
+                    in_idx_gt.append(False)
+            in_idx_gt = np.array(in_idx_gt)
+                        
             if in_idx.size > 0:
                 ctr = all_loc_crop[in_idx]
                 rad = all_rad[in_idx]
@@ -148,6 +167,15 @@ class InstanceCrop(object):
                 ctr = np.array([]).reshape(-1, 3)
                 rad = np.array([])
                 cls = np.array([])
+
+            if in_idx_gt.size > 0:
+                gt_ctr = gt_all_loc[in_idx_gt]
+                gt_rad = gt_all_rad[in_idx_gt]
+                gt_cls = gt_all_cls[in_idx_gt]
+            else:
+                gt_ctr = np.array([]).reshape(-1, 3)
+                gt_rad = np.array([])
+                gt_cls = np.array([])
 
             image_crop = sitk.GetArrayFromImage(image_itk_crop)
             CT_crop = np.expand_dims(image_crop, axis=0)
@@ -159,6 +187,11 @@ class InstanceCrop(object):
             sample['ctr'] = ctr
             sample['rad'] = rad
             sample['cls'] = cls
+            
+            sample['gt_ctr'] = gt_ctr
+            sample['gt_rad'] = gt_rad
+            sample['gt_cls'] = gt_cls
+            
             sample['spacing'] = image_spacing
             samples.append(sample)
         return samples

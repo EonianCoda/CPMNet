@@ -109,6 +109,9 @@ def get_args():
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.85, help='threshold of pseudo background')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
+    parser.add_argument('--pseudo_update_interval', type=int, default=30, help='pseudo label update interval')
+    parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
+    parser.add_argument('--pseudo_nms_topk', type=int, default=10, help='topk of pseudo nms')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
@@ -273,19 +276,19 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
         rot_yz = False
         rot_xz = False
         
-    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
+    transform_list_train = [transform.SemiRandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    transform_list_train.append(transform.SemiRandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
-    transform_list_train.append(transform.CoordToAnnot())
+    transform_list_train.append(transform.SemiCoordToAnnot())
                             
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
 def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     transform_list_train = []
-    transform_list_train.append(transform.CoordToAnnot())
+    transform_list_train.append(transform.SemiCoordToAnnot())
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -411,16 +414,26 @@ if __name__ == '__main__':
     original_psuedo_label_threshold = float(args.pseudo_label_threshold)
     final_psuedo_label_threshod = args.pseudo_label_threshold * args.semi_increase_ratio
     
+    original_psuedo_crop_threshold = float(args.pseudo_crop_threshold)
+    final_psuedo_crop_threshold = args.pseudo_crop_threshold * args.semi_increase_ratio
+    
     psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
     
     if not args.use_gt_crop:
-        updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, load_pickle=args.load_pickle)
-    else:
-        logger.info('Use ground truth crop')
-        
+        if args.load_pickle:
+            updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, load_pickle=args.load_pickle, prob_threshold=args.pseudo_crop_threshold)
+        elif args.pseudo_update_interval <= 0: # Generate pseudo labels only at the beginning
+            updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, prob_threshold=args.pseudo_crop_threshold)
+        else:
+            logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
+    
     for epoch in range(start_epoch, args.epochs + 1):
         args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
+        if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and not args.load_pickle and args.pseudo_update_interval > 0:
+            args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
+            updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, prob_threshold=args.pseudo_crop_threshold)
+            
         train_metrics = train(args = args,
                             model_t = model_t,
                             model_s = model_s,

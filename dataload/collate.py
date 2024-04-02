@@ -159,17 +159,21 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     # Prepare weak and strong images and annotations
     weak_imgs = []
     weak_annots = []
+    weak_gt_annots = []
     weak_spacings = []
     strong_imgs = []
     strong_annots = []
+    strong_gt_annots = []
     strong_spacings = []
     for b in weak_batches:
         weak_imgs.append(b['image'])
         weak_annots.append(b['annot'])
+        weak_gt_annots.append(b['gt_annot'])
         weak_spacings.append(b['spacing'])
     for b in strong_batches:
         strong_imgs.append(b['image'])
         strong_annots.append(b['annot'])
+        strong_gt_annots.append(b['gt_annot'])
         strong_spacings.append(b['spacing'])
     
     weak_imgs = np.stack(weak_imgs)
@@ -177,6 +181,9 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     
     weak_max_num_annots = max(annot.shape[0] for annot in weak_annots)
     strong_max_num_annots = max(annot.shape[0] for annot in strong_annots)
+    
+    weak_max_num_gt_annots = max(annot.shape[0] for annot in weak_gt_annots)
+    strong_max_num_gt_annots = max(annot.shape[0] for annot in strong_gt_annots)
     
     # Prepare weak and strong center transforms
     weak_ctr_transforms = [s['ctr_transform'] for s in weak_batches]
@@ -194,6 +201,14 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     else:
         weak_annot_padded = np.ones((len(weak_annots), 1, 10), dtype='float32') * -1
         
+    if weak_max_num_gt_annots > 0:
+        weak_gt_annot_padded = np.ones((len(weak_gt_annots), weak_max_num_gt_annots, 10), dtype='float32') * -1
+        for idx, annot in enumerate(weak_gt_annots):
+            if annot.shape[0] > 0:
+                weak_gt_annot_padded[idx, :annot.shape[0], :] = annot
+    else:
+        weak_gt_annot_padded = np.ones((len(weak_gt_annots), 1, 10), dtype='float32') * -1
+        
     if strong_max_num_annots > 0:
         strong_annot_padded = np.ones((len(strong_annots), strong_max_num_annots, 10), dtype='float32') * -1
         for idx, annot in enumerate(strong_annots):
@@ -202,15 +217,25 @@ def unlabeled_train_collate_fn(batches: Dict[str, List[Dict[str, any]]]):
     else:
         strong_annot_padded = np.ones((len(strong_annots), 1, 10), dtype='float32') * -1
     
+    if strong_max_num_gt_annots > 0:
+        strong_gt_annot_padded = np.ones((len(strong_gt_annots), strong_max_num_gt_annots, 10), dtype='float32') * -1
+        for idx, annot in enumerate(strong_gt_annots):
+            if annot.shape[0] > 0:
+                strong_gt_annot_padded[idx, :annot.shape[0], :] = annot
+    else:
+        strong_gt_annot_padded = np.ones((len(strong_gt_annots), 1, 10), dtype='float32') * -1
+    
     # Return the samples
     weak_samples = {'image': torch.from_numpy(weak_imgs), 
                     'annot': torch.from_numpy(weak_annot_padded), 
+                    'gt_annot': torch.from_numpy(weak_gt_annot_padded),
                     'ctr_transform': weak_ctr_transforms,
                     'feat_transform': weak_feat_transforms,
                     'spacing': weak_spacings}
     
     strong_samples = {'image': torch.from_numpy(strong_imgs),
                     'annot': torch.from_numpy(strong_annot_padded),
+                    'gt_annot': torch.from_numpy(strong_gt_annot_padded),
                     'ctr_transform': strong_ctr_transforms,
                     'feat_transform': strong_feat_transforms,
                     'spacing': strong_spacings}
