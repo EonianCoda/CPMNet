@@ -93,11 +93,12 @@ def get_args():
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
-    parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
+    parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
+    parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # Network
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
@@ -120,6 +121,8 @@ def get_args():
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, help='how many epochs to wait before saving model')
     args = parser.parse_args()
+    if args.det_threshold != args.froc_det_thresholds[0]:
+        raise ValueError(f'det_threshold = {args.det_threshold} should be equal to froc_det_thresholds[0] = {args.froc_det_thresholds[0]}')
     return args
 
 def add_weight_decay(net, weight_decay):

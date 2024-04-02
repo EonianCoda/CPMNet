@@ -215,13 +215,18 @@ class FROC:
         FROC_prob_list = []
         FROC_is_FN_list = []
         FROC_series_uids = []
-        for i, (is_FN, prob) in enumerate(zip(self.is_FN_list, self.prob_list)):
+        for i, (is_pos, is_FN, prob) in enumerate(zip(self.is_pos_list, self.is_FN_list, self.prob_list)):
             if prob >= conf_threshold or is_FN:
                 FROC_is_pos_list.append(self.is_pos_list[i])
                 FROC_prob_list.append(prob)
                 FROC_is_FN_list.append(is_FN)
                 FROC_series_uids.append(self.series_names[i])
-        
+            elif is_pos and prob < conf_threshold:
+                FROC_is_FN_list.append(True)
+                FROC_is_pos_list.append(True)
+                FROC_prob_list.append(-1)
+                FROC_series_uids.append(self.series_names[i])
+                
         return FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, seriesUIDs, FROC_series_uids
 
     def get_metrics(self, prob_threshold: float = 0.0) -> Tuple[np.ndarray, float, float]:
@@ -356,13 +361,14 @@ class Evaluation:
         
         return NoduleFinding(series_name, ctr_x, ctr_y, ctr_z, w, h, d, nodule_type = nodule_type, **kwargs)
     
-    def evaluation(self, preds: List[List[Any]], save_dir: str, det_threshold: float):
+    def evaluation(self, preds: List[List[Any]], save_dir: str, froc_det_thresholds = List[float]):
         """
         Args:
             preds: list of predicted nodules in format of [series_name, ctr_x, ctr_y, ctr_z, w, h, d, prob]
             save_dir: directory to save the evaluation results
             det_threshold: the threshold of detection postprocess
         """
+        froc_det_thresholds = list(sorted(froc_det_thresholds))
         # Collect predicted nodules
         num_of_all_pred_cands = len(preds)
         all_pred_cands = defaultdict(list)
@@ -439,10 +445,11 @@ class Evaluation:
         self._write_FN_csv(FN_gt_nodules, save_dir)
         classified_metrics, recall_series_based, recall_remove_health_series_based = froc.get_metrics(self.prob_threshold)
         
-        froc_info = self.compute_froc(froc, save_dir, det_threshold)
-        froc_info_05 = self.compute_froc(froc, save_dir, 0.5)
+        froc_info_list = []
+        for det_threshold in froc_det_thresholds:
+            froc_info_list.append(self.compute_froc(froc, save_dir, det_threshold))
         
-        self._write_stats(froc, save_dir, classified_metrics, recall_series_based, recall_remove_health_series_based, num_of_all_pred_cands, det_threshold, froc_info, froc_info_05)
+        self._write_stats(froc, save_dir, classified_metrics, recall_series_based, recall_remove_health_series_based, num_of_all_pred_cands, froc_det_thresholds, froc_info_list)
 
         fixed_tp = classified_metrics['all']['tp']
         fixed_fp = classified_metrics['all']['fp']
@@ -451,7 +458,7 @@ class Evaluation:
         fixed_precision = classified_metrics['all']['precision']
         fixed_f1_score = classified_metrics['all']['f1_score']
         
-        return froc_info, froc_info_05, (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score)
+        return froc_info_list, (fixed_tp, fixed_fp, fixed_fn, fixed_recall, fixed_precision, fixed_f1_score)
     
     def compute_froc(self, froc: FROC, save_dir: str, conf_threshold: float):
         ##TODO: refactor this part
@@ -595,31 +602,34 @@ class Evaluation:
             f.writelines(lines)
             
     def _write_stats(self, froc: FROC, save_dir: str, classified_metrics: Dict[str, Dict[str, float]], recall_series_based: float,
-                     recall_remove_health_series_based: float, num_of_all_pred_cands: int, det_threshold: float, froc_info, froc_info_05):
+                     recall_remove_health_series_based: float, num_of_all_pred_cands: int, froc_det_thresholds, froc_info_list):
         def generate_prob_iou_table(stats: Dict[str, Dict[str, float]], nodule_type: str) -> List[str]:
-            prob_and_iou_stats_template = "{:20s}, {}, {:.2f}, {:.2f}, {:.2f}, {:.2f}, {:.3f}, {:.3f}, {:.3f}, {:.3f}"
-            prob_stats_template = "{:20s}, {}, {:.2f}, {:.2f}, {:.2f}, {:.2f}"
+            prob_and_iou_stats_template = "{:20s}, {}, {:.2f}, {:.2f}, {}, {:.2f}, {:.2f}, {:.3f}, {:.3f}, {}, {:.3f}, {:.3f}"
+            prob_stats_template = "{:20s}, {}, {:.2f}, {:.2f}, {}, {:.2f}, {:.2f}"
             
             number_text = str(stats['number'])
             if 'ratio' in stats:
                 number_text = number_text + '<br>({:.1f}%)'.format(stats['ratio'] * 100)
+                
+            prob_95_range = [stats['prob']['mean'] - 2 * stats['prob']['std'], stats['prob']['mean'] + 2 * stats['prob']['std']]
+            prob_95_range_text = '{:.2f} ~ {:.2f}'.format(prob_95_range[0] * 100, prob_95_range[1] * 100)
+            
             if len(stats['iou']) == 0:
-                text = prob_stats_template.format(nodule_type, number_text, stats['prob']['mean'] * 100, stats['prob']['std'] * 100, stats['prob']['min'] * 100, stats['prob']['max'] * 100)
+                text = prob_stats_template.format(nodule_type, number_text, stats['prob']['mean'] * 100, stats['prob']['std'] * 100, prob_95_range_text,
+                                                  stats['prob']['min'] * 100, stats['prob']['max'] * 100)
             else:
-                text = prob_and_iou_stats_template.format(nodule_type, number_text, stats['prob']['mean'] * 100, stats['prob']['std'] * 100, stats['prob']['min'] * 100, \
-                                                            stats['prob']['max'] * 100, stats['iou']['mean'], stats['iou']['std'], stats['iou']['min'], stats['iou']['max'])
+                iou_95_range = [stats['iou']['mean'] - 2 * stats['iou']['std'], stats['iou']['mean'] + 2 * stats['iou']['std']]
+                iou_95_range_text = '{:.3f} ~ {:.3f}'.format(iou_95_range[0], iou_95_range[1])
+                text = prob_and_iou_stats_template.format(nodule_type, number_text, stats['prob']['mean'] * 100, stats['prob']['std'] * 100, prob_95_range_text, stats['prob']['min'] * 100, \
+                                                            stats['prob']['max'] * 100, stats['iou']['mean'], stats['iou']['std'], iou_95_range_text, stats['iou']['min'], stats['iou']['max'])
             
             return text.split(",")    
             
-        sens_points, prec_points, f1_points, thresholds_points = froc_info
-        sens_points, prec_points, f1_points = [np.array(points) * 100 for points in [sens_points, prec_points, f1_points]]
-        sens_points_05, prec_points_05, f1_points_05, thresholds_points_05 = froc_info_05
-        sens_points_05, prec_points_05, f1_points_05 = [np.array(points) * 100 for points in [sens_points_05, prec_points_05, f1_points_05]]
-        
         stats_file_path = os.path.join(save_dir, "stats.md".format(self.iou_threshold))
         
-        prob_and_iou_stats = self._analyze_prob_and_iou(froc, det_threshold)
-        prob_and_iou_stats_05 = self._analyze_prob_and_iou(froc, 0.5)
+        prob_and_iou_stats_list = []
+        for det_threshold in froc_det_thresholds:
+            prob_and_iou_stats_list.append(self._analyze_prob_and_iou(froc, det_threshold))
         
         with MarkDownWriter(stats_file_path) as f:
             # Write the evaluation statistics
@@ -628,7 +638,7 @@ class Evaluation:
             f.write_item("IoU Thresolhd = {}".format(self.iou_threshold))
             f.write_item("Probability Threshold = {}".format(self.prob_threshold))
             f.write_item("Nodule size mode = {}".format(self.nodule_size_mode))
-            f.write_item("Detection postprocess Threshold = {:.3f}".format(det_threshold))
+            f.write_item("Detection postprocess Threshold = {:.3f}".format(froc_det_thresholds[0]))
             # Write the statistics of the nodules
             f.write_header("Evaluation statistics", 1)
             f.write_item("TP: {}".format(froc.tp_count))
@@ -659,102 +669,52 @@ class Evaluation:
             
             # Write froc metrics
             f.write_header("FROC", 2)
-            f.write_header("FROC(Confidence Threshold = {:.3f})".format(det_threshold), 3)
-            header = "FPrate, Recall, Precision, F1, Threshold"
-            froc_template = '{:.3f}, {:.2f}, {:.2f}, {:.2f}, {:.3f}'
-            values = []
-            for FPrate, recall, precision, f1_score, threshold in zip(FPS, sens_points, prec_points, f1_points, thresholds_points):
-                text = froc_template.format(FPrate, recall, precision, f1_score, threshold)
-                values.append(text.split(","))
-            
-            mean_recall = np.mean(sens_points)
-            mean_precision = np.mean(prec_points)
-            mean_f1 = np.mean(f1_points)
-            text = '{}, {:.4f}, {:.4f}, {:.4f}, {}'.format('Mean', mean_recall, mean_precision, mean_f1, '')
-            values.append(text.split(","))
-            f.write_table(header.split(','), values)
-            
-            f.write_header("FROC(Confidence Threshold = {:.3f})".format(0.5), 3)
-            values = []
-            for FPrate, recall, precision, f1_score, threshold in zip(FPS, sens_points_05, prec_points_05, f1_points_05, thresholds_points_05):
-                text = froc_template.format(FPrate, recall, precision, f1_score, threshold)
-                values.append(text.split(","))
-            
-            mean_recall = np.mean(sens_points_05)
-            mean_precision = np.mean(prec_points_05)
-            mean_f1 = np.mean(f1_points_05)
-            text = '{}, {:.2f}, {:.2f}, {:.2f}, {}'.format('Mean', mean_recall, mean_precision, mean_f1, '')
-            values.append(text.split(","))
-            f.write_table(header.split(','), values)
+            for i, det_threshold in enumerate(froc_det_thresholds):
+                f.write_header("Confidence Threshold = {:.3f}".format(det_threshold), 3)
+                froc_info = froc_info_list[i]
+                header = "FPrate, Recall, Precision, F1, Threshold"
+                values = []
+                for FPrate, recall, precision, f1_score, threshold in zip(FPS, froc_info[0], froc_info[1], froc_info[2], froc_info[3]):
+                    text = '{:.3f}, {:.2f}, {:.2f}, {:.2f}, {:.3f}'.format(FPrate, recall * 100, precision * 100, f1_score * 100, threshold)
+                    values.append(text.split(","))
+                f.write_table(header.split(','), values)
             
             ### Write the statistics of the probability and iou of the matched candidates
             f.write_header("Prob and IoU statistics", 1)
-            f.write_header("Confidence Threshold = {:.3f}".format(det_threshold), 2)
-            
-            ## Write TPs
-            f.write_header("TP and FN", 3)
-            header = "Nodule type, TP, FN, Prob(mean), Prob(std), Prob(min), Prob(max), Prob(min), Prob(max), IoU(mean), IoU(std), IoU(min), IoU(max)"
-            header = header.split(',')
-            values = []
-            for nodule_type in self.sorted_nodule_types + ['all']:
-                if nodule_type not in prob_and_iou_stats['FN']:
-                    fn = '0<br>(0.0%)'
-                else:
-                    number = prob_and_iou_stats['FN'][nodule_type]['number']
-                    ratio = prob_and_iou_stats['FN'][nodule_type]['ratio'] * 100
-                    fn = '{}<br>({:.1f}%)'.format(number, ratio)
+            for i, det_threshold in enumerate(froc_det_thresholds):
+                prob_and_iou_stats = prob_and_iou_stats_list[i]
+                f.write_header("Confidence Threshold = {:.3f}".format(det_threshold), 2)
                 
-                if nodule_type not in prob_and_iou_stats['TP']:
-                    values.append([nodule_type, '0<br>(0%)', fn,'0', '0', '0', '0', '0', '0', '0', '0'])
-                else:
-                    values.append(generate_prob_iou_table(prob_and_iou_stats['TP'][nodule_type], nodule_type))
-                    values[-1].insert(2, fn)
-            f.write_table(header, values)
-            ## Write FPs
-            f.write_header("FP", 3)
-            header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max)"
-            header = header.split(',')
-            values = []
-            for nodule_type in self.sorted_nodule_types + ['all']:
-                if nodule_type not in prob_and_iou_stats['FP']:
-                    values.append([nodule_type, '0', '0', '0', '0', '0'])
-                else:
-                    values.append(generate_prob_iou_table(prob_and_iou_stats['FP'][nodule_type], nodule_type))
-            f.write_table(header, values)
+                f.write_header("TP and FN", 3)
+                header = "Nodule type, TP, FN, Prob(mean), Prob(std), Prob_range(95%), Prob(min), Prob(max), IoU(mean), IoU(std), IoU_range(95%), IoU(min), IoU(max)"
+                header = header.split(',')
+                values = []
+                for nodule_type in self.sorted_nodule_types + ['all']:
+                    if nodule_type not in prob_and_iou_stats['FN']:
+                        fn = '0<br>(0.0%)'
+                    else:
+                        number = prob_and_iou_stats['FN'][nodule_type]['number']
+                        ratio = prob_and_iou_stats['FN'][nodule_type]['ratio'] * 100
+                        fn = '{}<br>({:.1f}%)'.format(number, ratio)
+                    
+                    if nodule_type not in prob_and_iou_stats['TP']:
+                        values.append([nodule_type, '0<br>(0%)', fn,'0', '0', '0', '0', '0', '0', '0', '0', '0', '0'])
+                    else:
+                        values.append(generate_prob_iou_table(prob_and_iou_stats['TP'][nodule_type], nodule_type))
+                        values[-1].insert(2, fn)
+                f.write_table(header, values)
             
-            ## Write confidence threshold = 0.5
-            f.write_header("Confidence Threshold = {:.3f}".format(0.5), 2)
-            ## Write TPs
-            f.write_header("TP and FN", 3)
-            header = "Nodule type, TP, FN, Prob(mean), Prob(std), Prob(min), Prob(max), IoU(mean), IoU(std), IoU(min), IoU(max)"
-            header = header.split(',')
-            values = []
-            for nodule_type in self.sorted_nodule_types + ['all']:
-                if nodule_type not in prob_and_iou_stats_05['FN']:
-                    fn = '0<br>(0.0%)'
-                else:
-                    number = prob_and_iou_stats_05['FN'][nodule_type]['number']
-                    ratio = prob_and_iou_stats_05['FN'][nodule_type]['ratio'] * 100
-                    fn = '{}<br>({:.1f}%)'.format(number, ratio)
-                    
-                if nodule_type not in prob_and_iou_stats_05['TP']:
-                    values.append([nodule_type, '0', fn, '0', '0', '0', '0', '0', '0', '0', '0'])
-                else:
-                    values.append(generate_prob_iou_table(prob_and_iou_stats_05['TP'][nodule_type], nodule_type))
-                    values[-1].insert(2, fn)
-                    
-            f.write_table(header, values)
-            ## Write FPs
-            f.write_header("FP", 3)
-            header = "Nodule type, Number, Prob(mean), Prob(std), Prob(min), Prob(max)"
-            header = header.split(',')
-            values = []
-            for nodule_type in self.sorted_nodule_types + ['all']:
-                if nodule_type not in prob_and_iou_stats_05['FP']:
-                    values.append([nodule_type, '0', '0', '0', '0', '0'])
-                else:
-                    values.append(generate_prob_iou_table(prob_and_iou_stats_05['FP'][nodule_type], nodule_type))
-            f.write_table(header, values)
+                ## Write FPs
+                f.write_header("FP", 3)
+                header = "Nodule type, Number, Prob(mean), Prob(std), Prob_range(95%), Prob(min), Prob(max)"
+                header = header.split(',')
+                values = []
+                for nodule_type in self.sorted_nodule_types + ['all']:
+                    if nodule_type not in prob_and_iou_stats['FP']:
+                        values.append([nodule_type, '0', '0', '0', '0', '0', '0'])
+                    else:
+                        values.append(generate_prob_iou_table(prob_and_iou_stats['FP'][nodule_type], nodule_type))
+                f.write_table(header, values)
             
     def _analyze_prob_and_iou(self, froc: FROC, conf_threshold: float) -> Dict[str, Dict[str, Dict[str, float]]]:
         """

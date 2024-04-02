@@ -42,16 +42,19 @@ def get_args():
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # detection-hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
-    parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
     parser.add_argument('--no_do_padding', action='store_true', default=False, help='do padding or not')
     parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
+    parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
+    parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     args = parser.parse_args()
+    if args.det_threshold != args.froc_det_thresholds[0]:
+            raise ValueError(f'det_threshold = {args.det_threshold} should be equal to froc_det_thresholds[0] = {args.froc_det_thresholds[0]}')
     return args
 
 def prepare_validation(args, device):
