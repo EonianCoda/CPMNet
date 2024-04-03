@@ -142,10 +142,10 @@ class DetDataset(Dataset):
             self.dicom_paths.append(dicom_path)
         self.splitcomb = SplitComb
         transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
-                        [FlipTransform(flip_depth=False, flip_height=True, flip_width=False)],
-                        [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)]]
+                    [FlipTransform(flip_depth=False, flip_height=True, flip_width=False)],
+                    [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)]]
         
-        self.transforms_weight = [2] + [1, 1, 1] # first one is for no augmentation
+        self.transforms_weight = [0.5] + [0.5 / len(transforms)] * len(transforms) # first one is for no augmentation
         self.transforms_weight = np.array([w / sum(self.transforms_weight) for w in self.transforms_weight]) # normalize to 1
         self.transforms = []
         for i in range(len(transforms)):

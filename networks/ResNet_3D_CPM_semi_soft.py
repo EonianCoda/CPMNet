@@ -554,7 +554,6 @@ class DetectionLoss(nn.Module):
         # The coordinates in annotations is on original image, we need to convert it to the coordinates on the feature map.
         ctr_gt_boxes = annotations[:, :, :3] / stride # z0, y0, x0
         shape = annotations[:, :, 3:6] / 2 # half d h w
-        prob = annotations[:, :, 9].unsqueeze(-1) # (b, num_annotations, 1)
         
         sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
         sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
@@ -570,7 +569,7 @@ class DetectionLoss(nn.Module):
         # mask_gt is 1 mean the annotation is not ignored, 0 means the annotation is ignored
         # mask_topk is 1 means the point is assigned to positive
         # mask_topk * mask_gt.unsqueeze(-1) is 1 means the point is assigned to positive and the annotation is not ignored
-        mask_pos = mask_topk * prob * mask_gt.unsqueeze(-1) 
+        mask_pos = mask_topk * mask_gt.unsqueeze(-1) 
         
         mask_ignore = mask_ignore * mask_gt.unsqueeze(-1) # the value is -1 or 0, shape= (b, num_annotations, num_of_points)
         gt_idx = mask_pos.argmax(-2) # shape = (b, num_of_points), it indicates each point matches which annotation
@@ -702,7 +701,6 @@ class Unsupervised_DetectionLoss(nn.Module):
         background_mask = (sharped_cls_prob < background_threshold)
         for j in range(batch_size):
             pred_b = pred[j]
-            
             target_b = target[j]
             background_mask_b = background_mask[j]
             sharped_cls_prob_b = sharped_cls_prob[j]
@@ -805,8 +803,9 @@ class Unsupervised_DetectionLoss(nn.Module):
                 percent = nw * nh * nd / (each_label[3] * each_label[4] * each_label[5])
                 if (percent > 0.1) and (nw*nh*nd >= 15):
                     spacing_z, spacing_y, spacing_x = each_label[6:9]
-                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
-                    bbox_annotation_target.append(bbox.view(1, 10))
+                    prob = each_label[9]
+                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), float(prob), 0])).to(device)
+                    bbox_annotation_target.append(bbox.view(1, 11))
                 else:
                     mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
             if len(bbox_annotation_target) > 0:

@@ -387,7 +387,10 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
     updated_dataset.set_pseu_labels(pseu_labels)
     new_num_unlabeled = len(updated_dataset)
     logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
-
+    
+    with open('./pseu_labels.pkl', 'rb') as f:
+        pickle.dump(pseu_labels, f)
+    
 if __name__ == '__main__':
     args = get_args()
     
@@ -422,9 +425,8 @@ if __name__ == '__main__':
     original_psuedo_crop_threshold = float(args.pseudo_crop_threshold)
     final_psuedo_crop_threshold = args.pseudo_crop_threshold * args.semi_increase_ratio
     
-    psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
-    
     if not args.use_gt_crop:
+        psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
         if args.load_pickle:
             updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, load_pickle=args.load_pickle, prob_threshold=args.pseudo_crop_threshold)
         elif args.pseudo_update_interval <= 0: # Generate pseudo labels only at the beginning
@@ -437,6 +439,7 @@ if __name__ == '__main__':
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and not args.load_pickle and args.pseudo_update_interval > 0:
             args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
+            psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
             updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, prob_threshold=args.pseudo_crop_threshold)
             
         train_metrics = train(args = args,

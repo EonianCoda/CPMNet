@@ -7,7 +7,7 @@ import logging
 import pickle
 import numpy as np
 from typing import Tuple
-from networks.ResNet_3D_CPM_semi_focal_soft import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
+from networks.ResNet_3D_CPM_semi_soft import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
 from dataload.dataset_semi import TrainDataset, DetDataset, UnLabeledDataset
 from dataload.dataset_val_aug import DetDataset as AugDetDataset
@@ -113,7 +113,7 @@ def get_args():
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     parser.add_argument('--pseudo_update_interval', type=int, default=30, help='pseudo label update interval')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
-    parser.add_argument('--pseudo_nms_topk', type=int, default=10, help='topk of pseudo nms')
+    parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
@@ -388,6 +388,9 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
     new_num_unlabeled = len(updated_dataset)
     logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
 
+    with open('./pseu_labels.pkl', 'rb') as f:
+        pickle.dump(pseu_labels, f)
+    
 if __name__ == '__main__':
     args = get_args()
     
@@ -425,6 +428,7 @@ if __name__ == '__main__':
     psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
     
     if not args.use_gt_crop:
+        psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
         if args.load_pickle:
             updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, load_pickle=args.load_pickle, prob_threshold=args.pseudo_crop_threshold)
         elif args.pseudo_update_interval <= 0: # Generate pseudo labels only at the beginning
@@ -437,6 +441,7 @@ if __name__ == '__main__':
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and not args.load_pickle and args.pseudo_update_interval > 0:
             args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
+            psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
             updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, prob_threshold=args.pseudo_crop_threshold)
             
         train_metrics = train(args = args,

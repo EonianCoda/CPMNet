@@ -264,8 +264,7 @@ def train(args,
             else:
                 outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
-                
-                for annot in strong_u_sample['annot'].numpy():
+                for annot in strong_u_sample['gt_annot'].numpy():
                     if len(annot) > 0:
                         avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
             del outputs_pseu

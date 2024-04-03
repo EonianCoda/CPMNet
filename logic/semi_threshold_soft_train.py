@@ -24,11 +24,12 @@ class CoordToAnnot():
         rad = sample['rad']
         cls = sample['cls']
         prob = sample['prob']
+        
         spacing = sample['spacing']
         n = ctr.shape[0]
         spacing = np.tile(spacing, (n, 1))
         
-        annot = np.concatenate([ctr, rad.reshape(-1, 3), spacing.reshape(-1, 3), prob.reshpae(-1, 1), cls.reshape(-1, 1)], axis=-1).astype('float32') # (n, 10)
+        annot = np.concatenate([ctr, rad.reshape(-1, 3), spacing.reshape(-1, 3), prob.reshape(-1, 1), cls.reshape(-1, 1)], axis=-1).astype('float32') # (n, 10)
 
         sample['annot'] = annot
         return sample
@@ -321,7 +322,7 @@ def train(args,
                 outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
                 
-                for annot in strong_u_sample['annot'].numpy():
+                for annot in strong_u_sample['gt_annot'].numpy():
                     if len(annot) > 0:
                         avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
             del outputs_pseu
