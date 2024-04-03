@@ -113,7 +113,7 @@ def get_args():
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     parser.add_argument('--pseudo_update_interval', type=int, default=30, help='pseudo label update interval')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
-    parser.add_argument('--pseudo_nms_topk', type=int, default=10, help='topk of pseudo nms')
+    parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -245,7 +245,7 @@ def prepare_training(args, device, num_training_steps):
         # Resume best metric
         global early_stopping
         early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model_s)
-    
+        start_epoch = start_epoch + 1
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model_s)
@@ -439,7 +439,7 @@ if __name__ == '__main__':
     if not args.use_gt_crop:
         psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
         if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '': # Update pseudo labels only at the beginning
-            updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
+            updata_pseudo_label(args, model_t, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold, pseudo_pickle_path=args.pseudo_pickle_path)
         else:
             logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
@@ -448,9 +448,9 @@ if __name__ == '__main__':
         args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and args.pseudo_update_interval > 0 and not (epoch == 0 and args.pseudo_pickle_path != ''):
-            args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
+            # args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
             psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
-            updata_pseudo_label(args, model_s, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, prob_threshold=args.pseudo_crop_threshold)
+            updata_pseudo_label(args, model_t, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, prob_threshold=args.pseudo_crop_threshold)
             
         train_metrics = train(args = args,
                             model_t = model_t,
