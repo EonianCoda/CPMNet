@@ -126,7 +126,7 @@ def train(args,
                 bs = outputs_t.shape[0]
                 # Calculate background mask
                 cls_prob = feats_t['Cls'].sigmoid() # shape: (bs, 1, d, h, w)
-                background_mask = (cls_prob < (1 - args.pseudo_background_threshold)) # shape: (bs, 1, d, h, w)
+                background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
                 
                 weak_feat_transforms = weak_u_sample['feat_transform'] # shape = (bs,)
                 strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)

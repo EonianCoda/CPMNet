@@ -14,7 +14,7 @@ from .utils import get_memory_format
 
 logger = logging.getLogger(__name__)
 
-def pred2label(pred: np.ndarray, prob_threshold: float) -> Dict[str, np.ndarray]:
+def pred2label(pred: np.ndarray) -> Dict[str, np.ndarray]:
     pred = pred[..., 1:] # List of [prob, ctr_z, ctr_y, ctr_x, d, h, w]
         
     all_prob = []
@@ -23,9 +23,6 @@ def pred2label(pred: np.ndarray, prob_threshold: float) -> Dict[str, np.ndarray]
     all_cls = []
     for i in range(len(pred)):
         prob, ctr_z, ctr_y, ctr_x, d, h, w = pred[i]
-        if prob < prob_threshold:
-            continue
-            
         all_loc.append([ctr_z, ctr_y, ctr_x])
         all_rad.append([d, h, w])
         all_cls.append(0)
@@ -47,7 +44,6 @@ def gen_pseu_labels(model: nn.Module,
                     dataloader: DataLoader,
                     device: torch.device,
                     detection_postprocess,
-                    prob_threshold: float = 0.8,
                     batch_size: int = 8,
                     nms_keep_top_k: int = 40,
                     mixed_precision: bool = False,
@@ -61,9 +57,7 @@ def gen_pseu_labels(model: nn.Module,
     model.eval()
     split_comber = dataloader.dataset.splitcomb
     memory_format = get_memory_format(memory_format)
-    
     pseudo_labels = dict()
-    
     with get_progress_bar('Pseu-Label Generation', len(dataloader)) as pbar:
         for sample in dataloader:
             data = sample['split_images'] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
@@ -99,7 +93,6 @@ def gen_pseu_labels(model: nn.Module,
                 Shape_output = Shape_output.view(-1, num_aug, 3, d, h, w)
                 Offset_output = Offset_output.view(-1, num_aug, 3, d, h, w)
                 
-                # ctr_transforms = all_ctr_transforms[i * batch_size:end] # (bs, num_aug)
                 feat_transforms = all_feat_transforms[i * batch_size:end] # (bs, num_aug)
                 for b_i in range(len(feat_transforms)):
                     for aug_i in range(num_aug):
@@ -144,7 +137,7 @@ def gen_pseu_labels(model: nn.Module,
                     keep = nms_3D(pred[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
                     pred = pred[keep]
                 pred = pred.numpy()
-                pseudo_labels[series_name] = pred2label(pred, prob_threshold)
+                pseudo_labels[series_name] = pred2label(pred)
                 start_idx += n_split
             pbar.update(1)
     return pseudo_labels
