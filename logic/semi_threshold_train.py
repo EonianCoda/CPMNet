@@ -108,14 +108,38 @@ def train(args,
             with torch.no_grad():
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
-                        feats_t = model_predict(model_t, weak_u_sample, device) # shape: (bs, top_k, 7)
+                        feats_w_t = model_predict(model_t, weak_u_sample, device) # shape: (bs, top_k, 7)
+                        feats_s_t = model_predict(model_t, strong_u_sample, device)
                 else:
-                    feats_t = model_predict(model_t, strong_u_sample, device)
+                    feats_w_t = model_predict(model_t, strong_u_sample, device)
+                    feats_s_t = model_predict(model_t, strong_u_sample, device)
+                
+                Cls_w_t = feats_w_t['Cls']
+                Shape_w_t = feats_w_t['Shape']
+                Cls_s_t = feats_s_t['Cls']
+                Shape_s_t = feats_s_t['Shape']
+                
+                strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
+                for b_i in range(len(strong_feat_transforms)):
+                    for transform in reversed(strong_feat_transforms[b_i]):
+                        Cls_s_t[b_i] = transform.backward(Cls_s_t[b_i])
+                        Shape_s_t[b_i] = transform.backward(Shape_s_t[b_i])
+                weak_feat_transforms = weak_u_sample['feat_transform'] # shape = (bs,)
+                for b_i in range(len(weak_feat_transforms)):
+                    for transform in weak_feat_transforms[b_i]:
+                        Cls_w_t[b_i] = transform.forward(Cls_w_t[b_i])
+                        Shape_w_t[b_i] = transform.forward(Shape_w_t[b_i])
+                
+                feats_t = dict()
+                feats_t['Cls'] = (Cls_w_t * 0.6 + Cls_s_t * 0.4)
+                feats_t['Shape'] = (Shape_w_t * 0.6 + Shape_s_t * 0.4)
+                feats_t['Offset'] = feats_w_t['Offset'].clone()
                 # shape: (bs, top_k, 8)
                 # => top_k (default = 60) 
                 # => 8: 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputs_t = detection_postprocess(feats_t, device=device, threshold = args.pseudo_label_threshold, nms_topk=args.pseudo_nms_topk)
-            
+                del feats_w_t, feats_s_t, Cls_w_t, Shape_w_t, Cls_s_t, Shape_s_t
+                
             # np.save('weak_image.npy', weak_u_sample['image'].numpy())
             # np.save('outputs_t.npy', outputs_t.cpu().numpy())
             
@@ -267,6 +291,7 @@ def train(args,
                 for annot in strong_u_sample['gt_annot'].numpy():
                     if len(annot) > 0:
                         avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
+                continue
             del outputs_pseu
             ### Labeled data
             try:
