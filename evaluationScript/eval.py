@@ -216,15 +216,15 @@ class FROC:
         FROC_is_FN_list = []
         FROC_series_uids = []
         for i, (is_pos, is_FN, prob) in enumerate(zip(self.is_pos_list, self.is_FN_list, self.prob_list)):
-            if prob >= conf_threshold or is_FN:
-                FROC_is_pos_list.append(self.is_pos_list[i])
-                FROC_prob_list.append(prob)
-                FROC_is_FN_list.append(is_FN)
-                FROC_series_uids.append(self.series_names[i])
-            elif is_pos and prob < conf_threshold:
+            if is_FN or (is_pos and prob < conf_threshold):
                 FROC_is_FN_list.append(True)
                 FROC_is_pos_list.append(True)
                 FROC_prob_list.append(-1)
+                FROC_series_uids.append(self.series_names[i])
+            else:
+                FROC_is_FN_list.append(False)
+                FROC_is_pos_list.append(self.is_pos_list[i])
+                FROC_prob_list.append(prob)
                 FROC_series_uids.append(self.series_names[i])
                 
         return FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, seriesUIDs, FROC_series_uids
@@ -706,8 +706,7 @@ class Evaluation:
                         fn_text = '{}<br>({:.1f}%)'.format(number, ratio)
                     
                     if nodule_type not in prob_and_iou_stats['TP']:
-                        recall = 0
-                        values.append([nodule_type, '0<br>(0%)', fn_text, recall,'0', '0', '0', '0', '0', '0', '0', '0', '0', '0'])
+                        values.append([nodule_type, '0<br>(0%)', fn_text, '0','0', '0', '0', '0', '0', '0', '0', '0', '0', '0'])
                     else:
                         values.append(generate_prob_iou_table(prob_and_iou_stats['TP'][nodule_type], nodule_type))
                         tp = prob_and_iou_stats['TP'][nodule_type]['number']

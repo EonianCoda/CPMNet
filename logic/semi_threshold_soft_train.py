@@ -12,18 +12,36 @@ from torch.utils.data import DataLoader
 from utils.average_meter import AverageMeter
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
-from transform.label import CoordToAnnot
+# from transform.label import CoordToAnnot
 from dataload.utils import compute_bbox3d_iou
 
 logger = logging.getLogger(__name__)
 
+class CoordToAnnot():
+    """Convert one-channel label map to one-hot multi-channel probability map"""
+    def __call__(self, sample):
+        ctr = sample['ctr']
+        rad = sample['rad']
+        cls = sample['cls']
+        prob = sample['prob']
+        
+        spacing = sample['spacing']
+        n = ctr.shape[0]
+        spacing = np.tile(spacing, (n, 1))
+        
+        annot = np.concatenate([ctr, rad.reshape(-1, 3), spacing.reshape(-1, 3), prob.reshape(-1, 1), cls.reshape(-1, 1)], axis=-1).astype('float32') # (n, 10)
+
+        sample['annot'] = annot
+        return sample
+
 def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
-    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], sharped_cls_prob, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
         labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
         # Compute loss
         outputs = model(image)
-        cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, device = device)
+        cls_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, sharped_cls_prob, background_threshold = args.pseudo_background_threshold,
+                                                              device = device)
         cls_loss, shape_loss, offset_loss, iou_loss = cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
         loss = args.lambda_pseu_cls * cls_loss + args.lambda_pseu_shape * shape_loss + args.lambda_pseu_offset * offset_loss + args.lambda_pseu_iou * iou_loss
         return loss, cls_loss, shape_loss, offset_loss, iou_loss, outputs
@@ -47,6 +65,13 @@ def model_predict_wrapper(memory_format):
         outputs = model(image) # Dict[str, torch.Tensor], key: 'Cls', 'Shape', 'Offset'
         return outputs
     return model_predict
+
+@torch.no_grad()
+def sharpen_prob(cls_prob, t=0.7):
+    if t == 1:
+        return cls_prob
+    cls_prob_s = cls_prob ** (1 / t)
+    return (cls_prob_s / (cls_prob_s + (1 - cls_prob_s) ** (1 / t)))
 
 def train(args,
           model_t: nn.modules,
@@ -108,14 +133,38 @@ def train(args,
             with torch.no_grad():
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
-                        feats_t = model_predict(model_t, weak_u_sample, device) # shape: (bs, top_k, 7)
+                        feats_w_t = model_predict(model_t, weak_u_sample, device) # shape: (bs, top_k, 7)
+                        feats_s_t = model_predict(model_t, strong_u_sample, device)
                 else:
-                    feats_t = model_predict(model_t, strong_u_sample, device)
+                    feats_w_t = model_predict(model_t, strong_u_sample, device)
+                    feats_s_t = model_predict(model_t, strong_u_sample, device)
+                
+                Cls_w_t = feats_w_t['Cls']
+                Shape_w_t = feats_w_t['Shape']
+                Cls_s_t = feats_s_t['Cls']
+                Shape_s_t = feats_s_t['Shape']
+                
+                strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
+                for b_i in range(len(strong_feat_transforms)):
+                    for transform in reversed(strong_feat_transforms[b_i]):
+                        Cls_s_t[b_i] = transform.backward(Cls_s_t[b_i])
+                        Shape_s_t[b_i] = transform.backward(Shape_s_t[b_i])
+                weak_feat_transforms = weak_u_sample['feat_transform'] # shape = (bs,)
+                for b_i in range(len(weak_feat_transforms)):
+                    for transform in weak_feat_transforms[b_i]:
+                        Cls_w_t[b_i] = transform.forward(Cls_w_t[b_i])
+                        Shape_w_t[b_i] = transform.forward(Shape_w_t[b_i])
+                
+                feats_t = dict()
+                feats_t['Cls'] = (Cls_w_t * 0.6 + Cls_s_t * 0.4)
+                feats_t['Shape'] = (Shape_w_t * 0.6 + Shape_s_t * 0.4)
+                feats_t['Offset'] = feats_w_t['Offset'].clone()
                 # shape: (bs, top_k, 8)
                 # => top_k (default = 60) 
                 # => 8: 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputs_t = detection_postprocess(feats_t, device=device, threshold = args.pseudo_label_threshold, nms_topk=args.pseudo_nms_topk)
-            
+                del feats_w_t, feats_s_t, Cls_w_t, Shape_w_t, Cls_s_t, Shape_s_t
+                
             # np.save('weak_image.npy', weak_u_sample['image'].numpy())
             # np.save('outputs_t.npy', outputs_t.cpu().numpy())
             
@@ -126,15 +175,17 @@ def train(args,
                 bs = outputs_t.shape[0]
                 # Calculate background mask
                 cls_prob = feats_t['Cls'].sigmoid() # shape: (bs, 1, d, h, w)
-                background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
+                sharped_cls_prob = sharpen_prob(cls_prob, t=0.7)
+                # background_mask = (cls_prob < (1 - args.pseudo_background_threshold)) # shape: (bs, 1, d, h, w)
                 
                 weak_feat_transforms = weak_u_sample['feat_transform'] # shape = (bs,)
                 strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
                 for b_i in range(bs):
                     for transform in reversed(weak_feat_transforms[b_i]):
-                        background_mask[b_i] = transform.backward(background_mask[b_i])
+                        sharped_cls_prob[b_i] = transform.backward(sharped_cls_prob[b_i])
                     for transform in strong_feat_transforms[b_i]:
-                        background_mask[b_i] = transform.forward(background_mask[b_i])
+                        # background_mask[b_i] = transform.forward(background_mask[b_i])
+                        sharped_cls_prob[b_i] = transform.forward(sharped_cls_prob[b_i])
                 
                 outputs_t = outputs_t.cpu().numpy()
                 weak_ctr_transforms = weak_u_sample['ctr_transform'] # shape = (bs,)
@@ -149,6 +200,10 @@ def train(args,
                     if len(output) == 0:
                         transformed_annots.append(np.zeros((0, 10), dtype='float32'))
                         continue
+                    probs = output[:, 1]
+                    if len(probs) > 0:
+                        probs = sharpen_prob(probs)
+                    
                     ctrs = output[:, 2:5]
                     shapes = output[:, 5:8]
                     spacing = weak_spacings[b_i]
@@ -164,6 +219,7 @@ def train(args,
                     
                     sample = {'ctr': ctrs, 
                             'rad': shapes, 
+                            'prob': probs,
                             'cls': np.zeros((len(ctrs), 1), dtype='int32'),
                             'spacing': spacing}
                     
@@ -174,12 +230,12 @@ def train(args,
                 valid_mask = (valid_mask == 1)
                 max_num_annots = max(annot.shape[0] for annot in transformed_annots)
                 if max_num_annots > 0:
-                    transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
+                    transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 11), dtype='float32') * -1
                     for idx, annot in enumerate(transformed_annots):
                         if annot.shape[0] > 0:
                             transformed_annots_padded[idx, :annot.shape[0], :] = annot
                 else:
-                    transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
+                    transformed_annots_padded = np.ones((len(transformed_annots), 1, 11), dtype='float32') * -1
 
                 # original_annot = strong_u_sample['annot'].numpy()
                 # (For analysis) Compute iou between pseudo label and original label
@@ -239,8 +295,9 @@ def train(args,
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
                 strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
                 
-                background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
-                background_mask = background_mask[valid_mask]
+                
+                sharped_cls_prob = sharped_cls_prob.view(bs, -1) # shape: (bs, num_points)
+                sharped_cls_prob = sharped_cls_prob[valid_mask]
                 
                 # original_annot = original_annot[valid_mask]
                 # np.save('image.npy', strong_u_sample['image'].numpy())
@@ -250,9 +307,9 @@ def train(args,
                 # raise ValueError('Check the pseudo label')
                 if mixed_precision:
                     with torch.cuda.amp.autocast():
-                        loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
+                        loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, sharped_cls_prob, device)
                 else:
-                    loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
+                    loss_pseu, cls_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, sharped_cls_prob, device)
                 
                 avg_pseu_cls_loss.update(cls_pseu_loss.item())
                 avg_pseu_shape_loss.update(shape_pseu_loss.item())
@@ -264,6 +321,7 @@ def train(args,
             else:
                 outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
+                
                 for annot in strong_u_sample['gt_annot'].numpy():
                     if len(annot) > 0:
                         avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))

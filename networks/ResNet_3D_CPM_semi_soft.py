@@ -365,6 +365,7 @@ class DetectionLoss(nn.Module):
         self.cls_num_hard = cls_num_hard
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
+        
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
         """
@@ -668,7 +669,9 @@ class Unsupervised_DetectionLoss(nn.Module):
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, background_mask, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, sharped_cls_prob, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, 
+                 fn_weight = 4.0, fn_threshold = 0.8, background_threshold: float = 0.2, 
+                 eps: float = 1e-4):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
 
@@ -687,33 +690,44 @@ class Unsupervised_DetectionLoss(nn.Module):
         Returns:
             torch.Tensor: The calculated classification loss
         """
+        def bce_loss(target, pred):
+            pred = pred.sigmoid()
+            ce = - target * torch.log(pred + eps) - (1 - target) * torch.log(1 - pred + eps) # shape = (b, num_points)
+            return ce
+        
         classification_losses = []
         batch_size = pred.shape[0]
-        background_mask = background_mask.unsqueeze(-1) # shape = (b, num_points, 1)
+        
+        background_mask = (sharped_cls_prob < background_threshold)
         for j in range(batch_size):
             pred_b = pred[j]
             target_b = target[j]
+            background_mask_b = background_mask[j]
+            sharped_cls_prob_b = sharped_cls_prob[j]
             mask_ignore_b = mask_ignore[j]
             
             cls_prob = torch.sigmoid(pred_b.detach())
-            cls_prob = torch.clamp(cls_prob, 1e-4, 1.0 - 1e-4)
-            alpha_factor = torch.ones(pred_b.shape).to(pred_b.device) * alpha
-            alpha_factor = torch.where(torch.eq(target_b, 1.), alpha_factor, 1. - alpha_factor)
-            focal_weight = torch.where(torch.eq(target_b, 1.), 1. - cls_prob, cls_prob)
-            focal_weight = alpha_factor * torch.pow(focal_weight, gamma)
+            cls_prob = torch.clamp(cls_prob, eps, 1.0 - eps)
+            
+            # weight = 
+            alpha_factor = (1 - alpha) + (2 * alpha - 1) * sharped_cls_prob_b
+            focal_weight = alpha_factor * ((sharped_cls_prob_b - cls_prob).abs() ** gamma) + eps
 
-            bce = F.binary_cross_entropy_with_logits(pred_b, target_b, reduction='none')
+            bce = bce_loss(sharped_cls_prob_b, pred_b)
+            
             num_positive_pixels = torch.sum(target_b == 1)
             cls_loss = focal_weight * bce
             cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
             record_targets = target_b.clone()
+            
+            background_mask_b = torch.where(torch.eq(mask_ignore_b, 0), background_mask_b, 0).bool()
             if num_positive_pixels > 0:
                 ##TODO no fn for semi-supervised
                 # FN_weights = 4.0  # 10.0  for ablation study
                 # FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
                 # cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
                 Positive_loss = cls_loss[record_targets == 1]
-                Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
+                Negative_loss = cls_loss[background_mask_b]
                 if num_neg != -1:
                     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
                     Negative_loss = Negative_loss[neg_idcs]
@@ -725,7 +739,7 @@ class Unsupervised_DetectionLoss(nn.Module):
                 cls_loss = Positive_loss + Negative_loss
 
             else:
-                Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
+                Negative_loss = cls_loss[background_mask_b]
                 if num_neg != -1:
                     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
                     Negative_loss = Negative_loss[neg_idcs]
@@ -789,8 +803,9 @@ class Unsupervised_DetectionLoss(nn.Module):
                 percent = nw * nh * nd / (each_label[3] * each_label[4] * each_label[5])
                 if (percent > 0.1) and (nw*nh*nd >= 15):
                     spacing_z, spacing_y, spacing_x = each_label[6:9]
-                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
-                    bbox_annotation_target.append(bbox.view(1, 10))
+                    prob = each_label[9]
+                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), float(prob), 0])).to(device)
+                    bbox_annotation_target.append(bbox.view(1, 11))
                 else:
                     mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
             if len(bbox_annotation_target) > 0:
@@ -893,7 +908,8 @@ class Unsupervised_DetectionLoss(nn.Module):
     def forward(self, 
                 output: Dict[str, torch.Tensor], 
                 annotations: torch.Tensor,
-                background_mask: torch.Tensor, # shape = (b, num_points)
+                sharped_cls_prob: torch.Tensor, # shape = (b, num_points)
+                background_threshold: float,
                 device):
         """
         Args:
@@ -918,6 +934,8 @@ class Unsupervised_DetectionLoss(nn.Module):
         pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         
+        sharped_cls_prob = sharped_cls_prob.unsqueeze(-1) # shape = (b, num_points, 1)
+        
         # process annotations
         process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, target_mask_ignore)
         target_mask_ignore = target_mask_ignore.view(batch_size, 1,  -1)
@@ -936,13 +954,14 @@ class Unsupervised_DetectionLoss(nn.Module):
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         fg_mask = target_scores.squeeze(-1).bool()
         classification_losses = self.cls_loss(pred = pred_scores, 
-                                              target = target_scores, 
-                                              mask_ignore = mask_ignore.int(), 
-                                              background_mask = background_mask,
+                                              target = target_scores,
+                                              sharped_cls_prob = sharped_cls_prob,
+                                              mask_ignore = mask_ignore.int(),
                                               num_hard=self.cls_num_hard, 
                                               num_neg=self.cls_num_neg,
                                               fn_weight=self.cls_fn_weight, 
-                                              fn_threshold=self.cls_fn_threshold)
+                                              fn_threshold=self.cls_fn_threshold,
+                                              background_threshold = background_threshold)
                                               
         if fg_mask.sum() == 0:
             reg_losses = torch.tensor(0).float().to(device)

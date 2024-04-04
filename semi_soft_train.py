@@ -7,7 +7,7 @@ import logging
 import pickle
 import numpy as np
 from typing import Tuple
-from networks.ResNet_3D_CPM_semi import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
+from networks.ResNet_3D_CPM_semi_soft import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
 from dataload.dataset_semi import TrainDataset, DetDataset, UnLabeledDataset
 from dataload.dataset_val_aug import DetDataset as AugDetDataset
@@ -19,7 +19,7 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.semi_threshold_train import train
+from logic.semi_threshold_soft_train import train
 from logic.val import val
 from logic.pseudo_label import gen_pseu_labels
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
@@ -245,6 +245,7 @@ def prepare_training(args, device, num_training_steps):
         # Resume best metric
         global early_stopping
         early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model_s)
+
         start_epoch = start_epoch + 1
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
@@ -436,9 +437,11 @@ if __name__ == '__main__':
     original_psuedo_crop_threshold = float(args.pseudo_crop_threshold)
     final_psuedo_crop_threshold = args.pseudo_crop_threshold * args.semi_increase_ratio
     
+    psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels.pkl')
+    
     if not args.use_gt_crop:
         psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
-        if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '': # Update pseudo labels only at the beginning
+        if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '':
             updata_pseudo_label(args, model_t, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold, pseudo_pickle_path=args.pseudo_pickle_path)
         else:
