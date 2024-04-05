@@ -464,11 +464,6 @@ class Evaluation:
         ##TODO: refactor this part
         # compute FROC
         FROC_is_pos_list, FROC_prob_list, FROC_is_FN_list, seriesUIDs, FROC_series_uids = froc.get_info(conf_threshold)
-        
-        # fps, sens, precisions, thresholds = compute_FROC(FROC_is_pos_list = FROC_is_pos_list, 
-        #                                                 FROC_prob_list = FROC_prob_list, 
-        #                                                 total_num_of_series = len(seriesUIDs), 
-        #                                                 FROC_is_FN_list = FROC_is_FN_list)
         (fps_bs_itp, thresholds_mean), senstitivity_info, precision_info = compute_FROC_bootstrap(FROC_gt_list = FROC_is_pos_list,
                                                                                                 FROC_prob_list = FROC_prob_list,
                                                                                                 FROC_series_uids = FROC_series_uids,
@@ -645,6 +640,7 @@ class Evaluation:
             f.write_item("FP: {}".format(froc.fp_count))
             f.write_item("FN: {}".format(froc.fn_count))
             
+            f.write_item("Number of patients: {}".format(len(self.all_gt_nodules)))
             f.write_item("Number of all predicted candidates: {}".format(num_of_all_pred_cands))
             f.write_item("Average number of candidates per series: {:.2f}".format(num_of_all_pred_cands / len(self.all_gt_nodules)))
             f.write_item("Number of all ground truth nodules: {}".format(self.num_of_all_gt_nodules))

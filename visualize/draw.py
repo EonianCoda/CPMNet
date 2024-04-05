@@ -22,7 +22,8 @@ def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.
             image[z] = cv2.rectangle(image[z].copy(), (x1, y1), (x2, y2), color, 1)
     return image
 
-def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), half_image = True, axis_off = True) -> None:
+def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), 
+                       half_image = True, axis_off = True, save_path = None) -> None:
     """
     Args:
         image: a 3D image with shape [Z, Y, X, 3]
@@ -58,6 +59,9 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             if axis_off:
                 ax.axis('off')
         plt.tight_layout()
+        if save_path is not None:
+            plt.savefig(save_path)
+        plt.close()
         
 def draw_pseu_bbox_and_label_on_image(image: np.ndarray, 
                                     bboxes: np.ndarray, 
