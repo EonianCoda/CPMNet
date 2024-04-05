@@ -6,7 +6,7 @@ import os
 import logging
 import numpy as np
 from typing import Tuple
-from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
+from networks.ResNet_3D_CPM_help_head import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
 from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
