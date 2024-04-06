@@ -142,19 +142,20 @@ def gen_hard_FP(model: nn.Module,
         pseu_label = pseudo_labels[series_name]
         pseu_ctrs = pseu_label[ALL_LOC]
         pseu_rads = pseu_label[ALL_RAD]
+        pseu_probs = pseu_label[ALL_PROB]
         
         gt_bboxes = get_bboxes(label)
         pseu_bboxes = get_bboxes(pseu_label)
         
         if len(gt_bboxes) == 0:
-            hard_negatives[series_name] = {ALL_HARD_FP_LOC: pseu_ctrs, ALL_HARD_FP_RAD: pseu_rads}
+            hard_negatives[series_name] = {ALL_HARD_FP_LOC: pseu_ctrs, ALL_HARD_FP_RAD: pseu_rads, ALL_PROB: pseu_probs}
             continue
         
         ious = compute_bbox3d_iou(pseu_bboxes, gt_bboxes)
         fp_mask = (ious.max(axis=1) < 1e-3)
         
         if np.sum(fp_mask) == 0:
-            hard_negatives[series_name] = {ALL_HARD_FP_LOC: np.zeros((0, 3)), ALL_HARD_FP_RAD: np.zeros((0, 3))}
+            hard_negatives[series_name] = {ALL_HARD_FP_LOC: np.zeros((0, 3)), ALL_HARD_FP_RAD: np.zeros((0, 3)), ALL_PROB: np.zeros((0,))}
         else:
-            hard_negatives[series_name] = {ALL_HARD_FP_LOC: pseu_ctrs[fp_mask], ALL_HARD_FP_RAD: pseu_rads[fp_mask]}    
+            hard_negatives[series_name] = {ALL_HARD_FP_LOC: pseu_ctrs[fp_mask], ALL_HARD_FP_RAD: pseu_rads[fp_mask], ALL_PROB: pseu_probs[fp_mask]}
     return hard_negatives

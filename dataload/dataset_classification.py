@@ -109,10 +109,10 @@ class TrainDataset(Dataset):
             sample['image'] = normalize_raw_image(sample['image'])
             sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             
-            if len(sample['all_rad']) != 0:
+            if len(sample['rad']) != 0:
                 all_cls = []
-                for j in range(len(sample['all_rad'])):
-                    d, h, w = sample['all_rad'][j]
+                for j in range(len(sample['rad'])):
+                    d, h, w = sample['rad'][j]
                     nodule_size = 4 / 3 * math.pi * (d * h * w) / 6                 
                     if nodule_size < self.nodule_size_ranges[0] / 2:
                         all_cls.append([0, 1, 0, 0, 0])
@@ -133,7 +133,7 @@ class TrainDataset(Dataset):
                         all_cls.append([0, 0, 0, 1 - ratio, ratio])
                     else:
                         all_cls.append([0, 0, 0, 0, 1])
-                sample['all_cls'] = np.array(all_cls, dtype=np.float32)
+                sample['cls'] = np.array(all_cls, dtype=np.float32)
                     
             if self.transform_post:
                 sample['ctr_transform'] = []

@@ -203,17 +203,17 @@ class ClsRegHead(nn.Module):
                 conv_obj.append(ConvBlock(in_channels, feature_size, 3, norm_type=norm_type, act_type=act_type))
                 conv_shape.append(ConvBlock(in_channels, feature_size, 3, norm_type=norm_type, act_type=act_type))
                 conv_offset.append(ConvBlock(in_channels, feature_size, 3, norm_type=norm_type, act_type=act_type))
-                conv_cls.append(ConvBlock(in_channels, feature_size, 3, norm_type=norm_type, act_type=act_type))
+                # conv_cls.append(ConvBlock(in_channels, feature_size, 3, norm_type=norm_type, act_type=act_type))
             else:
                 conv_obj.append(ConvBlock(feature_size, feature_size, 3, norm_type=norm_type, act_type=act_type))
                 conv_shape.append(ConvBlock(feature_size, feature_size, 3, norm_type=norm_type, act_type=act_type))
                 conv_offset.append(ConvBlock(feature_size, feature_size, 3, norm_type=norm_type, act_type=act_type))
-                conv_cls.append(ConvBlock(feature_size, feature_size, 3, norm_type=norm_type, act_type=act_type))
+                # conv_cls.append(ConvBlock(feature_size, feature_size, 3, norm_type=norm_type, act_type=act_type))
         
         self.conv_obj = nn.Sequential(*conv_obj)
         self.conv_shape = nn.Sequential(*conv_shape)
         self.conv_obj = nn.Sequential(*conv_offset)
-        self.conv_cls = nn.Sequential(*conv_cls)
+        # self.conv_cls = nn.Sequential(*conv_cls)
         
         self.object_output = nn.Conv3d(feature_size, 1, kernel_size=3, padding=1)
         self.shape_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
@@ -222,8 +222,10 @@ class ClsRegHead(nn.Module):
     def forward(self, x):
         Shape = self.shape_output(self.conv_shape(x))
         Offset = self.offset_output(self.conv_obj(x))
-        Obj = self.object_output(self.conv_obj(x))
-        Cls = self.cls_output(self.conv_cls(x))
+        
+        feat = self.conv_obj(x)
+        Obj = self.object_output(feat)
+        Cls = self.cls_output(feat)
         
         dict1 = {}
         dict1['Cls'] = Obj
@@ -322,8 +324,8 @@ class Resnet18(nn.Module):
 
         out = self.head(x)
         if self.training:
-            cls_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
-            return cls_loss, shape_loss, offset_loss, iou_loss
+            obj_losses, cls_losses, reg_losses, offset_losses, iou_losses = self.detection_loss(out, labels, device=self.device)
+            return obj_losses, cls_losses, reg_losses, offset_losses, iou_losses
         return out
 
     def _init_weight(self):
@@ -392,18 +394,16 @@ class DetectionLoss(nn.Module):
         for j in range(batch_size):
             pred_b = pred[j]
             target_b = target[j]
-            obj_target_b = obj_target[j]
-            mask_ignore_b = mask_ignore[j]
+            obj_target_b = obj_target[j].squeeze(1)
+            mask_ignore_b = mask_ignore[j].squeeze(1)
             
             cls_loss = F.cross_entropy(pred_b, target_b, reduction='none')
             cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
             num_positive_pixels = torch.sum(obj_target_b == 1)
             record_targets = obj_target_b.clone()
-            
             if num_positive_pixels > 0:
                 Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
-                
                 if num_neg != -1:
                     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
                     Negative_loss = Negative_loss[neg_idcs] 
@@ -413,7 +413,6 @@ class DetectionLoss(nn.Module):
                 Positive_loss = Positive_loss.sum()
                 Negative_loss = Negative_loss.sum()
                 cls_loss = Positive_loss + Negative_loss
-
             else:
                 Negative_loss = cls_loss[record_targets == 0]
                 if num_neg != -1:
@@ -551,7 +550,8 @@ class DetectionLoss(nn.Module):
                     spacing_z, spacing_y, spacing_x = each_label[6:9]
                     cls_label = each_label[9:14]
                     bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), 
-                                                      float(spacing_z), float(spacing_y), float(spacing_x), *cls_label])).to(device)
+                                                      float(spacing_z), float(spacing_y), float(spacing_x), float(cls_label[0]), float(cls_label[1]), 
+                                                      float(cls_label[2]), float(cls_label[3]), float(cls_label[4])])).to(device)
                     bbox_annotation_target.append(bbox.view(1, 14))
                 else:
                     mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
@@ -674,35 +674,35 @@ class DetectionLoss(nn.Module):
                 (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
             device: torch.device, the device of the model.
         """
-        Cls = output['Cls'] # objectness
-        nodule_Cls = output['nodule_Cls']
+        Obj = output['Cls'] # objectness
+        Cls = output['nodule_Cls']
         Shape = output['Shape']
         Offset = output['Offset']
         
-        batch_size = Cls.size()[0]
-        target_mask_ignore = torch.zeros(Cls.size()).to(device)
+        batch_size = Obj.size()[0]
+        target_mask_ignore = torch.zeros(Obj.size()).to(device)
         
         # view shape
-        pred_scores = Cls.view(batch_size, 1, -1) # (b, 1, num_points)
+        pred_obj = Obj.view(batch_size, 1, -1) # (b, 1, num_points)
         pred_shapes = Shape.view(batch_size, 3, -1) # (b, 3, num_points)
         pred_offsets = Offset.view(batch_size, 3, -1)
-        pred_nodule_cls_scores = nodule_Cls.view(batch_size, 5, -1)
+        pred_cls = Cls.view(batch_size, 5, -1)
         # (b, num_points, 1 or 3)
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        pred_obj = pred_obj.permute(0, 2, 1).contiguous()
         pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
-        pred_nodule_cls_scores = pred_nodule_cls_scores.permute(0, 2, 1).contiguous()
+        pred_cls = pred_cls.permute(0, 2, 1).contiguous()
         
         # process annotations
         process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, target_mask_ignore)
         target_mask_ignore = target_mask_ignore.view(batch_size, 1,  -1)
         target_mask_ignore = target_mask_ignore.permute(0, 2, 1).contiguous()
         # generate center points. Only support single scale feature
-        anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0) # shape = (num_anchors, 3)
+        anchor_points, stride_tensor = make_anchors(Obj, self.crop_size, 0) # shape = (num_anchors, 3)
         # predict bboxes (zyxdhw)
         pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor) # shape = (b, num_anchors, 6)
         # assigned points and targets (target bboxes zyxdhw)
-        target_offset, target_shape, target_bboxes, target_scores, mask_ignore, target_cls = self.get_pos_target(annotations = process_annotations,
+        target_offset, target_shape, target_bboxes, target_obj, mask_ignore, target_cls = self.get_pos_target(annotations = process_annotations,
                                                                                                                 anchor_points = anchor_points,
                                                                                                                 stride = stride_tensor[0].view(1, 1, 3), 
                                                                                                                 pos_target_topk = self.pos_target_topk,
@@ -710,16 +710,17 @@ class DetectionLoss(nn.Module):
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         mask_ignore = mask_ignore.int()
-        fg_mask = target_scores.squeeze(-1).bool()
-        obj_losses = self.obj_loss(pred = pred_scores, 
-                                   target = target_scores, 
+        fg_mask = target_obj.squeeze(-1).bool()
+        obj_losses = self.obj_loss(pred = pred_obj, 
+                                   target = target_obj, 
                                    mask_ignore = mask_ignore, 
                                     num_hard=self.cls_num_hard, 
                                     num_neg=self.cls_num_neg,
                                     fn_weight=self.cls_fn_weight, 
                                     fn_threshold=self.cls_fn_threshold)
-        cls_losses = self.cls_loss(pred=pred_nodule_cls_scores, 
+        cls_losses = self.cls_loss(pred=pred_cls, 
                                    target=target_cls, 
+                                   obj_target=target_obj,
                                    mask_ignore = mask_ignore,
                                     num_hard=self.cls_num_hard, 
                                     num_neg=self.cls_num_neg)                                   
