@@ -24,6 +24,29 @@ def train_collate_fn(batches) -> Dict[str, torch.Tensor]:
 
     return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded)}
 
+
+def train_classification_collate_fn(batches) -> Dict[str, torch.Tensor]:
+    batch = []
+    for b in batches:
+        batch.extend(b)
+    imgs = []
+    annots = []
+    for b in batch:
+        imgs.append(b['image'])
+        annots.append(b['annot'])
+    imgs = np.stack(imgs)
+    max_num_annots = max(annot.shape[0] for annot in annots)
+
+    if max_num_annots > 0:
+        annot_padded = np.ones((len(annots), max_num_annots, 14), dtype='float32') * -1
+        for idx, annot in enumerate(annots):
+            if annot.shape[0] > 0:
+                annot_padded[idx, :annot.shape[0], :] = annot
+    else:
+        annot_padded = np.ones((len(annots), 1, 14), dtype='float32') * -1
+
+    return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded)}
+
 def train_all_crop_collate_fn(batches) -> Dict[str, torch.Tensor]:
     imgs = []
     annots = []

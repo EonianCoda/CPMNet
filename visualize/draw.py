@@ -1,5 +1,6 @@
 import cv2
 import os
+import math
 import numpy as np
 from typing import Dict, List, Tuple
 from matplotlib import pyplot as plt
@@ -8,7 +9,7 @@ from dataload.utils import ALL_LOC, ALL_RAD, load_image, load_label, gen_dicom_p
 from evaluationScript.nodule_finding_original import NoduleFinding
 from .convert import output2nodulefinding, label2nodulefinding, nodule2cude
 
-MAX_IMAGE_IN_ROW = 6
+MAX_IMAGE_IN_ROW = 9
 SUBPLOT_WIDTH = 3.5
 SUBPLOT_HEIGHT = 9
 
@@ -22,7 +23,8 @@ def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.
             image[z] = cv2.rectangle(image[z].copy(), (x1, y1), (x2, y2), color, 1)
     return image
 
-def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), half_image = True, axis_off = True) -> None:
+def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), 
+                       half_image = True, axis_off = True, save_path = None) -> None:
     """
     Args:
         image: a 3D image with shape [Z, Y, X, 3]
@@ -50,14 +52,20 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             zs = list(range(z1, z2))
             
         # Draw
-        plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+        fig = plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+        
+        n_row = int(math.sqrt(len(zs)))
+        n_col = int(math.ceil(len(zs) / n_row))
         for i, z in enumerate(zs):
-            ax = plt.subplot(1, len(zs), i+1)
+            ax = plt.subplot(n_row, n_col, i+1)
             ax.imshow(bboxed_image[z], cmap='gray')
             ax.set_title(f'z={z}')
             if axis_off:
                 ax.axis('off')
         plt.tight_layout()
+        if save_path is not None:
+            plt.savefig(save_path)
+        plt.close(fig)
         
 def draw_pseu_bbox_and_label_on_image(image: np.ndarray, 
                                     bboxes: np.ndarray, 

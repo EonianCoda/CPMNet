@@ -33,17 +33,16 @@ def label2nodulefinding(label: Dict[str, np.ndarray]) -> List[NoduleFinding]:
 def nodule2cude(nodules: List[NoduleFinding], shape: Tuple[int, int, int]) -> np.ndarray:
     if not isinstance(nodules, list):
         nodules = [nodules]
-    
     bboxes = []
     for nodule in nodules:
-        z, y, x, d, h, w = nodule.coordZ, nodule.coordY, nodule.coordX, nodule.d, nodule.h, nodule.w
+        z, y, x, d, h, w = nodule.ctr_z, nodule.ctr_y, nodule.ctr_x, nodule.d, nodule.h, nodule.w
         z1 = max(round(z - d/2), 0)
         y1 = max(round(y - h/2), 0)
         x1 = max(round(x - w/2), 0)
 
-        z2 = min(round(z + d/2), shape[0])
-        y2 = min(round(y + h/2), shape[1])
-        x2 = min(round(x + w/2), shape[2])
+        z2 = min(round(z + d/2), shape[0] - 1)
+        y2 = min(round(y + h/2), shape[1] - 1)
+        x2 = min(round(x + w/2), shape[2] - 1)
         bboxes.append((z1, y1, x1, z2, y2, x2))
-    bboxes = np.array(bboxes)
+    bboxes = np.array(bboxes, dtype=np.int32)
     return bboxes

@@ -321,10 +321,10 @@ def train(args,
             else:
                 outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
-                
                 for annot in strong_u_sample['gt_annot'].numpy():
                     if len(annot) > 0:
                         avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
+                    continue
             del outputs_pseu
             ### Labeled data
             try:
@@ -345,7 +345,7 @@ def train(args,
             avg_loss.update(loss.item())
             
             # Update model
-            total_loss = loss + loss_pseu * args.lambda_pseu
+            total_loss = (loss + loss_pseu * args.lambda_pseu) / 2
             if mixed_precision:
                 scaler.scale(total_loss).backward()
                 scaler.step(optimizer)
