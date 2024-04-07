@@ -4,7 +4,7 @@ import SimpleITK as sitk
 import numpy as np
 import random
 from itertools import product
-from .utils import ALL_HARD_FP_RAD, ALL_HARD_FP_LOC, ALL_HARD_FP_PROB, ALL_CLS, ALL_RAD, ALL_LOC, ALL_PROB, ALL_IOU
+from .utils import ALL_HARD_FP_RAD, ALL_HARD_FP_LOC, ALL_HARD_FP_PROB, ALL_CLS, ALL_RAD, ALL_LOC, ALL_PROB, ALL_IOU, compute_bbox3d_iou
 
 HARD_TP_THRESHOLD = 0.7
 
@@ -66,7 +66,14 @@ class InstanceCrop(object):
             if valid_mask.sum() == 0:
                 hard_fp_sample_score = np.zeros((0,))
             else:
-                hard_fp_sample_score = (hard_fp_all_prob - hard_fp_prob_threshold) / (1 - hard_fp_prob_threshold)
+                hard_fp_sample_score = 0.2 + 0.8 * (hard_fp_all_prob - hard_fp_prob_threshold) / (1 - hard_fp_prob_threshold)
+        else:
+            hard_fp_all_loc = np.zeros((0, 3))
+            hard_fp_all_rad = np.zeros((0, 3))
+            hard_fp_all_prob = np.zeros((0,))
+            hard_fp_sample_score = np.zeros((0,))
+        
+        if ALL_PROB in sample:
             # Positive samples
             all_prob = sample[ALL_PROB]
             all_iou = sample[ALL_IOU]
@@ -75,18 +82,12 @@ class InstanceCrop(object):
                 tp_sample_score = np.zeros((0,))
             else:
                 tp_sample_score = 0.8 * (1 - all_prob) + 0.2 * (1 - all_iou)
-                
-            tp_sample_score = tp_sample_score * 3
+            tp_sample_score = tp_sample_score * 1.2
         else:
-            hard_fp_all_loc = np.zeros((0, 3))
-            hard_fp_all_rad = np.zeros((0, 3))
-            hard_fp_all_prob = np.zeros((0,))
-            hard_fp_sample_score = np.zeros((0,))
-            
             all_prob = np.zeros((0,))
             all_iou = np.zeros((0,))
             tp_sample_score = np.zeros((0,))
-            
+        
         if len(all_loc) != 0:
             if len(all_prob) == 0:
                 tp_instance_loc = all_loc.copy()
@@ -115,21 +116,16 @@ class InstanceCrop(object):
         crop_centers = np.array(crop_centers)
         
         if self.instance_crop and len(tp_instance_loc) > 0:
-            if self.rand_trans is not None:
-                instance_crop = tp_instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(tp_instance_loc), 3))
-            else:
-                instance_crop = tp_instance_loc
+            instance_crop = tp_instance_loc
             crop_centers = np.append(crop_centers, instance_crop, axis=0)
         
         if self.instance_crop and len(hard_fp_fp_instance_loc) > 0:
-            if self.rand_trans is not None:
-                instance_crop = hard_fp_fp_instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(tp_instance_loc), 3))
-            else:
-                instance_crop = hard_fp_fp_instance_loc
+            instance_crop = hard_fp_fp_instance_loc
             crop_centers = np.append(crop_centers, instance_crop, axis=0) 
 
         matrixs = []
         crop_scores = []
+        tp_nums = []
         for i in range(len(crop_centers)):
             C = crop_centers[i]
             if self.rand_trans is not None:
@@ -149,6 +145,7 @@ class InstanceCrop(object):
             bb_min = np.maximum(matrix[0], 0)
             bb_max = bb_min + crop_size
             
+            tp_nums.append(np.sum((all_loc > bb_min).all(axis=1) & (all_loc < bb_max).all(axis=1)))
             if len(tp_sample_score) == 0 and len(hard_fp_sample_score) == 0:
                 crop_score = 0
             elif len(tp_sample_score) == 0:
@@ -162,17 +159,32 @@ class InstanceCrop(object):
             crop_scores.append(crop_score)
         ## Sample patches
         crop_scores = np.array(crop_scores)
-        has_instance_idx = (crop_scores > 0)
-        
-        if len(has_instance_idx) < self.sample_num:
-            sample_indices = [np.where(has_instance_idx)[0]]
-            # Sample fron non-instance crop
-            non_instance_idx = np.where(~has_instance_idx)[0]
-            sample_indices.extend(np.random.choice(non_instance_idx, size=self.sample_num - len(sample_indices), replace=False))
+        if (len(tp_sample_score) == 0 and len(hard_fp_sample_score) == 0) or crop_scores.sum() == 0:
+            # Sample patches
+            tp_nums = np.array(tp_nums)
+            tp_idx = tp_nums > 0
+            neg_idx = tp_nums == 0
+            if tp_idx.sum() > 0:
+                tp_pos = self.tp_ratio / tp_idx.sum()
+            else:
+                tp_pos = 0
+            p = np.zeros(shape=tp_nums.shape)
+            p[tp_idx] = tp_pos
+            p[neg_idx] = (1. - p.sum()) / neg_idx.sum() if neg_idx.sum() > 0 else 0
+            p = p * 1 / p.sum()
+            sample_indices = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=p, replace=False)
         else:
-            # Normalized
-            crop_scores = crop_scores / crop_scores.sum()
-            sample_indices = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=crop_scores, replace=False)
+            has_instance_idx = (crop_scores > 0)
+            if len(has_instance_idx) < self.sample_num:
+                sample_indices = [np.where(has_instance_idx)[0]]
+                # Sample fron non-instance crop
+                non_instance_idx = np.where(~has_instance_idx)[0]
+                sample_indices.extend(np.random.choice(non_instance_idx, size=self.sample_num - len(sample_indices), replace=False))
+            else:
+                # Normalized
+                crop_scores[crop_scores == 0] = np.min(crop_scores[crop_scores != 0]) * 0.1
+                crop_scores = crop_scores / crop_scores.sum()
+                sample_indices = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=crop_scores, replace=False)
         
         # Crop patches
         samples = []

@@ -164,13 +164,13 @@ def gen_hard_FP(model: nn.Module,
         pos_all_ious = []
         gt_max_ious = ious.max(axis=0)
         gt_match_idx = ious.argmax(axis=0)
-        for iou, idx in zip(gt_max_ious, gt_match_idx):
+        for i, (iou, pred_idx) in enumerate(zip(gt_max_ious, gt_match_idx)):
             if iou > 1e-3:
-                prob = pseud_prob[idx]
+                prob = pseud_prob[pred_idx]
             else:
                 prob = 0.0
-            pos_all_ctrs.append(label[ALL_LOC][idx])
-            pos_all_rads.append(label[ALL_RAD][idx])
+            pos_all_ctrs.append(label[ALL_LOC][i])
+            pos_all_rads.append(label[ALL_RAD][i])
             pos_all_probs.append(prob)
             pos_all_ious.append(iou)
         

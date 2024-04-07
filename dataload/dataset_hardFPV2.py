@@ -63,7 +63,7 @@ class TrainDataset(Dataset):
             dicom_path = gen_dicom_path(folder, series_name)
            
             label = load_label(label_path, self.image_spacing, min_d, min_size)
-            if label[ALL_LOC].shape[0] == 0 and not use_bg:
+            if (label[ALL_LOC].shape[0] == 0 and not use_bg) or label[ALL_LOC].shape[0] > 30:
                 continue
             
             self.dicom_paths.append(dicom_path)
@@ -112,6 +112,9 @@ class TrainDataset(Dataset):
             samples[ALL_HARD_FP_PROB] = hard_fp_label[ALL_HARD_FP_PROB]
             samples[ALL_IOU] = hard_fp_label[ALL_IOU]
             samples[ALL_PROB] = hard_fp_label[ALL_PROB]
+            samples[ALL_LOC] = hard_fp_label[ALL_LOC]
+            samples[ALL_RAD] = hard_fp_label[ALL_RAD]
+            samples[ALL_CLS] = hard_fp_label[ALL_CLS]     
             
         samples['file_name'] = series_name
         samples = self.crop_fn(samples, image_spacing, self.hard_fp_prob_threshold)
