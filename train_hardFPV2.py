@@ -241,7 +241,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     rand_trans = [int(s * 2/3) for s in overlap_size]
-    pad_value = get_image_padding_value(args.data_norm_method)
+    pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
@@ -289,7 +289,6 @@ def get_hardFP_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
-    
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     

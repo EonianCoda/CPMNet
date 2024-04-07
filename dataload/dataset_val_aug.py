@@ -10,8 +10,8 @@ import copy
 import math
 logger = logging.getLogger(__name__)
 
-from transform.ctr_transform import OffsetMinusCTR, RotateCTR
-from transform.feat_transform import FlipFeatTransform, Rot90FeatTransform
+from transform.ctr_transform import OffsetMinusCTR, RotateCTR, TransposeCTR
+from transform.feat_transform import FlipFeatTransform, Rot90FeatTransform, TransposeFeatTransform
 
 class FlipTransform():
     def __init__(self, flip_depth=True, flip_height=True, flip_width=True):
@@ -125,6 +125,46 @@ class Rotate90():
             new_image_spacing[rot_axes[1]] = image_spacing[rot_axes[0]]
         return new_ctr_zyx, new_shape_dhw, new_image_spacing
 
+class TransPose():
+    def __init__(self, trans_xy=True, trans_zx=False, trans_zy=False):
+        self.trans_xy = trans_xy
+        self.trans_zx = trans_zx
+        self.trans_zy = trans_zy
+
+    def __call__(self, sample):
+        transpose_list = []
+
+        if self.trans_zy:
+            transpose_list.append(np.array([-2, -3]))
+        if self.trans_xy:
+            transpose_list.append(np.array([-1, -2]))
+        if self.trans_zx:
+            transpose_list.append(np.array([-1, -3]))
+
+        if len(transpose_list) > 0:
+            num_dims = len(sample['image'].shape)
+            transpose_order = np.arange(num_dims)
+            transpose_order[-3:] = np.array([-3, -2, -1])
+            transpose_order = transpose_order.astype(np.int32)
+            
+            for transpose in transpose_list:
+                a = transpose_order[transpose[0]]
+                b = transpose_order[transpose[1]]
+                transpose_order[transpose[0]] = b
+                transpose_order[transpose[1]] = a
+            
+            sample['image'] = np.transpose(sample['image'], transpose_order)
+            # Use last 3 dimensions (D, H, W)
+            transpose_order = transpose_order[-3:] 
+            sample['ctr_transform'].append(TransposeCTR(transpose_order.copy())) # last 3 dimensions (D, H, W)
+            sample['feat_transform'].append(TransposeFeatTransform(transpose_order))
+            
+            if 'ctr' in sample and len(sample['ctr']) > 0:
+                sample['ctr'] = sample['ctr'][:, transpose_order]
+                sample['rad'] = sample['rad'][:, transpose_order]
+                
+        return sample
+    
 class DetDataset(Dataset):
     """Detection dataset for inference
     """

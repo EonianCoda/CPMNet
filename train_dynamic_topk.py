@@ -6,11 +6,11 @@ import os
 import logging
 import numpy as np
 from typing import Tuple
-from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
+from networks.ResNet_3D_CPM_dynamic_topk import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
-from dataload.dataset_all_crop import TrainDataset, DetDataset
+from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
-from dataload.collate import train_all_crop_collate_fn, infer_collate_fn
+from dataload.collate import train_collate_fn, infer_collate_fn
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
@@ -214,9 +214,10 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: f
     rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
-    transform_list_train = [transform.Pad(output_size=crop_size, pad_value=pad_value),
-                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_zx, trans_zy=rot_zy))
+    transform_list_train = [transform.Pad(output_size=crop_size, pad_value=pad_value)]
+                            # transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    # transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_zx, trans_zy=rot_zy))
+    transform_list_train.append(transform.RandomRotate90(rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.5, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
@@ -234,23 +235,39 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
-    from dataload.crop_all_crop_fast import InstanceCrop
-    crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-    
-    # from dataload.crop_all_crop import InstanceCrop
-    # crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-    #                             sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
-    # logger.info('Use itk rotate {}'.format(args.rand_rot))
+    if args.not_use_itk_rotate:
+        from dataload.crop_fast import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        mmap_mode = 'c'
+        logger.info('Not use itk rotate')
+    elif args.use_rand_spacing:
+        from dataload.crop_rand_spacing import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                     rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        mmap_mode = None
+        logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
+    elif args.crop_partial:
+        from dataload.crop_partial import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        mmap_mode = None
+        logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
+    else:
+        from dataload.crop import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        mmap_mode = None
+        logger.info('Use itk rotate {}'.format(args.rand_rot))
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
-                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method)
+                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
     train_loader = DataLoader(train_dataset, 
                               batch_size=args.batch_size, 
                               shuffle=True,
-                              collate_fn=train_all_crop_collate_fn,
+                              collate_fn=train_collate_fn,
                               num_workers=min(args.batch_size, args.max_workers),
                               pin_memory=True,
                               drop_last=True, 

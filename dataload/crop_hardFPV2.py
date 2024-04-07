@@ -66,7 +66,8 @@ class InstanceCrop(object):
             if valid_mask.sum() == 0:
                 hard_fp_sample_score = np.zeros((0,))
             else:
-                hard_fp_sample_score = 0.2 + 0.8 * (hard_fp_all_prob - hard_fp_prob_threshold) / (1 - hard_fp_prob_threshold)
+                hard_fp_sample_score = hard_fp_all_prob.copy()
+                #0.2 + 0.8 * (hard_fp_all_prob - hard_fp_prob_threshold) / (1 - hard_fp_prob_threshold)
         else:
             hard_fp_all_loc = np.zeros((0, 3))
             hard_fp_all_rad = np.zeros((0, 3))
@@ -82,7 +83,7 @@ class InstanceCrop(object):
                 tp_sample_score = np.zeros((0,))
             else:
                 tp_sample_score = 0.8 * (1 - all_prob) + 0.2 * (1 - all_iou)
-            tp_sample_score = tp_sample_score * 1.2
+            # tp_sample_score = tp_sample_score
         else:
             all_prob = np.zeros((0,))
             all_iou = np.zeros((0,))
