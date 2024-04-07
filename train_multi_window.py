@@ -11,7 +11,7 @@ from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 from dataload.dataset_multi_window import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
-from dataload.split_combine import SplitComb
+from dataload.split_combine_multi_window import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 import torchvision
