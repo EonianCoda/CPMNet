@@ -59,7 +59,6 @@ def get_args():
     parser.add_argument('--crop_partial', action='store_true', default=False, help='crop partial nodule')
     parser.add_argument('--crop_tp_iou', type=float, default=0.5, help='iou threshold for crop tp use if crop_partial is True')
     parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
-    
     parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
@@ -112,6 +111,7 @@ def get_args():
     parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
+    parser.add_argument('--out_stride', type=int, default=4, help='output stride')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
@@ -163,6 +163,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                      dw_type = args.dw_type,
                      up_type = args.up_type,
                      detection_loss = detection_loss,
+                     out_stride = args.out_stride,
                      device = device)
     detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                  threshold = args.det_threshold, 

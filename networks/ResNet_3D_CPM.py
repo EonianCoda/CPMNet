@@ -157,7 +157,7 @@ class UpsamplingBlock(nn.Module):
         return x
 
 class ASPP(nn.Module):
-    def __init__(self, channels, ratio=4,
+    def __init__(self, channels, ratio=2,
                  dilations=[1, 1, 2, 3],
                  norm_type='batchnorm', act_type='ReLU'):
         super(ASPP, self).__init__()
@@ -228,7 +228,7 @@ class ClsRegHead(nn.Module):
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
                  norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
-                 first_stride=(2, 2, 2), detection_loss=None, device=None):
+                 first_stride=(2, 2, 2), detection_loss=None, device=None, out_stride=4):
         super(Resnet18, self).__init__()
         assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
         assert len(n_filters) == 4, 'The length of n_filters should be 4'
@@ -272,8 +272,15 @@ class Resnet18(nn.Module):
         self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         self.block22 = LayerBasic(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         
-        # Head
-        self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
+        if out_stride == 4:
+            # Head
+            self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
+        elif out_stride == 2:
+            self.block11_up = up_block(n_filters[1], n_filters[0], norm_type=norm_type, act_type=act_type)
+            self.block11_res = LayerBasic(1, n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
+            self.block11 = LayerBasic(2, n_filters[0] * 2, n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
+            # Head
+            self.head = ClsRegHead(in_channels=n_filters[0], feature_size=n_filters[0], conv_num=3, norm_type=head_norm, act_type=act_type)
         self._init_weight()
 
     def forward(self, inputs):
@@ -312,6 +319,12 @@ class Resnet18(nn.Module):
         x2 = self.block22_res(x2)
         x = torch.cat([x, x2], dim=1)
         x = self.block22(x)
+
+        if hasattr(self, 'block11_up'):
+            x = self.block11_up(x)
+            x1 = self.block11_res(x1)
+            x = torch.cat([x, x1], dim=1)
+            x = self.block11(x)
 
         out = self.head(x)
         if self.training:
