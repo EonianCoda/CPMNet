@@ -105,9 +105,7 @@ class TrainDataset(Dataset):
 
         for i in range(len(samples)):
             sample = samples[i]
-            image_lung = normalize_raw_image(sample['image'])
-            image_med = normalize_raw_image(sample['image'], window_level=40, window_width=400)
-            sample['image'] = np.concatenate([image_lung, image_med], axis=0) # [2, z, y, x]
+            sample['image'] = normalize_raw_image(sample['image'])
             sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
             if self.transform_post:
                 sample['ctr_transform'] = []
@@ -134,17 +132,11 @@ class DetDataset(Dataset):
             self.dicom_paths.append(dicom_path)
         self.splitcomb = SplitComb
         
+            
+            
+            
     def __len__(self):
         return len(self.dicom_paths)
-    
-    def load_image(self, dicom_path: str) -> np.ndarray:
-        """
-        Return:
-            A 3D numpy array with dimension order [D, H, W] (z, y, x)
-        """
-        image = np.load(dicom_path)
-        image = np.transpose(image, (2, 0, 1))
-        return image
     
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
@@ -152,10 +144,7 @@ class DetDataset(Dataset):
         series_name = self.series_infos[idx][1]
         
         image_spacing = self.image_spacing.copy() # z, y, x
-        image = self.load_image(dicom_path) # z, y, x # z, y, x
-        image_lung = normalize_raw_image(image)
-        image_med = normalize_raw_image(image, window_level=40, window_width=400)
-        image = np.stack([image_lung, image_med], axis=0)
+        image = load_image(dicom_path) # z, y, x
         image = normalize_processed_image(image, self.norm_method)
 
         data = {}

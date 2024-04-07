@@ -14,7 +14,7 @@ class SplitComb():
 
     def split(self, data):
         splits = []
-        d, h, w = data.shape
+        _, d, h, w = data.shape
 
         # Number of splits in each dimension
         nz = int(np.ceil(float(d) / self.stride_size[0]))
