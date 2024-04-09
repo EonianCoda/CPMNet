@@ -7,7 +7,7 @@ from matplotlib import pyplot as plt
 
 from dataload.utils import ALL_LOC, ALL_RAD, load_image, load_label, gen_dicom_path, gen_label_path
 from evaluationScript.nodule_finding_original import NoduleFinding
-from .convert import output2nodulefinding, label2nodulefinding, nodule2cude
+from .convert import noduleFinding2cude
 
 MAX_IMAGE_IN_ROW = 9
 SUBPLOT_WIDTH = 3.5
@@ -52,10 +52,9 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             zs = list(range(z1, z2))
             
         # Draw
-        fig = plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
-        
-        n_row = int(math.sqrt(len(zs)))
+        n_row = max(int(math.sqrt(len(zs))), 1)
         n_col = int(math.ceil(len(zs) / n_row))
+        fig = plt.figure(figsize=(int(n_col * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
         for i, z in enumerate(zs):
             ax = plt.subplot(n_row, n_col, i+1)
             ax.imshow(bboxed_image[z], cmap='gray')
@@ -67,13 +66,8 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             plt.savefig(save_path)
         plt.close(fig)
         
-def draw_pseu_bbox_and_label_on_image(image: np.ndarray, 
-                                    bboxes: np.ndarray, 
-                                    bboxes_pseu: np.ndarray,
-                                    color = (255, 0, 0), 
-                                    color_pseu = (0, 255, 0),
-                                    half_image = True, 
-                                    axis_off = True) -> None:
+def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bboxes_pseu: np.ndarray, color = (0, 255, 0), 
+                                    color_pseu = (255, 0, 0), half_image = True, axis_off = True, save_path = None) -> None:
     """
     """
     if len(image.shape) == 3:
@@ -89,35 +83,55 @@ def draw_pseu_bbox_and_label_on_image(image: np.ndarray,
     
     for bbox in bboxes:
         z1, y1, x1, z2, y2, x2 = bbox
+        center_x = (x1 + x2) / 2
+        # Crop image to save drawing time and space
+        if half_image:
+            if center_x < image.shape[2] / 2: # left
+                bboxed_image = bboxed_image[:, :, :bboxed_image.shape[2] // 2]
+            else: # right
+                bboxed_image = bboxed_image[:, :, bboxed_image.shape[2] // 2:]
+        
+        if (z2 - z1) > MAX_IMAGE_IN_ROW:
+            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+        else:
+            zs = list(range(z1, z2))
+            
         if (z2 - z1) > MAX_IMAGE_IN_ROW:
             zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
         else:
             zs = list(range(z1, z2))
         # Draw
-        plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+        n_row = max(int(math.sqrt(len(zs))), 1)
+        n_col = int(math.ceil(len(zs) / n_row))
+        fig = plt.figure(figsize=(int(n_col * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
         for i, z in enumerate(zs):
-            ax = plt.subplot(1, len(zs), i+1)
+            ax = plt.subplot(n_row, n_col, i+1)
             ax.imshow(bboxed_image[z], cmap='gray')
             ax.set_title(f'z={z}')
             if axis_off:
                 ax.axis('off')
         plt.tight_layout()
+        if save_path is not None:
+            plt.savefig(save_path)
+        plt.close(fig)
         
-    for bbox_pseu in bboxes_pseu:
-        z1, y1, x1, z2, y2, x2 = bbox_pseu
-        if (z2 - z1) > MAX_IMAGE_IN_ROW:
-            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
-        else:
-            zs = list(range(z1, z2))
-        # Draw
-        plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
-        for i, z in enumerate(zs):
-            ax = plt.subplot(1, len(zs), i+1)
-            ax.imshow(bboxed_image[z], cmap='gray')
-            ax.set_title(f'z={z} pseu')
-            if axis_off:
-                ax.axis('off')
-        plt.tight_layout()
+    if save_path is None:
+        for bbox_pseu in bboxes_pseu:
+            z1, y1, x1, z2, y2, x2 = bbox_pseu
+            if (z2 - z1) > MAX_IMAGE_IN_ROW:
+                zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+            else:
+                zs = list(range(z1, z2))
+            # Draw
+            fig = plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+            for i, z in enumerate(zs):
+                ax = plt.subplot(1, len(zs), i+1)
+                ax.imshow(bboxed_image[z], cmap='gray')
+                ax.set_title(f'z={z} pseu')
+                if axis_off:
+                    ax.axis('off')
+            plt.tight_layout()
+            plt.close(fig)
         
 def draw_bbox_on_image_with_label(img_path: str, label_path: str, color = (255, 0, 0)) -> np.ndarray:
     """
@@ -131,7 +145,7 @@ def draw_bbox_on_image_with_label(img_path: str, label_path: str, color = (255, 
     label = load_image(load_label(label_path, np.array([1.0, 1.0, 1.0]))) # use pixel rather than physical spacing
     
     nodule_findings = label2nodulefinding(label)
-    bboxes = nodule2cude(nodule_findings, image.shape)
+    bboxes = noduleFinding2cude(nodule_findings, image.shape)
     draw_bbox_on_image(image, bboxes, color)
     
     
@@ -186,7 +200,7 @@ if __name__ == '__main__':
         image = image * 2 - 1
 
         print(str(fn_nodule_finding))
-        fn_bboxes = nodule2cude(fn_nodule_finding, image.shape)
+        fn_bboxes = noduleFinding2cude(fn_nodule_finding, image.shape)
 
         mapped_image = ((image + 1) * 127.5).astype(np.uint8)
         # copy 3D image to 3 channels
