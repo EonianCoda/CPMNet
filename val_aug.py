@@ -115,7 +115,7 @@ if __name__ == '__main__':
         logger.info('Save validation results to "{}"'.format(exp_folder))
         logger.info('Val set: "{}"'.format(args.val_set))
         
-        save_name = '{}_{}'.format(os.path.basename(model_path).split('.')[0], os.path.basename(args.val_set).split('.')[0])
+        save_folder_name = '{}_{}_aug'.format(os.path.basename(model_path).split('.')[0], os.path.basename(args.val_set).split('.')[0])
         metrics = val(args = args,
                     model = model,
                     detection_postprocess=detection_postprocess,
@@ -126,12 +126,13 @@ if __name__ == '__main__':
                     exp_folder=exp_folder,
                     nodule_type_diameters=NODULE_TYPE_DIAMETERS,
                     min_d=args.min_d,
-                    epoch=save_name,
+                    epoch=save_folder_name,
                     nms_keep_top_k=args.det_scan_nms_keep_top_k,
                     min_size=args.min_size,
                     nodule_size_mode=args.nodule_size_mode)
         
-        with open(os.path.join(exp_folder, 'val_metrics.txt'), 'w') as f:
+        save_txt_path = os.path.join(exp_folder, 'val_metrics_{}.txt'.format(save_folder_name))
+        with open(save_txt_path, 'w') as f:
             for k, v in metrics.items():
                 if int(v) == v:
                     f.write('{}: {}\n'.format(k, int(v)))

@@ -63,6 +63,7 @@ def get_args():
     parser.add_argument('--crop_tp_iou', type=float, default=0.5, help='iou threshold for crop tp use if crop_partial is True')
     
     parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
+    parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.7, help='positive ratio in instance crop')
     parser.add_argument('--fp_ratio', type=float, default=0.2, help='negative ratio in instance crop')
@@ -96,11 +97,12 @@ def get_args():
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
-    parser.add_argument('--det_threshold', type=float, default=0.15, help='detection threshold')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
+    parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
+    parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # Network
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
@@ -238,7 +240,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     rand_trans = [int(s * 2/3) for s in overlap_size]
-    pad_value = get_image_padding_value(args.data_norm_method)
+    pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
@@ -285,7 +287,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 def get_hardFP_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
-    pad_value = get_image_padding_value(args.data_norm_method)
+    pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     

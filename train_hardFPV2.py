@@ -47,6 +47,7 @@ def get_args():
     parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 3000)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
     parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
+    parser.add_argument('--early_end_epoch', type=int, default=-1, help='end epoch')
     # Resume
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
@@ -336,6 +337,11 @@ if __name__ == '__main__':
     if args.pretrained_model_path != '':
         args.start_gen_hard_fp_epoch = 0
     
+    if args.early_end_epoch > 0:
+        end_epoch = args.early_end_epoch
+    else:
+        end_epoch = args.epochs
+    
     hard_FP_folder = os.path.join(exp_folder, 'hard_FP')
     os.makedirs(hard_FP_folder, exist_ok=True)
     if args.resume_folder != '' and os.path.exists(os.path.join(exp_folder, 'hard_FP.pkl')):
@@ -344,8 +350,7 @@ if __name__ == '__main__':
             hard_FP = pickle.load(f)
         train_loader.dataset.update_hard_FP(hard_FP, args.hard_fp_prob_threshold)
         
-        
-    for epoch in range(start_epoch, args.epochs + 1):
+    for epoch in range(start_epoch, end_epoch + 1):
         if epoch >= args.start_gen_hard_fp_epoch and epoch % args.gen_hard_fp_interval == 0:
             hard_FP = gen_hard_FP(model = model,
                                 dataloader = train_hard_fp_loader,

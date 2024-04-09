@@ -281,7 +281,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
 def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
-    pad_value = get_image_padding_value(args.data_norm_method)
+    pad_value = get_image_padding_value(args.data_norm_method, use_water=False) # do not pad water when validating
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
     
@@ -322,6 +322,9 @@ if __name__ == '__main__':
     setup_logging(level='info', log_file=os.path.join(exp_folder, 'log.txt'))
     init_seed(args.seed)
     write_yaml(os.path.join(exp_folder, 'setting.yaml'), vars(args))
+    
+    if args.pad_water:
+        logger.warning('Pad water in training but not in validation and test')
     
     # Prepare training
     model_save_dir = os.path.join(exp_folder, 'model')
@@ -418,6 +421,7 @@ if __name__ == '__main__':
     infer_save_dir = os.path.join(exp_folder, 'infer')
     os.makedirs(infer_save_dir, exist_ok=True)
     for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
+        load_states(model_path, device, model)
         logger.info('Load best model from "{}"'.format(model_path))
         train_infer_metrics = val(args = args,
                                 model = model,
@@ -428,7 +432,7 @@ if __name__ == '__main__':
                                 series_list_path=args.train_set,
                                 nodule_type_diameters=NODULE_TYPE_DIAMETERS,
                                 exp_folder=exp_folder,
-                                epoch = 'test_best_{}'.format(target_metric),
+                                epoch = 'infer_best_{}'.format(target_metric),
                                 min_d=args.min_d,
                                 min_size=args.min_size,
                                 nodule_size_mode=args.nodule_size_mode)
