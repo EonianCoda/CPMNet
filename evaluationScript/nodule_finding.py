@@ -43,6 +43,7 @@ class NoduleFinding:
     def set_match(self, match_iou: float, match_nodule_finding, force=False):
         # if the nodule is a ground truth nodule, TH match_iou is the iou between the nearest candidate and the ground truth
         # if the nodule is a candidate, TH match_iou is the iou between the candidate and the ground truth
+        match_iou = to_float(match_iou)
         if self.match_nodule_finding is None or match_iou > self.match_iou or force:
             self.match_iou = match_iou
             if match_nodule_finding is not None:
