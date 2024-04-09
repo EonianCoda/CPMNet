@@ -34,15 +34,17 @@ def val(args,
         image_spacing: List[float],
         series_list_path: str,
         exp_folder: str,
-        epoch = 0,
+        epoch: str = 0,
         batch_size: int = 8,
         nms_keep_top_k: int = 40,
         nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
         min_size: int = 0,
         nodule_size_mode: str = 'seg_size') -> Dict[str, float]:
-    
-    save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
+    if str(epoch).isdigit():
+        save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
+    else:
+        save_dir = os.path.join(exp_folder, 'annotation', epoch)
     os.makedirs(save_dir, exist_ok=True)
     if min_d != 0:
         logger.info('When validating, ignore nodules with depth less than {}'.format(min_d))

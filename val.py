@@ -45,6 +45,7 @@ def get_args():
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
+    parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
     parser.add_argument('--no_do_padding', action='store_true', default=False, help='do padding or not')
     parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
@@ -113,6 +114,8 @@ if __name__ == '__main__':
         write_yaml(os.path.join(exp_folder, 'val_config.yaml'), args)
         logger.info('Save validation results to "{}"'.format(exp_folder))
         logger.info('Val set: "{}"'.format(args.val_set))
+        
+        save_name = '{}_{}'.format(os.path.basename(model_path).split('.')[0], os.path.basename(args.val_set).split('.')[0])
         metrics = val(args = args,
                     model = model,
                     detection_postprocess=detection_postprocess,
@@ -122,7 +125,9 @@ if __name__ == '__main__':
                     series_list_path=args.val_set,
                     exp_folder=exp_folder,
                     nodule_type_diameters=NODULE_TYPE_DIAMETERS,
+                    nms_keep_top_k=args.det_scan_nms_keep_top_k,
                     min_d=args.min_d,
+                    epoch=save_name,
                     min_size=args.min_size,
                     nodule_size_mode=args.nodule_size_mode)
         

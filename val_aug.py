@@ -37,6 +37,7 @@ def get_args():
     parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first')
+    parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # hyper-parameters
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
@@ -46,7 +47,6 @@ def get_args():
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
     parser.add_argument('--no_do_padding', action='store_true', default=False, help='do padding or not')
-    parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # other
@@ -114,6 +114,8 @@ if __name__ == '__main__':
         write_yaml(os.path.join(exp_folder, 'val_config.yaml'), args)
         logger.info('Save validation results to "{}"'.format(exp_folder))
         logger.info('Val set: "{}"'.format(args.val_set))
+        
+        save_name = '{}_{}'.format(os.path.basename(model_path).split('.')[0], os.path.basename(args.val_set).split('.')[0])
         metrics = val(args = args,
                     model = model,
                     detection_postprocess=detection_postprocess,
@@ -124,10 +126,14 @@ if __name__ == '__main__':
                     exp_folder=exp_folder,
                     nodule_type_diameters=NODULE_TYPE_DIAMETERS,
                     min_d=args.min_d,
+                    epoch=save_name,
                     nms_keep_top_k=args.det_scan_nms_keep_top_k,
                     min_size=args.min_size,
                     nodule_size_mode=args.nodule_size_mode)
         
         with open(os.path.join(exp_folder, 'val_metrics.txt'), 'w') as f:
             for k, v in metrics.items():
-                f.write('{}: {}\n'.format(k, v))
+                if int(v) == v:
+                    f.write('{}: {}\n'.format(k, int(v)))
+                else:
+                    f.write('{}: {:4f}\n'.format(k, v))

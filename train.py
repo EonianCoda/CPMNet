@@ -45,6 +45,7 @@ def get_args():
     parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 3000)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
     parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
+    parser.add_argument('--early_end_epoch', type=int, default=-1, help='end epoch')
     # Resume
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
@@ -294,6 +295,17 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     logger.info("There are {} test samples and {} batches in '{}'".format(len(test_loader.dataset), len(test_loader), args.test_set))
     return val_loader, test_loader
 
+def get_train_infer_dataloader(args) -> DataLoader:
+    crop_size = args.crop_size
+    overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
+    pad_value = get_image_padding_value(args.data_norm_method)
+    
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    
+    train_infer_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    train_infer_loader = DataLoader(train_infer_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
+    return train_infer_loader
+
 if __name__ == '__main__':
     args = get_args()
     
@@ -321,7 +333,13 @@ if __name__ == '__main__':
     
     if early_stopping is None:
         early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model)
-    for epoch in range(start_epoch, args.epochs + 1):
+        
+    if args.early_end_epoch > 0:
+        end_epoch = args.early_end_epoch
+    else:
+        end_epoch = args.epochs
+        
+    for epoch in range(start_epoch, end_epoch + 1):
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,
@@ -393,5 +411,32 @@ if __name__ == '__main__':
             f.write('-' * 30 + '\n')
             max_length = max([len(key) for key in test_metrics.keys()])
             for key, value in test_metrics.items():
+                f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
+    # Infer train set
+    logger.info('Infer train set')
+    train_infer_loader = get_train_infer_dataloader(args)
+    infer_save_dir = os.path.join(exp_folder, 'infer')
+    os.makedirs(infer_save_dir, exist_ok=True)
+    for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
+        logger.info('Load best model from "{}"'.format(model_path))
+        train_infer_metrics = val(args = args,
+                                model = model,
+                                detection_postprocess=detection_postprocess,
+                                val_loader = train_infer_loader,
+                                device = device,
+                                image_spacing = IMAGE_SPACING,
+                                series_list_path=args.train_set,
+                                nodule_type_diameters=NODULE_TYPE_DIAMETERS,
+                                exp_folder=exp_folder,
+                                epoch = 'test_best_{}'.format(target_metric),
+                                min_d=args.min_d,
+                                min_size=args.min_size,
+                                nodule_size_mode=args.nodule_size_mode)
+        write_metrics(train_infer_metrics, epoch, 'infer_train/best_{}'.format(target_metric), writer)
+        with open(os.path.join(infer_save_dir, 'infer_train_best_{}.txt'.format(target_metric)), 'w') as f:
+            f.write('Best epoch: {}\n'.format(best_epoch))
+            f.write('-' * 30 + '\n')
+            max_length = max([len(key) for key in train_infer_metrics.keys()])
+            for key, value in train_infer_metrics.items():
                 f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
     writer.close()
