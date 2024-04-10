@@ -71,7 +71,7 @@ def val_data_prepare(args):
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
     
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_collate_fn, pin_memory=True)
     

@@ -281,7 +281,7 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method)
     
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)

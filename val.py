@@ -46,7 +46,7 @@ def get_args():
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
-    parser.add_argument('--no_do_padding', action='store_true', default=False, help='do padding or not')
+    parser.add_argument('--do_padding', action='store_true', default=False, help='do padding or not')
     parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # other
@@ -76,12 +76,12 @@ def val_data_prepare(args):
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
-    if args.no_do_padding:
-        logger.info('Do padding: False')
-    else:
+    if args.do_padding:
         logger.info('Do padding: True, pad value: {}'.format(pad_value))
+    else:
+        logger.info('Do padding: False')
     
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=not args.no_do_padding)
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=args.do_padding)
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_collate_fn, pin_memory=True)
     
@@ -132,9 +132,10 @@ if __name__ == '__main__':
                     nodule_size_mode=args.nodule_size_mode)
         
         save_txt_path = os.path.join(exp_folder, 'val_metrics_{}.txt'.format(save_folder_name))
+        max_length = max([len(key) for key in metrics.keys()])
         with open(save_txt_path, 'w') as f:
             for k, v in metrics.items():
                 if int(v) == v:
-                    f.write('{}: {}\n'.format(k, int(v)))
+                    f.write('{}: {}\n'.format(k.ljust(max_length), int(v)))
                 else:
-                    f.write('{}: {:4f}\n'.format(k, v))
+                    f.write('{}: {:.4f}\n'.format(k.ljust(max_length), v))

@@ -93,7 +93,6 @@ class LayerBasic(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         return x
-
 class ELAN_Layer(nn.Module):
     def __init__(self, n_stages: int, in_channels: int, out_channels: int, stride=1, norm_type='batchnorm', act_type='ReLU', se=False, ratio=2):
         super(ELAN_Layer, self).__init__()
@@ -134,7 +133,6 @@ class ELAN_Layer(nn.Module):
         x = torch.cat(feats, dim=1)
         x = self.trans(x)
         return x
-
 class DownsamplingConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=2, norm_type='batchnorm', act_type='ReLU'):
         super(DownsamplingConvBlock, self).__init__()
@@ -198,7 +196,7 @@ class UpsamplingBlock(nn.Module):
         return x
 
 class ASPP(nn.Module):
-    def __init__(self, channels, ratio=4,
+    def __init__(self, channels, ratio=2,
                  dilations=[1, 1, 2, 3],
                  norm_type='batchnorm', act_type='ReLU'):
         super(ASPP, self).__init__()
@@ -269,7 +267,7 @@ class ClsRegHead(nn.Module):
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
                  norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
-                 first_stride=(2, 2, 2), detection_loss=None, device=None):
+                 first_stride=(2, 2, 2), detection_loss=None, device=None, out_stride=4):
         super(Resnet18, self).__init__()
         assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
         assert len(n_filters) == 4, 'The length of n_filters should be 4'
@@ -313,8 +311,15 @@ class Resnet18(nn.Module):
         self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         self.block22 = ELAN_Layer(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         
-        # Head
-        self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
+        if out_stride == 4:
+            # Head
+            self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
+        elif out_stride == 2:
+            self.block11_up = up_block(n_filters[1], n_filters[0], norm_type=norm_type, act_type=act_type)
+            self.block11_res = LayerBasic(1, n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
+            self.block11 = ELAN_Layer(2, n_filters[0] * 2, n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
+            # Head
+            self.head = ClsRegHead(in_channels=n_filters[0], feature_size=n_filters[0], conv_num=3, norm_type=head_norm, act_type=act_type)
         self._init_weight()
 
     def forward(self, inputs):
@@ -354,10 +359,16 @@ class Resnet18(nn.Module):
         x = torch.cat([x, x2], dim=1)
         x = self.block22(x)
 
+        if hasattr(self, 'block11_up'):
+            x = self.block11_up(x)
+            x1 = self.block11_res(x1)
+            x = torch.cat([x, x1], dim=1)
+            x = self.block11(x)
+
         out = self.head(x)
         if self.training:
-            cls_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
-            return cls_loss, shape_loss, offset_loss, iou_loss
+            pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
+            return pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss
         return out
 
     def _init_weight(self):
@@ -435,7 +446,9 @@ class DetectionLoss(nn.Module):
         Returns:
             torch.Tensor: The calculated classification loss
         """
-        classification_losses = []
+        # classification_losses = []
+        pos_losses = []
+        neg_losses = []
         batch_size = pred.shape[0]
         for j in range(batch_size):
             pred_b = pred[j]
@@ -461,7 +474,6 @@ class DetectionLoss(nn.Module):
                 
                 Negative_loss = cls_loss[record_targets == 0]
                 Positive_loss = cls_loss[record_targets == 1]
-                
                 if num_neg != -1:
                     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
                     Negative_loss = Negative_loss[neg_idcs] 
@@ -470,8 +482,9 @@ class DetectionLoss(nn.Module):
                 
                 Positive_loss = Positive_loss.sum()
                 Negative_loss = Negative_loss.sum()
-                cls_loss = Positive_loss + Negative_loss
-
+                # cls_loss = Positive_loss + Negative_loss
+                pos_losses.append(Positive_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
+                neg_losses.append(Negative_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
             else:
                 Negative_loss = cls_loss[record_targets == 0]
                 if num_neg != -1:
@@ -481,9 +494,20 @@ class DetectionLoss(nn.Module):
                 _, keep_idx = torch.topk(Negative_loss, num_hard)
                 Negative_loss = Negative_loss[keep_idx]
                 Negative_loss = Negative_loss.sum()
-                cls_loss = Negative_loss
-            classification_losses.append(cls_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
-        return torch.mean(torch.stack(classification_losses))
+                # cls_loss = Negative_loss
+                neg_losses.append(Negative_loss)
+                
+        if len(pos_losses) == 0:
+            pos_loss = torch.tensor(0.0, device=pred.device)
+        else:
+            pos_loss = torch.mean(torch.stack(pos_losses))
+            
+        if len(neg_losses) == 0:
+            neg_loss = torch.tensor(0.0, device=pred.device)
+        else:
+            neg_loss = torch.mean(torch.stack(neg_losses))
+        
+        return pos_loss, neg_loss
     
     @staticmethod
     def target_proprocess(annotations: torch.Tensor, 
@@ -682,11 +706,11 @@ class DetectionLoss(nn.Module):
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         fg_mask = target_scores.squeeze(-1).bool()
-        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), 
-                                              num_hard=self.cls_num_hard, 
-                                              num_neg=self.cls_num_neg,
-                                              fn_weight=self.cls_fn_weight, 
-                                              fn_threshold=self.cls_fn_threshold)
+        pos_cls_loss, neg_cls_loss = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), 
+                                                num_hard=self.cls_num_hard, 
+                                                num_neg=self.cls_num_neg,
+                                                fn_weight=self.cls_fn_weight, 
+                                                fn_threshold=self.cls_fn_threshold)
                                               
         if fg_mask.sum() == 0:
             reg_losses = torch.tensor(0).float().to(device)
@@ -695,9 +719,9 @@ class DetectionLoss(nn.Module):
         else:
             reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
-        return classification_losses, reg_losses, offset_losses, iou_losses
+        return pos_cls_loss, neg_cls_loss, reg_losses, offset_losses, iou_losses
 
 class DetectionPostprocess(nn.Module):
     def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96]):
@@ -708,7 +732,7 @@ class DetectionPostprocess(nn.Module):
         self.nms_topk = nms_topk
         self.crop_size = crop_size
 
-    def forward(self, output, device):
+    def forward(self, output, device, is_logits=True):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
@@ -719,7 +743,9 @@ class DetectionPostprocess(nn.Module):
         pred_shapes = Shape.view(batch_size, 3, -1)
         pred_offsets = Offset.view(batch_size, 3, -1)
 
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous().sigmoid()
+        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        if is_logits:
+            pred_scores = pred_scores.sigmoid()
         pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         

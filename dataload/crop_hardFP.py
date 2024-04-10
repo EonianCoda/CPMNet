@@ -150,14 +150,12 @@ class InstanceCrop(object):
         ## Sample patches
         
         tp_nums = np.array(tp_nums)
-        tp_idx = tp_nums > 0
-        neg_idx = tp_nums == 0
         hard_fp_nums = np.array(hard_fp_nums)
-        hard_fp_idx = (hard_fp_nums > 0) & (~tp_idx)
-
-        tp_and_hard_fp_idx = tp_idx & hard_fp_idx
-        tp_idx = tp_idx & (~tp_and_hard_fp_idx)
-        hard_fp_idx = hard_fp_idx & (~tp_and_hard_fp_idx)
+        
+        tp_and_hard_fp_idx = (tp_nums > 0) & (hard_fp_nums > 0)
+        tp_idx = (tp_nums > 0) & (~tp_and_hard_fp_idx)
+        hard_fp_idx = (hard_fp_nums > 0) & (~tp_and_hard_fp_idx)
+        neg_idx = (~tp_idx) & (~hard_fp_idx) & (~tp_and_hard_fp_idx)
         # Has TP and hard FP
         if tp_and_hard_fp_idx.sum() > 0:
             tp_and_hard_fp_prob = (self.tp_ratio + self.fp_ratio) / tp_and_hard_fp_idx.sum()
@@ -172,14 +170,13 @@ class InstanceCrop(object):
             
         # Hard FP
         if hard_fp_idx.sum() > 0:
-            if tp_prob == 0: # If there is no TP, we need to sample hard FP with higher probability
+            if tp_prob == 0 and tp_and_hard_fp_prob == 0: # If there is no TP, we need to sample hard FP with higher probability
                 hard_fp_prob = self.tp_ratio / hard_fp_idx.sum()
             else:
                 hard_fp_prob = self.fp_ratio / hard_fp_idx.sum()
         else:
             hard_fp_prob = 0
         # Other
-        neg_idx = neg_idx & (~hard_fp_idx)
         p = np.zeros(shape=tp_nums.shape)
         p[tp_idx] = tp_prob
         p[hard_fp_idx] = hard_fp_prob

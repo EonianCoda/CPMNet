@@ -306,7 +306,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=True)
     
     # Build unlabeled detection dataloader for generating pseudo labels
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     det_dataset_u = DetDataset(series_list_path = args.unlabeled_train_set, 
                                SplitComb=split_comber, 
                                image_spacing=IMAGE_SPACING, 
@@ -323,7 +323,7 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method)
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value)
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
     # Build val dataloader
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
