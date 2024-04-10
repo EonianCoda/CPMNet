@@ -22,7 +22,7 @@ class InstanceCrop(object):
     """
 
     def __init__(self, crop_size, overlap_ratio: float = 0.25, rand_trans=None, rand_rot=None, instance_crop=True, 
-                 tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0], tp_iou=0.1):
+                 tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0], tp_iou=0.5):
         """This is crop function with spatial augmentation for training Lesion Detection.
 
         Arguments:
@@ -98,10 +98,12 @@ class InstanceCrop(object):
         
         crop_centers = [*product(z_crop_centers, y_crop_centers, x_crop_centers)]
         crop_centers = np.array(crop_centers)
-        
+        if self.rand_trans is not None:
+            crop_centers = crop_centers + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(crop_centers), 3))
+            
         if self.instance_crop and len(instance_loc) > 0:
             if self.rand_trans is not None:
-                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(instance_loc), 3))
+                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(instance_loc), 3))
             else:
                 instance_crop = instance_loc
             crop_centers = np.append(crop_centers, instance_crop, axis=0)
@@ -110,8 +112,6 @@ class InstanceCrop(object):
         tp_nums = []
         for i in range(len(crop_centers)):
             C = crop_centers[i]
-            if self.rand_trans is not None:
-                C = C + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=3)
 
             O = C - np.array(crop_size) / 2
             Z = O + np.array([crop_size[0] - 1, 0, 0])
@@ -124,8 +124,8 @@ class InstanceCrop(object):
                                         [-self.rand_rot[2], self.rand_rot[2]], rot_center=C, p=0.8)
             matrixs.append(matrix)
             # According to the matrixs, we can decide if the crop is foreground or background
-            bb_min = np.maximum(matrix[0] - 10, 0)
-            bb_max = bb_min + crop_size + 20
+            bb_min = np.maximum(matrix[0] - 5, 0)
+            bb_max = bb_min + crop_size + 10
             if len(all_loc) == 0:
                 tp_num = 0
             else:

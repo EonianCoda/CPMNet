@@ -58,7 +58,7 @@ def get_args():
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first', help='memory format of model, channels_first or channels_last, channels_last is faster on linux') # channels_last is faster on linux
     parser.add_argument('--crop_partial', action='store_true', default=False, help='crop partial nodule')
-    parser.add_argument('--crop_tp_iou', type=float, default=0.5, help='iou threshold for crop tp use if crop_partial is True')
+    parser.add_argument('--crop_tp_iou', type=float, default=0.3, help='iou threshold for crop tp use if crop_partial is True')
     parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
     parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # Data Augmentation
@@ -151,7 +151,6 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                                    pos_ignore_ratio = args.pos_ignore_ratio,
                                    cls_num_neg=args.cls_num_neg,
                                    cls_num_hard=args.cls_num_hard,
-                                   cls_neg_pos_ratio=args.cls_neg_pos_ratio,
                                    cls_fn_weight = args.cls_fn_weight,
                                    cls_fn_threshold = args.cls_fn_threshold,
                                    cls_neg_pos_ratio = args.cls_neg_pos_ratio)

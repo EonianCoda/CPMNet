@@ -89,7 +89,7 @@ def train(args,
             progress_bar.set_postfix(loss = avg_loss.avg,
                                     pos_cls = avg_pos_cls_loss.avg,
                                     neg_cls = avg_neg_cls_loss.avg,
-                                    cls_Loss = avg_pos_cls_loss.avg,
+                                    cls_Loss = avg_cls_loss.avg,
                                     shape_loss = avg_shape_loss.avg,
                                     offset_loss = avg_offset_loss.avg,
                                     iou_loss = avg_iou_loss.avg)
