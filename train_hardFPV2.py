@@ -94,9 +94,12 @@ def get_args():
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
     parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
-    parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
+    parser.add_argument('--cls_neg_pos_ratio', type=int, default=100, help='ratio of negatives to positives in positive samples')
+    parser.add_argument('--cls_num_hard', type=int, default=100, help='number of hard negatives in negtative samples(-1 means all)')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
+    parser.add_argument('--cls_hard_fp_weight', type=float, default=-1, help='weights of cls_hard_fp')
+    parser.add_argument('--cls_hard_fp_threshold', type=float, default=-1, help='threshold of cls_hard_fp')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
@@ -118,9 +121,10 @@ def get_args():
     parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
+    parser.add_argument('--out_stride', type=int, default=4, help='output stride')
     # Hard FP
-    parser.add_argument('--gen_hard_fp_interval', type=int, default=30, help='generate hard FP interval')
-    parser.add_argument('--hard_fp_prob_threshold', type=float, default=0.5, help='hard FP probability threshold')
+    parser.add_argument('--gen_hard_fp_interval', type=int, default=40, help='generate hard FP interval')
+    parser.add_argument('--hard_fp_prob_threshold', type=float, default=0.7, help='hard FP probability threshold')
     parser.add_argument('--start_gen_hard_fp_epoch', type=int, default=50, help='start to generate hard FP from this epoch')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
@@ -171,6 +175,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                      dw_type = args.dw_type,
                      up_type = args.up_type,
                      detection_loss = detection_loss,
+                     out_stride = args.out_stride,
                      device = device)
     detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                  threshold = args.det_threshold, 
@@ -285,6 +290,17 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                               persistent_workers=True)
     logger.info("There are {} training samples and {} batches in '{}'".format(len(train_loader.dataset), len(train_loader), args.train_set))
     return train_loader
+
+def get_train_infer_dataloader(args) -> DataLoader:
+    crop_size = args.crop_size
+    overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
+    pad_value = get_image_padding_value(args.data_norm_method)
+    
+    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
+    
+    train_infer_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    train_infer_loader = DataLoader(train_infer_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
+    return train_infer_loader
 
 def get_hardFP_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     crop_size = args.crop_size
@@ -441,5 +457,33 @@ if __name__ == '__main__':
             f.write('-' * 30 + '\n')
             max_length = max([len(key) for key in test_metrics.keys()])
             for key, value in test_metrics.items():
+                f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
+    # Infer train set
+    logger.info('Infer train set')
+    train_infer_loader = get_train_infer_dataloader(args)
+    infer_save_dir = os.path.join(exp_folder, 'infer')
+    os.makedirs(infer_save_dir, exist_ok=True)
+    for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
+        load_states(model_path, device, model)
+        logger.info('Load best model from "{}"'.format(model_path))
+        train_infer_metrics = val(args = args,
+                                model = model,
+                                detection_postprocess=detection_postprocess,
+                                val_loader = train_infer_loader,
+                                device = device,
+                                image_spacing = IMAGE_SPACING,
+                                series_list_path=args.train_set,
+                                nodule_type_diameters=NODULE_TYPE_DIAMETERS,
+                                exp_folder=exp_folder,
+                                epoch = 'infer_best_{}'.format(target_metric),
+                                min_d=args.min_d,
+                                min_size=args.min_size,
+                                nodule_size_mode=args.nodule_size_mode)
+        write_metrics(train_infer_metrics, epoch, 'infer_train/best_{}'.format(target_metric), writer)
+        with open(os.path.join(infer_save_dir, 'infer_train_best_{}.txt'.format(target_metric)), 'w') as f:
+            f.write('Best epoch: {}\n'.format(best_epoch))
+            f.write('-' * 30 + '\n')
+            max_length = max([len(key) for key in train_infer_metrics.keys()])
+            for key, value in train_infer_metrics.items():
                 f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
     writer.close()
