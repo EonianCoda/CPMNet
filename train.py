@@ -88,9 +88,12 @@ def get_args():
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
     parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
-    parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
+    parser.add_argument('--cls_neg_pos_ratio', type=int, default=100, help='ratio of negatives to positives in positive samples')
+    parser.add_argument('--cls_num_hard', type=int, default=100, help='number of hard negatives in negtative samples(-1 means all)')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
+    parser.add_argument('--cls_hard_fp_weight', type=float, default=-1, help='weights of cls_hard_fp')
+    parser.add_argument('--cls_hard_fp_threshold', type=float, default=-1, help='threshold of cls_hard_fp')
     # Val hyper-parameters
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
@@ -147,9 +150,11 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
                                    cls_num_neg=args.cls_num_neg,
-                                   cls_num_hard = args.cls_num_hard,
+                                   cls_num_hard=args.cls_num_hard,
+                                   cls_neg_pos_ratio=args.cls_neg_pos_ratio,
                                    cls_fn_weight = args.cls_fn_weight,
-                                   cls_fn_threshold = args.cls_fn_threshold)
+                                   cls_fn_threshold = args.cls_fn_threshold,
+                                   cls_neg_pos_ratio = args.cls_neg_pos_ratio)
                                    
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
