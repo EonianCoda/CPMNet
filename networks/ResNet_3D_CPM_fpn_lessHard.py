@@ -232,33 +232,26 @@ class FPN3D(nn.Module):
         # FPN
         self.P5_1 = ConvBlock(n_filters[-1], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
         self.P5_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
-        # self.P5_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
         # self.P5_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
         
-        # UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type=act_type)
         self.P4_1 = ConvBlock(n_filters[-2], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
         self.P4_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
-        # self.P4_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
         # self.P4_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
 
         self.P3_1 = ConvBlock(n_filters[-3], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
-        self.P3_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
+        if len(n_filters) == 4:
+            self.P3_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
+            # self.P3_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
+            self.P2_1 = ConvBlock(n_filters[-4], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
+            self.P2_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
+        else:
+            self.P3_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
 
-        # PAN
-        # self.P3_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
-        # self.P3_res = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
-        
-        # self.P4_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
-        # self.P4_res = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
-        
-        # self.P5_res = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
-        # self.P5_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
-        
     def forward(self, inputs):
-        # if getattr(self, 'P3_upsampled', None) is not None:
-        #     C2, C3, C4, C5 = inputs
-        # else:
-        #     C3, C4, C5 = inputs
+        if getattr(self, 'P3_upsampled', None) is not None:
+            C2, C3, C4, C5 = inputs
+        else:
+            C3, C4, C5 = inputs
         C3, C4, C5 = inputs
         P5_x = self.P5_1(C5)
         P5_upsampled_x = self.P5_upsampled(P5_x)
@@ -271,9 +264,15 @@ class FPN3D(nn.Module):
 
         P3_x = self.P3_1(C3)
         P3_x = P3_x + P4_upsampled_x
-        P3_x = self.P3_2(P3_x)
-        
-        return P3_x
+        if hasattr(self, 'P3_upsampled'):
+            P3_upsampled_x = self.P3_upsampled(P3_x)
+            P2_x = self.P2_1(C2)
+            P2_x = P2_x + P3_upsampled_x
+            P2_x = self.P2_2(P2_x)
+            return P2_x
+        else:
+            P3_x = self.P3_2(P3_x)
+            return P3_x
         
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
@@ -312,25 +311,11 @@ class Resnet18(nn.Module):
         else:
             self.dropout = None
             
-        # Decoder
-        # up_block = UpsamplingDeconvBlock if up_type == 'deconv' else UpsamplingBlock
-        # self.block33_up = up_block(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
-        # self.block33_res = LayerBasic(1, n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
-        # self.block33 = LayerBasic(2, n_filters[2] * 2, n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
-
-        # self.block22_up = up_block(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
-        # self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        # self.block22 = LayerBasic(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        
         if out_stride == 4:
             self.fpn = FPN3D(n_filters[1:], feature_size=n_filters[1], norm_type=norm_type, act_type=act_type)
             # Head
             self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
         elif out_stride == 2:
-            # self.block11_up = up_block(n_filters[1], n_filters[0], norm_type=norm_type, act_type=act_type)
-            # self.block11_res = LayerBasic(1, n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
-            # self.block11 = LayerBasic(2, n_filters[0] * 2, n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
-            
             self.fpn = FPN3D(n_filters, feature_size=n_filters[0], norm_type=norm_type, act_type=act_type)
             # Head
             self.head = ClsRegHead(in_channels=n_filters[0], feature_size=n_filters[0], conv_num=3, norm_type=head_norm, act_type=act_type)
@@ -367,22 +352,6 @@ class Resnet18(nn.Module):
             feats = self.fpn([x1, x2, x3, x4])
             
         "decode"
-        # x = self.block33_up(x)
-        # x3 = self.block33_res(x3)
-        # x = torch.cat([x, x3], dim=1)
-        # x = self.block33(x)
-
-        # x = self.block22_up(x)
-        # x2 = self.block22_res(x2)
-        # x = torch.cat([x, x2], dim=1)
-        # x = self.block22(x)
-
-        # if hasattr(self, 'block11_up'):
-        #     x = self.block11_up(x)
-        #     x1 = self.block11_res(x1)
-        #     x = torch.cat([x, x1], dim=1)
-        #     x = self.block11(x)
-
         out = self.head(feats)
         if self.training:
             cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
