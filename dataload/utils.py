@@ -1,8 +1,8 @@
 import os
 import json
 import numpy as np
-
 from typing import Dict, List
+
 DEFAULT_WINDOW_LEVEL = -300
 DEFAULT_WINDOW_WIDTH = 1400
 # HU MIN is -1000, HU MAX is 400
@@ -27,6 +27,9 @@ def gen_dicom_path(folder: str, series_name: str) -> str:
 def gen_label_path(dir_name: str, name: str) -> str:
     return os.path.join(dir_name, 'mask', f'{name}_nodule_count_crop.json')
 
+def gen_lobe_path(dir_name: str, name: str) -> str:
+    return os.path.join(dir_name, 'npy', f'{name}_lobe_crop.npz')
+
 def load_series_list(series_list_path: str) -> List[List[str]]:
     """
     Return:
@@ -43,6 +46,11 @@ def load_series_list(series_list_path: str) -> List[List[str]]:
         series_folder, file_name = series_info.split(',')
         series_list.append([series_folder, file_name])
     return series_list
+
+def load_lobe(lobe_path: str) -> np.ndarray:
+    lobe = np.load(lobe_path)['image']
+    lobe = np.transpose(lobe, (2, 0, 1))
+    return lobe
 
 def get_HU_MIN_MAX(window_level: int, window_width: int):
     hu_min = window_level - window_width // 2

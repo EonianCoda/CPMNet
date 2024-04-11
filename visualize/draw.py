@@ -11,7 +11,7 @@ from .convert import noduleFinding2cude
 
 MAX_IMAGE_IN_ROW = 9
 SUBPLOT_WIDTH = 3.5
-SUBPLOT_HEIGHT = 9
+SUBPLOT_HEIGHT = 3
 
 def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.ndarray:
     """
@@ -23,8 +23,8 @@ def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.
             image[z] = cv2.rectangle(image[z].copy(), (x1, y1), (x2, y2), color, 1)
     return image
 
-def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), 
-                       half_image = True, axis_off = True, save_path = None) -> None:
+def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), half_image = True, axis_off = True, 
+                       save_path = None, extra_sup_title = None) -> None:
     """
     Args:
         image: a 3D image with shape [Z, Y, X, 3]
@@ -54,20 +54,25 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
         # Draw
         n_row = max(int(math.sqrt(len(zs))), 1)
         n_col = int(math.ceil(len(zs) / n_row))
-        fig = plt.figure(figsize=(int(n_col * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+        fig = plt.figure(figsize=(int(n_col * SUBPLOT_WIDTH), n_row * SUBPLOT_HEIGHT))
         for i, z in enumerate(zs):
             ax = plt.subplot(n_row, n_col, i+1)
             ax.imshow(bboxed_image[z], cmap='gray')
             ax.set_title(f'z={z}')
             if axis_off:
                 ax.axis('off')
+        sup_title = 'ctrXYZ=({}, {}, {}), whd=({}, {}, {})'.format(int(center_x), int((y1 + y2) / 2), int((z1 + z2) / 2),
+                                                        int(x2 - x1), int(y2 - y1), int(z2 - z1))
+        if extra_sup_title is not None:
+            sup_title += ', ' + extra_sup_title
+        plt.suptitle(sup_title)
         plt.tight_layout()
         if save_path is not None:
             plt.savefig(save_path)
         plt.close(fig)
         
-def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bboxes_pseu: np.ndarray, color = (0, 255, 0), 
-                                    color_pseu = (255, 0, 0), half_image = True, axis_off = True, save_path = None) -> None:
+def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bboxes_pseu: np.ndarray, color = (0, 255, 0), color_pseu = (255, 0, 0), 
+                                      half_image = True, axis_off = True, save_path = None, extra_sup_title = None) -> None:
     """
     """
     if len(image.shape) == 3:
@@ -103,13 +108,18 @@ def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bbo
         # Draw
         n_row = max(int(math.sqrt(len(zs))), 1)
         n_col = int(math.ceil(len(zs) / n_row))
-        fig = plt.figure(figsize=(int(n_col * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+        fig = plt.figure(figsize=(int(n_col * SUBPLOT_WIDTH), n_row * SUBPLOT_HEIGHT))
         for i, z in enumerate(zs):
             ax = plt.subplot(n_row, n_col, i+1)
             ax.imshow(bboxed_image[z], cmap='gray')
             ax.set_title(f'z={z}')
             if axis_off:
                 ax.axis('off')
+        sup_title = 'ctrXYZ=({}, {}, {}), whd=({}, {}, {})'.format(int(center_x), int((y1 + y2) / 2), int((z1 + z2) / 2),
+                                                                    int(x2 - x1), int(y2 - y1), int(z2 - z1))
+        if extra_sup_title is not None:
+            sup_title += ', ' + extra_sup_title
+        plt.suptitle(sup_title)
         plt.tight_layout()
         if save_path is not None:
             plt.savefig(save_path)
@@ -123,13 +133,20 @@ def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bbo
             else:
                 zs = list(range(z1, z2))
             # Draw
-            fig = plt.figure(figsize=(int(len(zs) * SUBPLOT_WIDTH), SUBPLOT_HEIGHT))
+            n_row = max(int(math.sqrt(len(zs))), 1)
+            n_col = int(math.ceil(len(zs) / n_row))
+            fig = plt.figure(figsize=(int(n_col * SUBPLOT_WIDTH), n_row * SUBPLOT_HEIGHT))
             for i, z in enumerate(zs):
                 ax = plt.subplot(1, len(zs), i+1)
                 ax.imshow(bboxed_image[z], cmap='gray')
                 ax.set_title(f'z={z} pseu')
                 if axis_off:
                     ax.axis('off')
+            sup_title = 'ctrXYZ=({}, {}, {}), whd=({}, {}, {})'.format(int(center_x), int((y1 + y2) / 2), int((z1 + z2) / 2),
+                                                            int(x2 - x1), int(y2 - y1), int(z2 - z1))
+            if extra_sup_title is not None:
+                sup_title += ', ' + extra_sup_title
+            plt.suptitle(sup_title)
             plt.tight_layout()
             plt.close(fig)
         

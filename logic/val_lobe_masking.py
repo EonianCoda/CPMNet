@@ -69,73 +69,35 @@ def val(args,
         
     with get_progress_bar('Validation', len(val_loader)) as progress_bar:
         for sample in val_loader:
-            data = sample['split_images'] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
+            data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format)
+            lobes = sample['split_lobes'].to(device, non_blocking=True, memory_format=memory_format)
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
             image_shapes = sample['image_shapes']
-            all_ctr_transforms = sample['ctr_transforms'] # (N, num_aug)
-            all_feat_transforms = sample['feat_transforms'] # (N, num_aug)
-            transform_weights = sample['transform_weights'] # (N, num_aug)
             outputlist = []
-            transform_weights = torch.from_numpy(transform_weights).to(device, non_blocking=True)
-            num_aug = data.size(1)
+            
             for i in range(int(math.ceil(data.size(0) / batch_size))):
                 end = (i + 1) * batch_size
                 if end > data.size(0):
                     end = data.size(0)
-                input = data[i * batch_size:end] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
-                input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
+                input = data[i * batch_size:end]
+                lobe = lobes[i * batch_size:end]
                 if args.val_mixed_precision:
                     with torch.cuda.amp.autocast():
                         with torch.no_grad():
                             output = model(input)
+                            output = detection_postprocess(output, lobe, device=device)
                 else:
                     with torch.no_grad():
                         output = model(input)
-                # Ensemble the augmentations
-                Cls_output = output['Cls'] # (bs * num_aug, 1, 24, 24, 24)
-                Shape_output = output['Shape'] # (bs * num_aug, 3, 24, 24, 24)
-                Offset_output = output['Offset'] # (bs * num_aug, 3, 24, 24, 24)
-                
-                _, _, d, h, w = Cls_output.size()
-                Cls_output = Cls_output.view(-1, num_aug, 1, d, h, w)
-                Shape_output = Shape_output.view(-1, num_aug, 3, d, h, w)
-                Offset_output = Offset_output.view(-1, num_aug, 3, d, h, w)
-                
-                # ctr_transforms = all_ctr_transforms[i * batch_size:end] # (bs, num_aug)
-                feat_transforms = all_feat_transforms[i * batch_size:end] # (bs, num_aug)
-                for b_i in range(len(feat_transforms)):
-                    for aug_i in range(num_aug):
-                        if len(feat_transforms[b_i][aug_i]) > 0:
-                            for trans in reversed(feat_transforms[b_i][aug_i]):
-                                Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
-                                Shape_output[b_i, aug_i, ...] = trans.backward(Shape_output[b_i, aug_i, ...])
-                                # Offset_output[b_i, aug_i, ...] = trans.backward(Offset_output[b_i, aug_i, ...], sign_value=True)
-                transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
-                transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
-                Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
-                Cls_output = Cls_output.sigmoid()
-                ignore_offset = 2
-                Cls_output[:, :, 0:ignore_offset, :, :] = 0
-                Cls_output[:, :, :, 0:ignore_offset, :] = 0
-                Cls_output[:, :, :, :, 0:ignore_offset] = 0
-                Cls_output[:, :, -ignore_offset:, :, :] = 0
-                Cls_output[:, :, :, -ignore_offset:, :] = 0
-                Cls_output[:, :, :, :, -ignore_offset:] = 0
-                
-                Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
-                Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
-                # Offset_output = (Offset_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
-                
-                output = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
-                output = detection_postprocess(output, device=device, is_logits=False) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                        output = detection_postprocess(output, lobe, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputlist.append(output.data.cpu().numpy())
-                del input, Cls_output, Shape_output, Offset_output, output
-
+            
             outputs = np.concatenate(outputlist, 0)
             
             start_idx = 0
+            del data
             for i in range(len(num_splits)):
                 n_split = num_splits[i]
                 nzhw = nzhws[i]
@@ -157,7 +119,7 @@ def val(args,
                 start_idx += n_split
                 
             progress_bar.update(1)
-    
+            torch.cuda.empty_cache()
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
     froc_det_thresholds = args.froc_det_thresholds
     froc_info_list, fixed_out = evaluator.evaluation(preds=all_preds,

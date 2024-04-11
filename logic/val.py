@@ -35,7 +35,7 @@ def val(args,
         series_list_path: str,
         exp_folder: str,
         epoch: str = 0,
-        batch_size: int = 16,
+        batch_size: int = 8,
         nms_keep_top_k: int = 40,
         nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
@@ -95,6 +95,7 @@ def val(args,
             outputs = np.concatenate(outputlist, 0)
             
             start_idx = 0
+            del data
             for i in range(len(num_splits)):
                 n_split = num_splits[i]
                 nzhw = nzhws[i]
@@ -116,7 +117,7 @@ def val(args,
                 start_idx += n_split
                 
             progress_bar.update(1)
-    
+            torch.cuda.empty_cache()
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
     froc_det_thresholds = args.froc_det_thresholds
     froc_info_list, fixed_out = evaluator.evaluation(preds=all_preds,

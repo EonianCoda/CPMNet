@@ -59,19 +59,19 @@ if __name__ == '__main__':
     nodules = [pred2nodulefinding(line) for line in lines]
     
     # Draw hard false positive nodules
-    # hard_FP_nodules = defaultdict(list)
-    # for n in nodules:
-    #     if n.prob >= args.hard_FP_thresh and not n.is_gt:
-    #         hard_FP_nodules[n.series_name].append(n)
-    # with get_progress_bar('Visualizing Hard FP', len(hard_FP_nodules)) as pbar:
-    #     for series_name, nodule_findings in hard_FP_nodules.items():
-    #         img_path = gen_dicom_path(series_names_to_folder[series_name], series_name)
-    #         image = (load_image(img_path) * 255).astype(np.uint8)
-    #         for i, nodule in enumerate(nodule_findings):
-    #             save_path = os.path.join(hard_FP_save_folder, f'{series_name}_{i}.png')
-    #             bboxes = noduleFinding2cude([nodule], image.shape)
-    #             draw_bbox_on_image(image, bboxes, (0, 255, 0), half_image=args.half_image, save_path=save_path)
-    #         pbar.update(1)
+    hard_FP_nodules = defaultdict(list)
+    for n in nodules:
+        if n.prob >= args.hard_FP_thresh and not n.is_gt:
+            hard_FP_nodules[n.series_name].append(n)
+    with get_progress_bar('Visualizing Hard FP', len(hard_FP_nodules)) as pbar:
+        for series_name, nodule_findings in hard_FP_nodules.items():
+            img_path = gen_dicom_path(series_names_to_folder[series_name], series_name)
+            image = (load_image(img_path) * 255).astype(np.uint8)
+            for i, nodule in enumerate(nodule_findings):
+                save_path = os.path.join(hard_FP_save_folder, f'{series_name}_{i}.png')
+                bboxes = noduleFinding2cude([nodule], image.shape)
+                draw_bbox_on_image(image, bboxes, (255, 0, 0), half_image=args.half_image, save_path=save_path, extra_sup_title=series_name)
+            pbar.update(1)
         
     # Draw TP nodules
     TP_nodules = defaultdict(list)
@@ -86,7 +86,7 @@ if __name__ == '__main__':
             for i, nodule in enumerate(nodule_findings):
                 save_path = os.path.join(TP_save_folder, f'{series_name}_{i}.png')
                 pred_bboxes, gt_bboxes = gtNoduleFinding2cube([nodule], image.shape)
-                draw_pseu_bbox_and_label_on_image(image, gt_bboxes, pred_bboxes, save_path=save_path, half_image=args.half_image)
+                draw_pseu_bbox_and_label_on_image(image, gt_bboxes, pred_bboxes, save_path=save_path, half_image=args.half_image, extra_sup_title=series_name)
             pbar.update(1)
             
     # Draw FN nodules
@@ -102,5 +102,5 @@ if __name__ == '__main__':
             for i, nodule in enumerate(nodule_findings):
                 save_path = os.path.join(FN_save_folder, f'{series_name}_{i}.png')
                 bboxes = noduleFinding2cude([nodule], image.shape)
-                draw_bbox_on_image(image, bboxes, (0, 255, 0), half_image=args.half_image, save_path=save_path)
+                draw_bbox_on_image(image, bboxes, (0, 255, 0), half_image=args.half_image, save_path=save_path, extra_sup_title=series_name)
             pbar.update(1)
