@@ -252,7 +252,6 @@ class FPN3D(nn.Module):
             C2, C3, C4, C5 = inputs
         else:
             C3, C4, C5 = inputs
-        C3, C4, C5 = inputs
         P5_x = self.P5_1(C5)
         P5_upsampled_x = self.P5_upsampled(P5_x)
         # P5_x = self.P5_2(P5_x)
