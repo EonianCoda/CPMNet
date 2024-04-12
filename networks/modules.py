@@ -60,6 +60,8 @@ def act_layer(act='ReLU'):
         return nn.PReLU(inplace=True)
     elif act == 'RRelu':
         return nn.RReLU(inplace=True)
+    elif act == 'Silu':
+        return nn.SiLU(inplace=True)
     else:
         return Identity()
 
