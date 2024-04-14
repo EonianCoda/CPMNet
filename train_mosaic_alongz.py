@@ -8,7 +8,7 @@ import numpy as np
 from typing import Tuple
 from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
 ### data ###
-from dataload.dataset_mosaic import TrainDataset, DetDataset
+from dataload.dataset_mosaic_alongz import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
 from dataload.split_combine import SplitComb
@@ -43,7 +43,7 @@ def get_args():
     parser.add_argument('--batch_size', type=int, default=6, help='input batch size for training (default: 6)')
     parser.add_argument('--val_batch_size', type=int, default=2, help='input batch size for validation (default: 2)')
     parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 3000)')
-    parser.add_argument('--mosaic_crop_size', nargs='+', type=int, default=[64, 64, 64], help='crop size')
+    parser.add_argument('--mosaic_crop_size', nargs='+', type=int, default=[48, 96, 96], help='crop size')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
     parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
     parser.add_argument('--early_end_epoch', type=int, default=-1, help='end epoch')
@@ -242,7 +242,8 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
-    from dataload.crop_mosaic import InstanceCrop
+    
+    from dataload.crop_mosaic_alongz import InstanceCrop
     crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                 sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
     mmap_mode = None
