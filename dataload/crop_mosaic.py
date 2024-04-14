@@ -144,7 +144,7 @@ class InstanceCrop(object):
         p[neg_idx] = (1. - p.sum()) / neg_idx.sum() if neg_idx.sum() > 0 else 0
         p = p * 1 / p.sum()
 
-        sample_indices = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=p, replace=False)
+        sample_indices = np.random.choice(np.arange(len(crop_centers)), size=8, p=p, replace=False)
         
         # Crop patches
         samples = []
