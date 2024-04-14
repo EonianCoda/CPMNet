@@ -3,6 +3,8 @@ import yaml
 import datetime
 from tqdm import tqdm
 from typing import Optional, Dict, Any
+from os.path import splitext
+from importlib import import_module
 
 def init_seed(seed: int):
     import torch
@@ -55,3 +57,13 @@ def load_yaml(path: str,
             if settings.get(key) != None:
                 settings[key] = value
     return settings
+
+def build_class(template: str) -> Any:
+    """Build a classs based on give template
+    """
+    class_name = splitext(template)[1].strip('.')
+    module_path = splitext(template)[0]
+    module = import_module(module_path)
+    cls = getattr(module, class_name)
+
+    return cls
