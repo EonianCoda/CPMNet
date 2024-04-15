@@ -72,24 +72,24 @@ class BasicBlockNew(nn.Module):
 
         return x
 
-class ELAN_Layer(nn.Module):
-    def __init__(self, n_stages: int, in_channels: int, out_channels: int, stride=1, norm_type='batchnorm', act_type='ReLU', se=False):
-        super(ELAN_Layer, self).__init__()
-        self.n_stages = n_stages
-        self.stem = BasicBlockNew(in_channels, out_channels, stride=stride, norm_type=norm_type, act_type=act_type, se=se)
-        for i in range(n_stages - 1):
-            if i == 0:
-                setattr(self, f'conv{i}', BasicBlockNew(out_channels // 2, out_channels, stride=1, norm_type=norm_type, act_type=act_type, se=se))
-            else:
-                setattr(self, f'conv{i}', BasicBlockNew(out_channels, out_channels, stride=1, norm_type=norm_type, act_type=act_type, se=se))
+# class ELAN_Layer(nn.Module):
+#     def __init__(self, n_stages: int, in_channels: int, out_channels: int, stride=1, norm_type='batchnorm', act_type='ReLU', se=False):
+#         super(ELAN_Layer, self).__init__()
+#         self.n_stages = n_stages
+#         self.stem = BasicBlockNew(in_channels, out_channels, stride=stride, norm_type=norm_type, act_type=act_type, se=se)
+#         for i in range(n_stages - 1):
+#             if i == 0:
+#                 setattr(self, f'conv{i}', BasicBlockNew(out_channels // 2, out_channels, stride=1, norm_type=norm_type, act_type=act_type, se=se))
+#             else:
+#                 setattr(self, f'conv{i}', BasicBlockNew(out_channels, out_channels, stride=1, norm_type=norm_type, act_type=act_type, se=se))
         
-        self.trans = ConvBlock(out_channels * n_stages, out_channels, kernel_size=1, act_type=act_type, norm_type=norm_type)
+#         self.trans = ConvBlock(out_channels * n_stages, out_channels, kernel_size=1, act_type=act_type, norm_type=norm_type)
         
-    def forward(self, x):
-        y = list(self.stem(x).chunk(2, 1))
-        for i in range(self.n_stages - 1):
-            y.append(getattr(self, f'conv{i}')(y[-1]))
-        return self.trans(torch.cat(y, 1))
+#     def forward(self, x):
+#         y = list(self.stem(x).chunk(2, 1))
+#         for i in range(self.n_stages - 1):
+#             y.append(getattr(self, f'conv{i}')(y[-1]))
+#         return self.trans(torch.cat(y, 1))
 
 class StemBlock(nn.Module):
     def __init__(self, in_channels, out_channels, norm_type='none', act_type='ReLU', num_conv=3):
@@ -325,22 +325,24 @@ class Resnet18(nn.Module):
         self.in_conv = StemBlock(n_channels, stem_filters, norm_type=norm_type, act_type=act_type)
         self.in_dw = ConvBlock(stem_filters, n_filters[0], stride=first_stride, norm_type=norm_type, act_type=act_type)
         
+        
+        conv_block = LayerBasic
         # Encoder
-        self.block1 = ELAN_Layer(n_blocks[0], n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
+        self.block1 = conv_block(n_blocks[0], n_filters[0], n_filters[0], norm_type=norm_type, act_type=act_type, se=se)
         
         dw_block = DownsamplingConvBlock if dw_type == 'conv' else DownsamplingBlock
         self.block1_dw = dw_block(n_filters[0], n_filters[1], norm_type=norm_type, act_type=act_type)
 
-        self.block2 = ELAN_Layer(n_blocks[1], n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
+        self.block2 = conv_block(n_blocks[1], n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
         self.block2_dw = dw_block(n_filters[1], n_filters[2], norm_type=norm_type, act_type=act_type)
 
-        self.block3 = ELAN_Layer(n_blocks[2], n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
+        self.block3 = conv_block(n_blocks[2], n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
         self.block3_dw = dw_block(n_filters[2], n_filters[3], norm_type=norm_type, act_type=act_type)
 
         if aspp:
             self.block4 = ASPP(n_filters[3], norm_type=norm_type, act_type=act_type)
         else:
-            self.block4 = ELAN_Layer(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
+            self.block4 = conv_block(n_blocks[3], n_filters[3], n_filters[3], norm_type=norm_type, act_type=act_type, se=se)
 
         # Dropout
         if dropout > 0:
@@ -459,7 +461,7 @@ class DetectionLoss(nn.Module):
         self.cls_hard_fp_threshold = cls_hard_fp_threshold
         
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.5 , gamma = 2.0, num_neg = 10000, num_hard = 100, 
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, 
                  neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, hard_fp_weight = 2.0, hard_fp_threshold = 0.7):
         """
         Calculates the classification loss using focal loss and binary cross entropy.

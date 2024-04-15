@@ -109,7 +109,7 @@ def get_args():
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.2, help='threshold of pseudo background')
-    parser.add_argument('--semi_ema_alpha', type=int, default=0.999, help='alpha of ema')
+    parser.add_argument('--semi_ema_alpha', type=int, default=0.998, help='alpha of ema')
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     parser.add_argument('--pseudo_update_interval', type=int, default=30, help='pseudo label update interval')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
@@ -225,7 +225,7 @@ def prepare_training(args, device, num_training_steps):
     if args.apply_ema:
         ema_warmup_steps = int(args.start_val_epoch * num_training_steps * 1.2 + 1)
         logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_decay, ema_warmup_steps))
-        ema = EMA(model_s, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
+        ema = EMA(model_s, momentum = args.ema_decay, warmup_steps = ema_warmup_steps)
         ema.register()
     else:
         ema = None

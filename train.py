@@ -5,8 +5,7 @@ import torch
 import os
 import logging
 import numpy as np
-from typing import Tuple
-from networks.ResNet_3D_CPM import Resnet18, DetectionPostprocess, DetectionLoss
+from typing import Tuple, Any
 ### data ###
 from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
@@ -26,7 +25,7 @@ from optimizer.scheduler import GradualWarmupScheduler
 from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
-from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
+from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml, build_class
 from logic.early_stopping_save import EarlyStoppingSave
 from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 
@@ -75,8 +74,11 @@ def get_args():
     parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
     parser.add_argument('--decay_gamma', type=float, default=0.05, help='decay gamma')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
+    parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
+    # EMA
     parser.add_argument('--apply_ema', action='store_true', default=False, help='apply ema')
-    parser.add_argument('--ema_decay', type=float, default=0.999, help='ema decay')
+    parser.add_argument('--ema_momentum', type=float, default=0.998, help='ema decay')
+    parser.add_argument('--ema_warmup_epochs', type=int, default=150, help='warmup epochs for ema')
     # Loss hyper-parameters
     parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of cls loss')
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
@@ -103,6 +105,7 @@ def get_args():
     parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # Network
+    parser.add_argument('--model_class', type=str, default='network.ResNet_3D_CPM', help='model class')
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
@@ -144,7 +147,11 @@ def add_weight_decay(net, weight_decay):
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
 
-def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, AdamW, GradualWarmupScheduler, DetectionPostprocess]:
+def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW, GradualWarmupScheduler, Any]:
+    logger.info('Build model "{}"'.format(args.model_class))
+    DetectionLoss = build_class('{}.DetectionLoss'.format(args.model_class))
+    Resnet18 = build_class('{}.Resnet18'.format(args.model_class))
+    DetectionPostprocess = build_class('{}.DetectionPostprocess'.format(args.model_class))                      
     # build model
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
@@ -189,9 +196,9 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
 
     # Build EMA
     if args.apply_ema:
-        ema_warmup_steps = int(args.start_val_epoch * num_training_steps * 1.2 + 1)
-        logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_decay, ema_warmup_steps))
-        ema = EMA(model, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
+        ema_warmup_steps = int(args.ema_warmup_epochs * num_training_steps) if args.ema_warmup_epochs > 0 else 0
+        logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_momentum, ema_warmup_steps))
+        ema = EMA(model, momentum = args.ema_momentum, warmup_steps = ema_warmup_steps)
         ema.register()
     else:
         ema = None
@@ -224,7 +231,7 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: f
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
     transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomRotate90(rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
+    transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.5, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
@@ -335,7 +342,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader = get_train_dataloder(args)
-    start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader))
+    start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader) // args.iters_to_accumulate)
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:

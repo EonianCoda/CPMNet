@@ -176,7 +176,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Resnet18, A
     if args.apply_ema:
         ema_warmup_steps = 2 * args.warmup_epochs * num_training_steps
         logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_decay, ema_warmup_steps))
-        ema = EMA(model, decay = args.ema_decay, warmup_steps = ema_warmup_steps)
+        ema = EMA(model, momentum = args.ema_decay, warmup_steps = ema_warmup_steps)
         ema.register()
     else:
         ema = None

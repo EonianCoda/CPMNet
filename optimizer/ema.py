@@ -4,9 +4,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 class EMA:
-    def __init__(self, model: nn.Module, decay: float = 0.999, warmup_steps: int = 0, apply_buffer: bool = True):
+    def __init__(self, model: nn.Module, momentum: float = 0.999, warmup_steps: int = 0, apply_buffer: bool = True):
         self.model = model
-        self.decay = decay
+        self.momentum = momentum
         self.warmup_steps = warmup_steps
         self.apply_buffer = apply_buffer
         self.last_step = 0
@@ -16,11 +16,11 @@ class EMA:
             self.buffer_shadow = {}
             self.buffer_backup = {}
 
-    def _get_decay(self):
+    def _get_momentum(self):
         if self.warmup_steps <= 0 or self.last_step > self.warmup_steps:
-            return self.decay
+            return self.momentum
         else:
-            return min(max((self.last_step / self.warmup_steps) * self.decay, 0), self.decay)
+            return min(max((self.last_step / self.warmup_steps) * self.momentum, 0), self.momentum)
 
     def register(self):
         """Register model parameters for EMA.
@@ -45,18 +45,18 @@ class EMA:
 
     def update(self):
         self.last_step += 1
-        decay = self._get_decay()
-        if decay == 0:
+        momentum = self._get_momentum()
+        if momentum == 0:
             return
         
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                self.shadow[name].data.mul_(decay).add_(param.data, alpha=1 - decay)
+                self.shadow[name].data.mul_(1 - momentum).add_(param.data, alpha=momentum)
 
         if self.apply_buffer:
             for name, buffer in self.model.named_buffers():
                 if 'num_batches_tracked' not in name:
-                    self.buffer_shadow[name].data.mul_(decay).add_(buffer.data, alpha=1 - decay)
+                    self.buffer_shadow[name].data.mul_(1 - momentum).add_(buffer.data, alpha=momentum)
 
     def apply_shadow(self):
         for name, param in self.model.named_parameters():
@@ -92,7 +92,7 @@ class EMA:
                 'buffer_backup': self.buffer_backup,
                 'last_step': self.last_step,
                 'warmup_steps': self.warmup_steps,
-                'decay': self.decay
+                'momentum': self.momentum
             }
         else:
             return {
@@ -101,7 +101,7 @@ class EMA:
                 'backup': self.backup,
                 'last_step': self.last_step,
                 'warmup_steps': self.warmup_steps,
-                'decay': self.decay
+                'momentum': self.momentum
             }
 
     def load_state_dict(self, state_dict: dict):
@@ -109,7 +109,7 @@ class EMA:
         self.backup = state_dict['backup']
         self.last_step = state_dict['last_step']
         self.warmup_steps = state_dict['warmup_steps']
-        self.decay = state_dict['decay']
+        self.momentum = state_dict['momentum']
         self.apply_buffer = state_dict['apply_buffer']
         
         if self.apply_buffer:
