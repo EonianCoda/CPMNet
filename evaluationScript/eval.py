@@ -400,7 +400,7 @@ class Evaluation:
             # Compute TP and FN
             if len(gt_nodules) != 0:
                 if len(all_ious) != 0:
-                    matched_masks = (all_ious >= self.iou_threshold)
+                    matched_masks = (all_ious >= self.iou_threshold) if self.iou_threshold != 0 else (all_ious > 0)
                     for gt_idx, gt_nodule in enumerate(gt_nodules):
                         ious = all_ious[gt_idx]
                         match_mask = matched_masks[gt_idx]
@@ -432,7 +432,7 @@ class Evaluation:
                 if len(all_ious) != 0:
                     pred_ious = np.max(all_ious, axis=0)
                     for iou, cand in zip(pred_ious, pred_cands):
-                        if iou >= self.iou_threshold:
+                        if (iou >= self.iou_threshold and self.iou_threshold != 0) or (iou > 0 and self.iou_threshold == 0):
                             continue
                         cand.set_match(iou, None)
                         froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
@@ -489,17 +489,6 @@ class Evaluation:
             lines.append("{:.4f},{:.4f},{:.4f},{:.4f},{:.4f}\n".format(fps_bs_itp[i], sens_bs_mean[i], prec_bs_mean[i], f1_bs_mean[i], thresholds_mean[i]))
         with open(os.path.join(save_dir, "froc_iou{:.2f}_conf{:.2f}.txt".format(self.iou_threshold, conf_threshold)), 'w') as f:
             f.writelines(lines)
-        
-        # Write FROC vectors to disk as well
-        # with open(os.path.join(save_dir, "froc_gt_prob_vectors_iou{:.4f}_conf{:.4f}.csv".format(self.iou_threshold, conf_threshold)), 'w') as f:
-        #     f.write("is_pos, prob\n")
-        #     for i in range(len(FROC_is_pos_list)):
-        #         f.write("%d,%.4f\n" % (FROC_is_pos_list[i], FROC_prob_list[i]))
-
-        # fps_itp = np.linspace(FROC_MINX, FROC_MAXX, num=10001)
-        
-        # sens_itp = np.interp(fps_itp, fps, sens)
-        # prec_itp = np.interp(fps_itp, fps, precisions)
         
         # Write mean, lower, and upper bound curves to disk
         header = "FPrate, Sensivity[Mean], Sensivity[Lower bound], Sensivity[Upper bound]\n"
