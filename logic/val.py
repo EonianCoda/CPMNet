@@ -40,7 +40,8 @@ def val(args,
         nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
         min_size: int = 0,
-        nodule_size_mode: str = 'seg_size') -> Dict[str, float]:
+        nodule_size_mode: str = 'seg_size',
+        val_type = 'val',) -> Dict[str, float]:
     if str(epoch).isdigit():
         save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
     else:
@@ -51,11 +52,15 @@ def val(args,
     if min_size != 0:
         logger.info('When validating, ignore nodules with size less than {}'.format(min_size))
     
+    if val_type == 'val':
+        iou_threshold = args.val_iou_threshold
+    elif val_type == 'test':
+        iou_threshold = args.test_iou_threshold
     evaluator = Evaluation(series_list_path=series_list_path, 
                            image_spacing=image_spacing,
                            nodule_type_diameters=nodule_type_diameters,
                            prob_threshold=args.val_fixed_prob_threshold,
-                           iou_threshold = args.val_iou_threshold,
+                           iou_threshold = iou_threshold,
                            nodule_size_mode=nodule_size_mode,
                            nodule_min_d=min_d, 
                            nodule_min_size=min_size)
@@ -119,7 +124,10 @@ def val(args,
             progress_bar.update(1)
             torch.cuda.empty_cache()
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
-    froc_det_thresholds = args.froc_det_thresholds
+    if val_type == 'val':
+        froc_det_thresholds = args.froc_det_thresholds
+    elif val_type == 'test':
+        froc_det_thresholds = args.test_froc_det_thresholds
     froc_info_list, fixed_out = evaluator.evaluation(preds=all_preds,
                                                                 save_dir=save_dir,
                                                                 froc_det_thresholds = froc_det_thresholds)
