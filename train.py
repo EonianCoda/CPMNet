@@ -102,8 +102,11 @@ def get_args():
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
-    parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
+    parser.add_argument('--val_det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
+    # Test hyper-parameters
+    parser.add_argument('--test_iou_threshold', type=float, default=0.1, help='iou threshold for test')
+    parser.add_argument('--test_det_threshold', type=float, default=0.2, help='detection threshold for test')
     # Network
     parser.add_argument('--model_class', type=str, default='network.ResNet_3D_CPM', help='model class')
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
@@ -123,13 +126,12 @@ def get_args():
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'froc_mean_recall'], help='metric for validation')
-    parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--val_interval', type=int, default=1, help='validate interval')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, help='how many epochs to wait before saving model')
     args = parser.parse_args()
-    if args.det_threshold != args.froc_det_thresholds[0]:
-        raise ValueError(f'det_threshold = {args.det_threshold} should be equal to froc_det_thresholds[0] = {args.froc_det_thresholds[0]}')
+    if args.val_det_threshold != args.froc_det_thresholds[0]:
+        raise ValueError(f'val_det_threshold = {args.val_det_threshold} should be equal to froc_det_thresholds[0] = {args.froc_det_thresholds[0]}')
     return args
 
 def add_weight_decay(net, weight_decay):
@@ -177,11 +179,18 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                      detection_loss = detection_loss,
                      out_stride = args.out_stride,
                      device = device)
-    detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
-                                                 threshold = args.det_threshold, 
-                                                 nms_threshold = args.det_nms_threshold,
-                                                 nms_topk = args.det_nms_topk,
-                                                 crop_size = args.crop_size)
+    val_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
+                                                    threshold = args.val_det_threshold, 
+                                                    nms_threshold = args.det_nms_threshold,
+                                                    nms_topk = args.det_nms_topk,
+                                                    crop_size = args.crop_size)
+    
+    test_detection_postprocess = DetectionPostprocess(topk = args.det_topk,
+                                                    threshold = args.test_det_threshold,
+                                                    nms_threshold = args.det_nms_threshold,
+                                                    nms_topk = args.det_nms_topk,
+                                                    crop_size = args.crop_size)    
+
     start_epoch = 0
     model = model.to(device=device, memory_format=get_memory_format(getattr(args, 'memory_format', 'channels_first')))
         
@@ -224,7 +233,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model)
         
-    return start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess
+    return start_epoch, model, optimizer, scheduler_warm, ema, val_detection_postprocess, test_detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: float, blank_side: int):
     rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
@@ -342,7 +351,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader = get_train_dataloder(args)
-    start_epoch, model, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader) // args.iters_to_accumulate)
+    start_epoch, model, optimizer, scheduler_warm, ema, val_det_postprocess, test_det_postprocess = prepare_training(args, device, len(train_loader) // args.iters_to_accumulate)
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
@@ -381,7 +390,7 @@ if __name__ == '__main__':
                 ema.apply_shadow()
             val_metrics = val(args = args,
                             model = model,
-                            detection_postprocess=detection_postprocess,
+                            detection_postprocess=val_det_postprocess,
                             val_loader = val_loader, 
                             device = device,
                             image_spacing = IMAGE_SPACING,
@@ -408,7 +417,7 @@ if __name__ == '__main__':
         load_states(model_path, device, model)
         test_metrics = val(args = args,
                             model = model,
-                            detection_postprocess=detection_postprocess,
+                            detection_postprocess=test_det_postprocess,
                             val_loader = test_loader,
                             device = device,
                             image_spacing = IMAGE_SPACING,
@@ -418,7 +427,8 @@ if __name__ == '__main__':
                             epoch = 'test_best_{}'.format(target_metric),
                             min_d=args.min_d,
                             min_size=args.min_size,
-                            nodule_size_mode=args.nodule_size_mode)
+                            nodule_size_mode=args.nodule_size_mode,
+                            val_type = 'test')
         write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
         with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
             f.write('Best epoch: {}\n'.format(best_epoch))
@@ -436,7 +446,7 @@ if __name__ == '__main__':
         logger.info('Load best model from "{}"'.format(model_path))
         train_infer_metrics = val(args = args,
                                 model = model,
-                                detection_postprocess=detection_postprocess,
+                                detection_postprocess=test_det_postprocess,
                                 val_loader = train_infer_loader,
                                 device = device,
                                 image_spacing = IMAGE_SPACING,
@@ -446,7 +456,8 @@ if __name__ == '__main__':
                                 epoch = 'infer_best_{}'.format(target_metric),
                                 min_d=args.min_d,
                                 min_size=args.min_size,
-                                nodule_size_mode=args.nodule_size_mode)
+                                nodule_size_mode=args.nodule_size_mode,
+                                val_type = 'test')
         write_metrics(train_infer_metrics, epoch, 'infer_train/best_{}'.format(target_metric), writer)
         with open(os.path.join(infer_save_dir, 'infer_train_best_{}.txt'.format(target_metric)), 'w') as f:
             f.write('Best epoch: {}\n'.format(best_epoch))
