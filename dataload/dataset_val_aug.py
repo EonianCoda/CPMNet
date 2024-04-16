@@ -3,7 +3,8 @@ from __future__ import print_function, division
 import logging
 import numpy as np
 from typing import List, Tuple
-from .utils import load_series_list, load_image, load_label, ALL_RAD, ALL_LOC, ALL_CLS, gen_dicom_path, gen_label_path, normalize_processed_image, normalize_raw_image
+from .utils import load_series_list, load_image, load_label, load_lobe, ALL_RAD, ALL_LOC, ALL_CLS, gen_dicom_path, gen_label_path, \
+                    gen_lobe_path, normalize_processed_image, normalize_raw_image
 from torch.utils.data import Dataset
 import torchvision
 import copy
@@ -168,18 +169,20 @@ class TransPose():
 class DetDataset(Dataset):
     """Detection dataset for inference
     """
-    def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb, norm_method='scale'):
+    def __init__(self, series_list_path: str, image_spacing: List[float], SplitComb, norm_method='scale', apply_lobe=False, out_stride = 4):
         self.series_list_path = series_list_path
-        
-        self.labels = []
-        self.dicom_paths = []
+        self.apply_lobe = apply_lobe
         self.norm_method = norm_method
+        self.out_stride = out_stride
+        
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         self.series_infos = load_series_list(series_list_path)
         
+        self.dicom_paths = []
+        self.lobe_paths = []
         for folder, series_name in self.series_infos:
-            dicom_path = gen_dicom_path(folder, series_name)
-            self.dicom_paths.append(dicom_path)
+            self.dicom_paths.append(gen_dicom_path(folder, series_name))
+            self.lobe_paths.append(gen_lobe_path(folder, series_name))
         self.splitcomb = SplitComb
         transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
                     [FlipTransform(flip_depth=False, flip_height=True, flip_width=False)],
@@ -204,7 +207,13 @@ class DetDataset(Dataset):
         image = normalize_processed_image(image, self.norm_method)
 
         # split_images [N, 1, crop_z, crop_y, crop_x]
-        split_images, nzhw, image_shape = self.splitcomb.split(image)
+        if self.apply_lobe: # load lobe mask
+            lobe_path = self.lobe_paths[idx]
+            lobe_mask = load_lobe(lobe_path)
+            split_images, split_lobes, nzhw, image_shape = self.splitcomb.split(image, lobe_mask, self.out_stride) # split_images [N, 1, crop_z, crop_y, crop_x]
+        else:
+            split_images, nzhw, image_shape = self.splitcomb.split(image) # split_images [N, 1, crop_z, crop_y, crop_x]
+        
         split_images = np.squeeze(split_images, axis=1) # (N, crop_z, crop_y, crop_x)
         
         sample = {'image': split_images.copy(), 'ctr_transform': [], 'feat_transform': []}
@@ -229,5 +238,9 @@ class DetDataset(Dataset):
         all_samples['series_name'] = series_name
         all_samples['series_folder'] = series_folder
         all_samples['image_shape'] = image_shape
+        
+        # Add lobe mask
+        if self.apply_lobe:
+            all_samples['split_lobes'] = np.ascontiguousarray(split_lobes)
         
         return all_samples

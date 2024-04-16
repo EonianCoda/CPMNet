@@ -40,7 +40,8 @@ def val(args,
         nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
         min_size: int = 0,
-        nodule_size_mode: str = 'seg_size') -> Dict[str, float]:
+        nodule_size_mode: str = 'seg_size',
+        val_type = 'val',) -> Dict[str, float]:
     if str(epoch).isdigit():
         save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
     else:
@@ -51,11 +52,15 @@ def val(args,
     if min_size != 0:
         logger.info('When validating, ignore nodules with size less than {}'.format(min_size))
     
+    if val_type == 'val':
+        iou_threshold = args.val_iou_threshold
+    elif val_type == 'test':
+        iou_threshold = args.test_iou_threshold
     evaluator = Evaluation(series_list_path=series_list_path, 
                            image_spacing=image_spacing,
                            nodule_type_diameters=nodule_type_diameters,
                            prob_threshold=args.val_fixed_prob_threshold,
-                           iou_threshold = args.val_iou_threshold,
+                           iou_threshold = iou_threshold,
                            nodule_size_mode=nodule_size_mode,
                            nodule_min_d=min_d, 
                            nodule_min_size=min_size)
@@ -70,6 +75,10 @@ def val(args,
     with get_progress_bar('Validation', len(val_loader)) as progress_bar:
         for sample in val_loader:
             data = sample['split_images'] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
+            if args.apply_lobe:
+                lobes = sample['split_lobes'].to(device, non_blocking=True, memory_format=memory_format)
+            else:
+                lobes = None
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
@@ -126,16 +135,22 @@ def val(args,
                 
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
-                # Offset_output = (Offset_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
-                
+                if args.apply_lobe:
+                    lobe = lobes[i * batch_size:end]
+                else:
+                    lobe = None
                 output = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
-                output = detection_postprocess(output, device=device, is_logits=False) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                
+                output = detection_postprocess(output, device=device, is_logits=False, lobe_mask = lobe) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputlist.append(output.data.cpu().numpy())
                 del input, Cls_output, Shape_output, Offset_output, output
 
             outputs = np.concatenate(outputlist, 0)
             
             start_idx = 0
+            del data
+            if args.apply_lobe:
+                del lobes
             for i in range(len(num_splits)):
                 n_split = num_splits[i]
                 nzhw = nzhws[i]
@@ -157,12 +172,12 @@ def val(args,
                 start_idx += n_split
                 
             progress_bar.update(1)
-    
+            torch.cuda.empty_cache()
     FP_ratios = [0.125, 0.25, 0.5, 1, 2, 4, 8]
     froc_det_thresholds = args.froc_det_thresholds
     froc_info_list, fixed_out = evaluator.evaluation(preds=all_preds,
-                                                                save_dir=save_dir,
-                                                                froc_det_thresholds = froc_det_thresholds)
+                                                    save_dir=save_dir,
+                                                    froc_det_thresholds = froc_det_thresholds)
     sens_points, prec_points, f1_points, thresholds_points = froc_info_list[0]
     
     logger.info('==> Epoch: {}'.format(epoch))

@@ -1,9 +1,14 @@
 import torch
-import torch.nn as nn
 
 import numpy as np
 from numpy.typing import NDArray
 from typing import List, Tuple
+
+def zyxdhw2zyxzyx(box, dim=-1):
+    ctr_zyx, dhw = torch.split(box, 3, dim)
+    z1y1x1 = ctr_zyx - dhw/2
+    z2y2x2 = ctr_zyx + dhw/2
+    return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
 
 def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.

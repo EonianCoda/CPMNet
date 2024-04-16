@@ -136,8 +136,8 @@ def val(args,
     elif val_type == 'test':
         froc_det_thresholds = args.test_froc_det_thresholds
     froc_info_list, fixed_out = evaluator.evaluation(preds=all_preds,
-                                                                save_dir=save_dir,
-                                                                froc_det_thresholds = froc_det_thresholds)
+                                                    save_dir=save_dir,
+                                                    froc_det_thresholds = froc_det_thresholds)
     sens_points, prec_points, f1_points, thresholds_points = froc_info_list[0]
     
     logger.info('==> Epoch: {}'.format(epoch))

@@ -5,14 +5,11 @@ import torch
 import os
 import logging
 ### data ###
-from dataload.dataset import DetDataset
 from dataload.utils import get_image_padding_value
-from dataload.collate import infer_collate_fn
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 
-from logic.val import val
 from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging
@@ -48,9 +45,11 @@ def get_args():
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
     parser.add_argument('--do_padding', action='store_true', default=False, help='do padding or not')
-    parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
     parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
+    # Det technical settings
+    parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
+    parser.add_argument('--apply_aug', action='store_true', default=False, help='apply test time augmentation or not')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
@@ -87,6 +86,17 @@ def val_data_prepare(args, model_out_stride=4):
     logger.info('Apply lobe: True' if args.apply_lobe else 'Apply lobe: False')
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=args.do_padding)
+    
+    if args.apply_aug:
+        from dataload.dataset_val_aug import DetDataset
+        from dataload.collate import infer_aug_collate_fn as infer_collate_fn
+        logger.info('Test time augmentation: True')
+        args.batch_size = 1 # batch size should be 1 when apply test time augmentation
+    else:
+        from dataload.dataset import DetDataset
+        from dataload.collate import infer_collate_fn
+        logger.info('Test time augmentation: False')
+
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=model_out_stride)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_collate_fn, pin_memory=True)
     
@@ -95,15 +105,21 @@ def val_data_prepare(args, model_out_stride=4):
 
 if __name__ == '__main__':
     args = get_args()
-    
     base_exp_folder = os.path.join(os.path.dirname(args.model_path), 'val_results')
     setup_logging(log_file=os.path.join(base_exp_folder, 'val.log'))
     
+    # Get all models in the folder
     if '*' not in args.model_path: # validation all models in the folder
         model_paths = [args.model_path]
     else:
         model_folder = os.path.dirname(args.model_path)
         model_paths = [os.path.join(model_folder, f) for f in os.listdir(model_folder) if f.endswith('.pth')]
+        
+    # Get val function
+    if args.apply_aug:
+        from logic.val_aug import val
+    else:
+        from logic.val import val
         
     for model_path in model_paths:
         model_name = os.path.basename(model_path)
@@ -121,8 +137,12 @@ if __name__ == '__main__':
         logger.info('Val set: "{}"'.format(args.val_set))
         
         save_folder_name = '{}_{}'.format(os.path.basename(model_path).split('.')[0], os.path.basename(args.val_set).split('.')[0])
+        if args.do_padding:
+            save_folder_name += '_pad'
         if args.apply_lobe:
             save_folder_name += '_lobe'
+        if args.apply_aug:
+            save_folder_name += '_aug'
         
         metrics = val(args = args,
                     model = model,

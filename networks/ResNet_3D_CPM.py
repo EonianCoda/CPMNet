@@ -7,14 +7,8 @@ import torch.nn as nn
 import torch
 import torch.nn.functional as F
 
-from utils.box_utils import bbox_decode, make_anchors
+from utils.box_utils import nms_3D, bbox_decode, make_anchors, zyxdhw2zyxzyx
 from .modules import SELayer, Identity, ConvBlock, act_layer, norm_layer3d
-
-def zyxdhw2zyxzyx(box, dim=-1):
-    ctr_zyx, dhw = torch.split(box, 3, dim)
-    z1y1x1 = ctr_zyx - dhw/2
-    z2y2x2 = ctr_zyx + dhw/2
-    return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
 
 class BasicBlockNew(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):

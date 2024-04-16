@@ -17,10 +17,10 @@ def train_one_step_wrapper(memory_format):
         image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
         labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
         # Compute loss
-        pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
-        pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss = pos_cls_loss.mean(), neg_cls_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-        loss = args.lambda_cls * (pos_cls_loss + neg_cls_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-        return loss, pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss
+        cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
+        cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
+        loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        return loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss
     return train_one_step
 
 def train(args,
@@ -30,8 +30,8 @@ def train(args,
           device: torch.device,
           ema = None,) -> Dict[str, float]:
     model.train()
-    avg_pos_cls_loss = AverageMeter()
-    avg_neg_cls_loss = AverageMeter()
+    avg_cls_pos_loss = AverageMeter()
+    avg_cls_neg_loss = AverageMeter()
     avg_cls_loss = AverageMeter()
     avg_shape_loss = AverageMeter()
     avg_offset_loss = AverageMeter()
@@ -56,18 +56,18 @@ def train(args,
     for iter_i, sample in enumerate(dataloader):
         if mixed_precision:
             with torch.cuda.amp.autocast():
-                loss, pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
+                loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
             loss = loss / iters_to_accumulate
             scaler.scale(loss).backward()
         else:
-            loss, pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
+            loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
             loss = loss / iters_to_accumulate
             loss.backward()
         
         # Update history
-        avg_pos_cls_loss.update(pos_cls_loss.item())
-        avg_neg_cls_loss.update(neg_cls_loss.item())
-        avg_cls_loss.update(pos_cls_loss.item() + neg_cls_loss.item())
+        avg_cls_pos_loss.update(cls_pos_loss.item())
+        avg_cls_neg_loss.update(cls_neg_loss.item())
+        avg_cls_loss.update(cls_pos_loss.item() + cls_neg_loss.item())
         avg_shape_loss.update(shape_loss.item())
         avg_offset_loss.update(offset_loss.item())
         avg_iou_loss.update(iou_loss.item())
@@ -87,9 +87,9 @@ def train(args,
                 ema.update()
             
             progress_bar.set_postfix(loss = avg_loss.avg,
-                                    pos_cls = avg_pos_cls_loss.avg,
-                                    neg_cls = avg_neg_cls_loss.avg,
-                                    cls_Loss = avg_cls_loss.avg,
+                                    pos_cls = avg_cls_pos_loss.avg,
+                                    neg_cls = avg_cls_neg_loss.avg,
+                                    cls_loss = avg_cls_loss.avg,
                                     shape_loss = avg_shape_loss.avg,
                                     offset_loss = avg_offset_loss.avg,
                                     iou_loss = avg_iou_loss.avg)
@@ -99,8 +99,8 @@ def train(args,
 
     metrics = {'loss': avg_loss.avg,
                 'cls_loss': avg_cls_loss.avg,
-                'pos_cls_loss': avg_pos_cls_loss.avg,
-                'neg_cls_loss': avg_neg_cls_loss.avg,
+                'cls_pos_loss': avg_cls_pos_loss.avg,
+                'cls_neg_loss': avg_cls_neg_loss.avg,
                 'shape_loss': avg_shape_loss.avg,
                 'offset_loss': avg_offset_loss.avg,
                 'iou_loss': avg_iou_loss.avg}

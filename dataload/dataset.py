@@ -148,12 +148,12 @@ class DetDataset(Dataset):
         image = normalize_processed_image(image, self.norm_method)
 
         data = {}
-        if self.apply_lobe:
+        if self.apply_lobe: # load lobe mask
             lobe_path = self.lobe_paths[idx]
             lobe_mask = load_lobe(lobe_path)
             split_images, split_lobes, nzhw, image_shape = self.splitcomb.split(image, lobe_mask, self.out_stride) # split_images [N, 1, crop_z, crop_y, crop_x]
             data['split_lobes'] = np.ascontiguousarray(split_lobes)
-        else:
+        else: 
             split_images, nzhw, image_shape = self.splitcomb.split(image) # split_images [N, 1, crop_z, crop_y, crop_x]
         
         data['split_images'] = np.ascontiguousarray(split_images)

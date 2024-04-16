@@ -106,6 +106,8 @@ def get_args():
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     parser.add_argument('--val_det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
+    # Val technical settings
+    parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
     # Test hyper-parameters
     parser.add_argument('--test_iou_threshold', type=float, default=0.1, help='iou threshold for test')
     parser.add_argument('--test_det_threshold', type=float, default=0.2, help='detection threshold for test')
@@ -182,6 +184,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                      detection_loss = detection_loss,
                      out_stride = args.out_stride,
                      device = device)
+    
     val_detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                     threshold = args.val_det_threshold, 
                                                     nms_threshold = args.det_nms_threshold,
@@ -310,10 +313,10 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
-    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
 
-    test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
@@ -327,7 +330,7 @@ def get_train_infer_dataloader(args) -> DataLoader:
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
-    train_infer_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    train_infer_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     train_infer_loader = DataLoader(train_infer_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     return train_infer_loader
 
