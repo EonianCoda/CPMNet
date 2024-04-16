@@ -53,7 +53,9 @@ def get_args():
     parser.add_argument('--val_set', type=str, help='val_list')
     parser.add_argument('--test_set', type=str, help='test_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of nodule, if some nodule's depth < min_d, it will be` ignored")
-    parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    parser.add_argument('--min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    parser.add_argument('--post_proces_min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first', help='memory format of model, channels_first or channels_last, channels_last is faster on linux') # channels_last is faster on linux
     parser.add_argument('--crop_partial', action='store_true', default=False, help='crop partial nodule')
@@ -184,13 +186,15 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                                                     threshold = args.val_det_threshold, 
                                                     nms_threshold = args.det_nms_threshold,
                                                     nms_topk = args.det_nms_topk,
-                                                    crop_size = args.crop_size)
+                                                    crop_size = args.crop_size,
+                                                    post_proces_min_size = args.post_proces_min_size)
     
     test_detection_postprocess = DetectionPostprocess(topk = args.det_topk,
                                                     threshold = args.test_det_threshold,
                                                     nms_threshold = args.det_nms_threshold,
                                                     nms_topk = args.det_nms_topk,
-                                                    crop_size = args.crop_size)    
+                                                    crop_size = args.crop_size,
+                                                    post_proces_min_size = args.post_proces_min_size)
 
     start_epoch = 0
     model = model.to(device=device, memory_format=get_memory_format(getattr(args, 'memory_format', 'channels_first')))

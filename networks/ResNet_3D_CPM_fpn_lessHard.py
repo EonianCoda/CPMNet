@@ -221,7 +221,7 @@ class ClsRegHead(nn.Module):
         Cls = self.cls_output(self.conv_s(x))
         dict1 = {}
         dict1['Cls'] = Cls
-        dict1['Shape'] = Shape
+        dict1['Shape'] = F.relu(Shape)
         dict1['Offset'] = Offset
         return dict1
 
@@ -759,13 +759,14 @@ class DetectionLoss(nn.Module):
         return cls_pos_loss, cls_neg_loss, reg_loss, offset_loss, iou_loss
 
 class DetectionPostprocess(nn.Module):
-    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96]):
+    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96], min_size: int=-1):
         super(DetectionPostprocess, self).__init__()
         self.topk = topk
         self.threshold = threshold
         self.nms_threshold = nms_threshold
         self.nms_topk = nms_topk
         self.crop_size = crop_size
+        self.min_size = min_size
 
     def forward(self, output, device, is_logits=True):
         Cls = output['Cls']
@@ -809,4 +810,9 @@ class DetectionPostprocess(nn.Module):
             
                 keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
                 dets[j][:len(keep)] = det[keep.long()]
+        
+        if self.min_size > 0:
+            dets_volumes = dets[:, :, 4] * dets[:, :, 5] * dets[:, :, 6]
+            dets[dets_volumes < self.min_size] = -1
+        
         return dets
