@@ -35,7 +35,7 @@ def val(args,
         series_list_path: str,
         exp_folder: str,
         epoch: str = 0,
-        batch_size: int = 8,
+        batch_size: int = 4,
         nms_keep_top_k: int = 40,
         nodule_type_diameters : Dict[str, Tuple[float, float]] = None,
         min_d: int = 0,
@@ -120,7 +120,6 @@ def val(args,
                             for trans in reversed(feat_transforms[b_i][aug_i]):
                                 Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
                                 Shape_output[b_i, aug_i, ...] = trans.backward(Shape_output[b_i, aug_i, ...])
-                                # Offset_output[b_i, aug_i, ...] = trans.backward(Offset_output[b_i, aug_i, ...], sign_value=True)
                 transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
                 Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
@@ -144,11 +143,10 @@ def val(args,
                 output = detection_postprocess(output, device=device, is_logits=False, lobe_mask = lobe) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputlist.append(output.data.cpu().numpy())
                 del input, Cls_output, Shape_output, Offset_output, output
+            del data
 
             outputs = np.concatenate(outputlist, 0)
-            
             start_idx = 0
-            del data
             if args.apply_lobe:
                 del lobes
             for i in range(len(num_splits)):

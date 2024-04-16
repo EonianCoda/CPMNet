@@ -39,7 +39,7 @@ def get_args():
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # detection-hyper-parameters
-    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process.DetectionPostprocess')
+    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
@@ -59,7 +59,7 @@ def get_args():
     return args
 
 def prepare_validation(args, device):
-    DetectionPostprocess = build_class(args.det_post_process_class)
+    DetectionPostprocess = build_class('{}.DetectionPostprocess'.format(args.det_post_process_class))                
     detection_postprocess = DetectionPostprocess(topk=args.det_topk, 
                                                  threshold=args.det_threshold, 
                                                  nms_threshold=args.det_nms_threshold,

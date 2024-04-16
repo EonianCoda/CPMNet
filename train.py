@@ -82,11 +82,8 @@ def get_args():
     parser.add_argument('--ema_momentum', type=float, default=0.998, help='ema decay')
     parser.add_argument('--ema_warmup_epochs', type=int, default=150, help='warmup epochs for ema')
     # Loss hyper-parameters
-    parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of cls loss')
-    parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
-    parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
-    parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
-    # Train hyper-parameters
+    parser.add_argument('--loss_class', type=str, default='networks.loss', help='loss class')
+    
     parser.add_argument('--pos_target_topk', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
     parser.add_argument('--num_samples', type=int, default=5, help='number of samples for each instance')
@@ -96,9 +93,18 @@ def get_args():
     parser.add_argument('--cls_num_hard', type=int, default=100, help='number of hard negatives in negtative samples(-1 means all)')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
-    parser.add_argument('--cls_hard_fp_weight', type=float, default=-1, help='weights of cls_hard_fp')
-    parser.add_argument('--cls_hard_fp_threshold', type=float, default=-1, help='threshold of cls_hard_fp')
+    
+    parser.add_argument('--cls_hard_fp_thrs1', type=float, default=0.5, help='threshold of cls_hard_fp1')
+    parser.add_argument('--cls_hard_fp_thrs2', type=float, default=0.7, help='threshold of cls_hard_fp2')
+    parser.add_argument('--cls_hard_fp_w1', type=float, default=1.5, help='weights of cls_hard_fp1')
+    parser.add_argument('--cls_hard_fp_w2', type=float, default=1.5, help='weights of cls_hard_fp2')
+    
+    parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of cls loss')
+    parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
+    parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
+    parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
     # Val hyper-parameters
+    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
@@ -156,9 +162,13 @@ def add_weight_decay(net, weight_decay):
 
 def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW, GradualWarmupScheduler, Any]:
     logger.info('Build model "{}"'.format(args.model_class))
-    DetectionLoss = build_class('{}.DetectionLoss'.format(args.model_class))
     Resnet18 = build_class('{}.Resnet18'.format(args.model_class))
-    DetectionPostprocess = build_class('{}.DetectionPostprocess'.format(args.model_class))                      
+    
+    logger.info('Build loss "{}"'.format(args.loss_class))
+    DetectionLoss = build_class('{}.DetectionLoss'.format(args.loss_class))
+    
+    logger.info('Build post process "{}"'.format(args.det_post_process_class))
+    DetectionPostprocess = build_class('{}.DetectionPostprocess'.format(args.det_post_process_class))               
     # build model
     detection_loss = DetectionLoss(crop_size = args.crop_size,
                                    pos_target_topk = args.pos_target_topk, 
@@ -167,8 +177,12 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                                    cls_num_hard=args.cls_num_hard,
                                    cls_fn_weight = args.cls_fn_weight,
                                    cls_fn_threshold = args.cls_fn_threshold,
-                                   cls_neg_pos_ratio = args.cls_neg_pos_ratio)
-                                   
+                                   cls_neg_pos_ratio = args.cls_neg_pos_ratio,
+                                   cls_hard_fp_thrs1 = args.cls_hard_fp_thrs1,
+                                   cls_hard_fp_thrs2 = args.cls_hard_fp_thrs2,
+                                   cls_hard_fp_w1 = args.cls_hard_fp_w1,
+                                   cls_hard_fp_w2 = args.cls_hard_fp_w2)
+                                        
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
                      act_type = args.act_type, 
@@ -236,7 +250,7 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
         # Resume best metric
         global early_stopping
         early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model)
-    
+        start_epoch = start_epoch + 1
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model)
@@ -254,7 +268,7 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: f
         
     transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random transpose: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
+    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
