@@ -51,12 +51,12 @@ class EMA:
         
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                self.shadow[name].data.mul_(1 - momentum).add_(param.data, alpha=momentum)
+                self.shadow[name].data.mul_(momentum).add_(param.data, alpha=1 - momentum)
 
         if self.apply_buffer:
             for name, buffer in self.model.named_buffers():
                 if 'num_batches_tracked' not in name:
-                    self.buffer_shadow[name].data.mul_(1 - momentum).add_(buffer.data, alpha=momentum)
+                    self.buffer_shadow[name].data.mul_(momentum).add_(buffer.data, alpha=1 - momentum)
 
     def apply_shadow(self):
         for name, param in self.model.named_parameters():
