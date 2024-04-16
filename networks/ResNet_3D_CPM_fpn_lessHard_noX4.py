@@ -221,7 +221,7 @@ class ClsRegHead(nn.Module):
         Cls = self.cls_output(self.conv_s(x))
         dict1 = {}
         dict1['Cls'] = Cls
-        dict1['Shape'] = Shape
+        dict1['Shape'] = F.relu(Shape)
         dict1['Offset'] = Offset
         return dict1
 
