@@ -588,7 +588,7 @@ class Evaluation:
     def _write_stats(self, froc: FROC, save_dir: str, classified_metrics: Dict[str, Dict[str, float]], recall_series_based: float,
                      recall_remove_health_series_based: float, num_of_all_pred_cands: int, froc_det_thresholds, froc_info_list):
         def generate_prob_iou_table(stats: Dict[str, Dict[str, float]], nodule_type: str) -> List[str]:
-            prob_and_iou_stats_template = "{:20s}, {}, {:.2f}, {:.2f}, {}, {:.2f}, {:.2f}, {:.3f}, {:.3f}, {}, {:.3f}, {:.3f}"
+            prob_and_iou_stats_template = "{:20s}, {}, {:.2f}, {:.2f}, {}, {:.2f}, {:.2f}, {:.4f}, {:.4f}, {}, {:.4f}, {:.4f}"
             prob_stats_template = "{:20s}, {}, {:.2f}, {:.2f}, {}, {:.2f}, {:.2f}"
             
             number_text = str(stats['number'])
