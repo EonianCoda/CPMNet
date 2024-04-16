@@ -187,14 +187,14 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                                                     nms_threshold = args.det_nms_threshold,
                                                     nms_topk = args.det_nms_topk,
                                                     crop_size = args.crop_size,
-                                                    post_proces_min_size = args.post_proces_min_size)
+                                                    min_size = args.post_proces_min_size)
     
     test_detection_postprocess = DetectionPostprocess(topk = args.det_topk,
                                                     threshold = args.test_det_threshold,
                                                     nms_threshold = args.det_nms_threshold,
                                                     nms_topk = args.det_nms_topk,
                                                     crop_size = args.crop_size,
-                                                    post_proces_min_size = args.post_proces_min_size)
+                                                    min_size = args.post_proces_min_size)
 
     start_epoch = 0
     model = model.to(device=device, memory_format=get_memory_format(getattr(args, 'memory_format', 'channels_first')))

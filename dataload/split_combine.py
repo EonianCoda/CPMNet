@@ -1,5 +1,6 @@
 from typing import List, Tuple
 import numpy as np
+import scipy
 
 class SplitComb():
     def __init__(self, crop_size: List[int]=[64, 128, 128], overlap_size:List[int]=[16, 32, 32], do_padding:bool=True, pad_value:int=0):
@@ -11,10 +12,11 @@ class SplitComb():
         self.pad_value = pad_value
         self.do_padding = do_padding
 
-    def split(self, data):
+    def split(self, image, lobe = None, out_stride: int = 4):
         do_padding = self.do_padding
-        splits = []
-        d, h, w = data.shape
+        apply_lobe = isinstance(lobe, np.ndarray)
+        image_splits = []
+        d, h, w = image.shape
 
         # Number of splits in each dimension
         nz = int(np.ceil(float(d) / self.stride_size[0]))
@@ -26,8 +28,23 @@ class SplitComb():
             pad = [[0, int(nz * self.stride_size[0] + self.overlap[0] - d)],
                     [0, int(ny * self.stride_size[1] + self.overlap[1] - h)],
                     [0, int(nx * self.stride_size[2] + self.overlap[2] - w)]]
-            data = np.pad(data, pad, 'constant', constant_values=self.pad_value)  
+            image = np.pad(image, pad, 'constant', constant_values=self.pad_value)
+            if apply_lobe:
+                lobe = np.pad(lobe, pad, 'constant', constant_values=0)
             do_padding = True
+            
+        if apply_lobe:
+            # Make sure the shape of lobe is divisible by out_stride
+            lobe_shape = np.array(lobe.shape)
+            lobe_pad = (np.ceil(lobe_shape / out_stride) * out_stride - lobe_shape).astype(np.int32)
+            if np.any(lobe_pad != 0):
+                lobe = np.pad(lobe, [(0, lobe_pad[0]), (0, lobe_pad[1]), (0, lobe_pad[2])], mode='constant', constant_values=0)
+                lobe_shape = lobe.shape
+                
+            zoom_ratio = [1 / out_stride, 1 / out_stride, 1 / out_stride]
+            resized_lobe = scipy.ndimage.zoom(lobe, zoom_ratio, order=0, mode='nearest')
+            strided_crop_size = [int(x / out_stride) for x in self.crop_size] 
+            lobe_splits = []
             
         for iz in range(nz):
             for iy in range(ny):
@@ -50,11 +67,27 @@ class SplitComb():
                         start_x = w - self.crop_size[2]
                         end_x = w
 
-                    split = data[np.newaxis, np.newaxis, start_z:end_z, start_y:end_y, start_x:end_x]
-                    splits.append(split)
+                    image_split = image[np.newaxis, np.newaxis, start_z:end_z, start_y:end_y, start_x:end_x]
+                    if apply_lobe:
+                        lobe_start_z = start_z // out_stride
+                        lobe_start_y = start_y // out_stride
+                        lobe_start_x = start_x // out_stride
+                        
+                        lobe_end_z = lobe_start_z + strided_crop_size[0]
+                        lobe_end_y = lobe_start_y + strided_crop_size[1]
+                        lobe_end_x = lobe_start_x + strided_crop_size[2]
+                        
+                        lobe_split = resized_lobe[np.newaxis, np.newaxis, lobe_start_z:lobe_end_z, lobe_start_y:lobe_end_y, lobe_start_x:lobe_end_x]
+                        lobe_splits.append(lobe_split)
+                    image_splits.append(image_split)
 
-        splits = np.concatenate(splits, 0)
-        return splits, nzyx, [d, h, w]
+        image_splits = np.concatenate(image_splits, 0)
+        
+        if apply_lobe:
+            lobe_splits = np.concatenate(lobe_splits, 0)
+            return image_splits, lobe_splits, nzyx, [d, h, w]
+        else:
+            return image_splits, nzyx, [d, h, w]
 
     def combine(self, output, nzhw, image_shape: Tuple[int, int, int]):
         nz, nh, nw = nzhw

@@ -75,6 +75,12 @@ def infer_collate_fn(batches) -> Dict[str, torch.Tensor]:
     series_folders = []
     image_shapes = []
     
+    if 'split_lobes' in batches[0]:
+        apply_lobe = True
+        split_lobes = []
+    else:
+        apply_lobe = False
+    
     for b in batches:
         imgs.append(b['split_images'])
         num_splits.append(b['split_images'].shape[0])
@@ -83,52 +89,32 @@ def infer_collate_fn(batches) -> Dict[str, torch.Tensor]:
         series_names.append(b['series_name'])
         series_folders.append(b['series_folder'])
         image_shapes.append(b['image_shape'])
+        if apply_lobe:
+            split_lobes.append(b['split_lobes'])
         
     imgs = np.concatenate(imgs, axis=0)
+    if apply_lobe:
+        split_lobes = np.concatenate(split_lobes, axis=0)
     nzhws = np.stack(nzhws)
     num_splits = np.array(num_splits)
     
-    return {'split_images': torch.from_numpy(imgs),
-            'nzhws': torch.from_numpy(nzhws), 
-            'num_splits': num_splits, 
-            'spacings': spacings, 
-            'series_names': series_names,
-            'series_folders': series_folders,
-            'image_shapes': image_shapes}
-
-def infer_lobe_masking_collate_fn(batches) -> Dict[str, torch.Tensor]:
-    num_splits = []
-    imgs = []
-    lobes = []
-    nzhws = []
-    spacings = []
-    series_names = []
-    series_folders = []
-    image_shapes = []
-    
-    for b in batches:
-        imgs.append(b['split_images'])
-        lobes.append(b['split_lobes'])
-        num_splits.append(b['split_images'].shape[0])
-        nzhws.append(b['nzhw'])
-        spacings.append(b['spacing'])
-        series_names.append(b['series_name'])
-        series_folders.append(b['series_folder'])
-        image_shapes.append(b['image_shape'])
-        
-    imgs = np.concatenate(imgs, axis=0)
-    lobes = np.concatenate(lobes, axis=0)
-    nzhws = np.stack(nzhws)
-    num_splits = np.array(num_splits)
-    
-    return {'split_images': torch.from_numpy(imgs),
-            'split_lobes': torch.from_numpy(lobes),
-            'nzhws': torch.from_numpy(nzhws), 
-            'num_splits': num_splits, 
-            'spacings': spacings, 
-            'series_names': series_names,
-            'series_folders': series_folders,
-            'image_shapes': image_shapes}
+    if apply_lobe:
+        return {'split_images': torch.from_numpy(imgs),
+                'split_lobes': torch.from_numpy(split_lobes),
+                'nzhws': torch.from_numpy(nzhws), 
+                'num_splits': num_splits, 
+                'spacings': spacings, 
+                'series_names': series_names,
+                'series_folders': series_folders,
+                'image_shapes': image_shapes}
+    else:
+        return {'split_images': torch.from_numpy(imgs),
+                'nzhws': torch.from_numpy(nzhws), 
+                'num_splits': num_splits, 
+                'spacings': spacings, 
+                'series_names': series_names,
+                'series_folders': series_folders,
+                'image_shapes': image_shapes}
 
 def infer_aug_collate_fn(batches) -> Dict[str, torch.Tensor]:
     num_splits = []

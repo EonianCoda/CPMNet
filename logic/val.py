@@ -75,6 +75,10 @@ def val(args,
     with get_progress_bar('Validation', len(val_loader)) as progress_bar:
         for sample in val_loader:
             data = sample['split_images'].to(device, non_blocking=True, memory_format=memory_format)
+            if args.apply_lobe:
+                lobes = sample['split_lobes'].to(device, non_blocking=True, memory_format=memory_format)
+            else:
+                lobes = None
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
@@ -86,15 +90,18 @@ def val(args,
                 if end > data.size(0):
                     end = data.size(0)
                 input = data[i * batch_size:end]
-                if args.val_mixed_precision:
-                    with torch.cuda.amp.autocast():
-                        with torch.no_grad():
-                            output = model(input)
-                            output = detection_postprocess(output, device=device)
+                if args.apply_lobe:
+                    lobe = lobes[i * batch_size:end]
                 else:
-                    with torch.no_grad():
+                    lobe = None
+                with torch.no_grad():
+                    if args.val_mixed_precision:
+                        with torch.cuda.amp.autocast():
+                            output = model(input)
+                            output = detection_postprocess(output, device=device, lobe_mask=lobe)
+                    else:
                         output = model(input)
-                        output = detection_postprocess(output, device=device) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                        output = detection_postprocess(output, device=device, lobe_mask=lobe) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputlist.append(output.data.cpu().numpy())
             
             outputs = np.concatenate(outputlist, 0)

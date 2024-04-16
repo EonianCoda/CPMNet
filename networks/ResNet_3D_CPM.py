@@ -6,7 +6,8 @@ import numpy as np
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
-from utils.box_utils import nms_3D
+
+from utils.box_utils import bbox_decode, make_anchors
 from .modules import SELayer, Identity, ConvBlock, act_layer, norm_layer3d
 
 def zyxdhw2zyxzyx(box, dim=-1):
@@ -14,24 +15,6 @@ def zyxdhw2zyxzyx(box, dim=-1):
     z1y1x1 = ctr_zyx - dhw/2
     z2y2x2 = ctr_zyx + dhw/2
     return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
-
-def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
-    """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
-    anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
-    Args:
-        anchor_points: torch.Tensor
-            A tensor of shape (bs, num_anchors, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
-        pred_offsets: torch.Tensor
-            A tensor of shape (bs, num_anchors, 3) containing the predicted offsets in the format (dz, dy, dx).
-        pred_shapes: torch.Tensor
-            A tensor of shape (bs, num_anchors, 3) containing the predicted shapes in the format (d, h, w).
-        stride_tensor: torch.Tensor
-            A tensor of shape (bs, 3) containing the strides of each dimension in format (z, y, x).
-    Returns:
-        A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
-    """
-    center_zyx = (anchor_points + pred_offsets) * stride_tensor
-    return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
 
 class BasicBlockNew(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):
@@ -234,6 +217,7 @@ class Resnet18(nn.Module):
         assert len(n_filters) == 4, 'The length of n_filters should be 4'
         self.detection_loss = detection_loss
         self.device = device
+        self.out_stride = out_stride
 
         # Stem
         self.in_conv = ConvBlock(n_channels, stem_filters, stride=1, norm_type=norm_type, act_type=act_type)
@@ -349,26 +333,6 @@ class Resnet18(nn.Module):
         nn.init.constant_(self.head.offset_output.weight, 0)
         nn.init.constant_(self.head.offset_output.bias, 0.05)
 
-def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Generate anchors from a feature.
-    Returns:
-        num_anchor is the number of anchors in the feature map, which is d * h * w.
-        A tuple of two tensors:
-            anchor_points: torch.Tensor
-                A tensor of shape (num_anchors, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
-            stride_tensor: torch.Tensor
-                A tensor of shape (num_anchors, 3) containing the strides of the anchor points, the strides of each anchor point are same.
-    """
-    dtype, device = feat.dtype, feat.device
-    _, _, d, h, w = feat.shape
-    strides = torch.tensor([input_size[0] / d, input_size[1] / h, input_size[2] / w], dtype=dtype, device=device)
-    sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
-    sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
-    sz = torch.arange(end=d, device=device, dtype=dtype) + grid_cell_offset  # shift z
-    anchor_points = torch.cartesian_prod(sz, sy, sx)
-    stride_tensor = strides.repeat(d * h * w, 1)
-    return anchor_points, stride_tensor
-
 class DetectionLoss(nn.Module):
     def __init__(self, 
                  crop_size=[64, 128, 128], 
@@ -417,7 +381,6 @@ class DetectionLoss(nn.Module):
         Returns:
             torch.Tensor: The calculated classification loss
         """
-        # classification_losses = []
         cls_pos_losses = []
         cls_neg_losses = []
         batch_size = pred.shape[0]
@@ -718,62 +681,3 @@ class DetectionLoss(nn.Module):
             iou_loss = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return cls_pos_loss, cls_neg_loss, reg_loss, offset_loss, iou_loss
-
-class DetectionPostprocess(nn.Module):
-    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96], min_size: int=-1):
-        super(DetectionPostprocess, self).__init__()
-        self.topk = topk
-        self.threshold = threshold
-        self.nms_threshold = nms_threshold
-        self.nms_topk = nms_topk
-        self.crop_size = crop_size
-        self.min_size = min_size
-
-    def forward(self, output, device, is_logits=True):
-        Cls = output['Cls']
-        Shape = output['Shape']
-        Offset = output['Offset']
-        batch_size = Cls.size()[0]
-        anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0)
-        # view shape
-        pred_scores = Cls.view(batch_size, 1, -1)
-        pred_shapes = Shape.view(batch_size, 3, -1)
-        pred_offsets = Offset.view(batch_size, 3, -1)
-
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
-        if is_logits:
-            pred_scores = pred_scores.sigmoid()
-        pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
-        pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
-        
-        # recale to input_size
-        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor)
-        # Get the topk scores and indices
-        topk_scores, topk_indices = torch.topk(pred_scores.squeeze(), self.topk, dim=-1, largest=True)
-        
-        dets = (-torch.ones((batch_size, self.topk, 8))).to(device)
-        for j in range(batch_size):
-            # Get indices of scores greater than threshold
-            topk_score = topk_scores[j]
-            topk_idx = topk_indices[j]
-            keep_box_mask = (topk_score > self.threshold)
-            keep_box_n = keep_box_mask.sum()
-            
-            if keep_box_n > 0:
-                keep_topk_score = topk_score[keep_box_mask]
-                keep_topk_idx = topk_idx[keep_box_mask]
-                
-                # 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-                det = (-torch.ones((keep_box_n, 8))).to(device)
-                det[:, 0] = 1
-                det[:, 1] = keep_topk_score
-                det[:, 2:] = pred_bboxes[j][keep_topk_idx]
-            
-                keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
-                dets[j][:len(keep)] = det[keep.long()]
-
-        if self.min_size > 0:
-            dets_volumes = dets[:, :, 4] * dets[:, :, 5] * dets[:, :, 6]
-            dets[dets_volumes < self.min_size] = -1
-                
-        return dets

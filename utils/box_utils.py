@@ -1,6 +1,48 @@
 import torch
+import torch.nn as nn
+
 import numpy as np
 from numpy.typing import NDArray
+from typing import List, Tuple
+
+def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
+    """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
+    anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
+    Args:
+        anchor_points: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
+        pred_offsets: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the predicted offsets in the format (dz, dy, dx).
+        pred_shapes: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the predicted shapes in the format (d, h, w).
+        stride_tensor: torch.Tensor
+            A tensor of shape (bs, 3) containing the strides of each dimension in format (z, y, x).
+    Returns:
+        A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
+    """
+    center_zyx = (anchor_points + pred_offsets) * stride_tensor
+    return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
+
+def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Generate anchors from a feature.
+    Returns:
+        num_anchor is the number of anchors in the feature map, which is d * h * w.
+        A tuple of two tensors:
+            anchor_points: torch.Tensor
+                A tensor of shape (num_anchors, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
+            stride_tensor: torch.Tensor
+                A tensor of shape (num_anchors, 3) containing the strides of the anchor points, the strides of each anchor point are same.
+    """
+    dtype, device = feat.dtype, feat.device
+    _, _, d, h, w = feat.shape
+    strides = torch.tensor([input_size[0] / d, input_size[1] / h, input_size[2] / w], dtype=dtype, device=device)
+    sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
+    sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
+    sz = torch.arange(end=d, device=device, dtype=dtype) + grid_cell_offset  # shift z
+    anchor_points = torch.cartesian_prod(sz, sy, sx)
+    stride_tensor = strides.repeat(d * h * w, 1)
+    return anchor_points, stride_tensor
+
 def nms_3D(dets: NDArray[np.float32], overlap=0.5, top_k=200):
     """
     Args:
@@ -48,7 +90,6 @@ def nms_3D(dets: NDArray[np.float32], overlap=0.5, top_k=200):
         inds = IoU <= overlap
         idx = idx[1:][inds]
     return torch.from_numpy(np.array(keep))
-
 
 def iou_3D(box1, box2):
     # need z_ctr, y_ctr, x_ctr, d

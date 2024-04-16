@@ -4,8 +4,6 @@ import argparse
 import torch
 import os
 import logging
-
-from networks.ResNet_3D_CPM import DetectionPostprocess
 ### data ###
 from dataload.dataset import DetDataset
 from dataload.utils import get_image_padding_value
@@ -18,7 +16,7 @@ from logic.val import val
 from logic.utils import load_model, get_memory_format
 
 from utils.logs import setup_logging
-from utils.utils import init_seed, write_yaml
+from utils.utils import init_seed, write_yaml, build_class
 from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 
 logger = logging.getLogger(__name__)
@@ -40,15 +38,17 @@ def get_args():
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first')
     parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
-    # hyper-parameters
+    # Val hyper-parameters
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # detection-hyper-parameters
+    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process.DetectionPostprocess')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--det_scan_nms_keep_top_k', type=int, default=40, help='scan nms keep top k')
     parser.add_argument('--do_padding', action='store_true', default=False, help='do padding or not')
+    parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
     parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # other
@@ -60,6 +60,7 @@ def get_args():
     return args
 
 def prepare_validation(args, device):
+    DetectionPostprocess = build_class(args.det_post_process_class)
     detection_postprocess = DetectionPostprocess(topk=args.det_topk, 
                                                  threshold=args.det_threshold, 
                                                  nms_threshold=args.det_nms_threshold,
@@ -73,7 +74,7 @@ def prepare_validation(args, device):
     model = model.to(device = device, memory_format=memory_format)
     return model, detection_postprocess
 
-def val_data_prepare(args):
+def val_data_prepare(args, model_out_stride=4):
     crop_size = args.crop_size
     overlap_size = [int(crop_size[i] * args.overlap_ratio) for i in range(len(crop_size))]
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
@@ -83,9 +84,10 @@ def val_data_prepare(args):
         logger.info('Do padding: True, pad value: {}'.format(pad_value))
     else:
         logger.info('Do padding: False')
+    logger.info('Apply lobe: True' if args.apply_lobe else 'Apply lobe: False')
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=args.do_padding)
-    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
+    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=model_out_stride)
     val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=min(args.batch_size, args.max_workers) , collate_fn=infer_collate_fn, pin_memory=True)
     
     logger.info("There are {} samples in the val set".format(len(val_loader.dataset)))
@@ -112,13 +114,16 @@ if __name__ == '__main__':
         model, detection_postprocess = prepare_validation(args, device)
         init_seed(args.seed)
         
-        val_loader = val_data_prepare(args)
+        val_loader = val_data_prepare(args, getattr(model, 'out_stride', 4))
         
         write_yaml(os.path.join(exp_folder, 'val_config.yaml'), args)
         logger.info('Save validation results to "{}"'.format(exp_folder))
         logger.info('Val set: "{}"'.format(args.val_set))
         
         save_folder_name = '{}_{}'.format(os.path.basename(model_path).split('.')[0], os.path.basename(args.val_set).split('.')[0])
+        if args.apply_lobe:
+            save_folder_name += '_lobe'
+        
         metrics = val(args = args,
                     model = model,
                     detection_postprocess=detection_postprocess,
