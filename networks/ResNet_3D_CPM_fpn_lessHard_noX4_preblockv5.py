@@ -1,10 +1,37 @@
 from typing import Tuple, List, Union, Dict
+import random
 import math
+import numpy as np
 
 import torch.nn as nn
 import torch
 import torch.nn.functional as F
+from utils.box_utils import nms_3D
 from .modules import SELayer, Identity, ConvBlock, act_layer, norm_layer3d
+
+def zyxdhw2zyxzyx(box, dim=-1):
+    ctr_zyx, dhw = torch.split(box, 3, dim)
+    z1y1x1 = ctr_zyx - dhw/2
+    z2y2x2 = ctr_zyx + dhw/2
+    return torch.cat((z1y1x1, z2y2x2), dim)  # zyxzyx bbox
+
+def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, dim=-1) -> torch.Tensor:
+    """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
+    anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
+    Args:
+        anchor_points: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
+        pred_offsets: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the predicted offsets in the format (dz, dy, dx).
+        pred_shapes: torch.Tensor
+            A tensor of shape (bs, num_anchors, 3) containing the predicted shapes in the format (d, h, w).
+        stride_tensor: torch.Tensor
+            A tensor of shape (bs, 3) containing the strides of each dimension in format (z, y, x).
+    Returns:
+        A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
+    """
+    center_zyx = (anchor_points + pred_offsets) * stride_tensor
+    return torch.cat((center_zyx, 2*pred_shapes), dim)  # zyxdhw bbox
 
 class BasicBlockNew(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, norm_type='batchnorm', act_type='ReLU', se=True):
@@ -204,10 +231,12 @@ class FPN3D(nn.Module):
         # FPN
         self.P4_1 = ConvBlock(n_filters[-2], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
         self.P4_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
+        # self.P4_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
 
         self.P3_1 = ConvBlock(n_filters[-3], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
         if len(n_filters) == 4:
             self.P3_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
+            # self.P3_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
             self.P2_1 = ConvBlock(n_filters[-4], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
             self.P2_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
         else:
@@ -234,6 +263,25 @@ class FPN3D(nn.Module):
             P3_x = self.P3_2(P3_x)
             return P3_x
         
+class StemBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, norm_type='none', act_type='ReLU'):
+        super(StemBlock, self).__init__()
+        feat_size = out_channels // 2
+        self.conv1 = ConvBlock(in_channels, feat_size, kernel_size=1, norm_type=norm_type, act_type='none')
+        self.conv2 = ConvBlock(in_channels, feat_size, kernel_size=3, norm_type=norm_type, act_type='none')
+        self.conv3 = ConvBlock(in_channels, feat_size, kernel_size=3, dilation=2, norm_type=norm_type, act_type='none')
+        self.conv4 = ConvBlock(in_channels, feat_size, kernel_size=3, dilation=3, norm_type=norm_type, act_type='none')
+        self.trans = ConvBlock(feat_size * 4, out_channels, kernel_size=1, norm_type=norm_type, act_type=act_type)
+    
+    def forward(self, x):
+        x1 = self.conv1(x)
+        x2 = self.conv2(x)
+        x3 = self.conv3(x)
+        x4 = self.conv4(x)
+        x = torch.cat([x1, x2, x3, x4], dim=1)
+        x = self.trans(x)
+        return x
+        
 class Resnet18(nn.Module):
     def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
                  norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
@@ -245,7 +293,8 @@ class Resnet18(nn.Module):
         self.device = device
         self.out_stride = out_stride
         # Stem
-        self.in_conv = ConvBlock(n_channels, stem_filters, stride=1, norm_type=norm_type, act_type=act_type)
+        stem_block = StemBlock
+        self.in_conv = stem_block(n_channels, stem_filters, norm_type=norm_type, act_type=act_type)
         self.in_dw = ConvBlock(stem_filters, n_filters[0], stride=first_stride, norm_type=norm_type, act_type=act_type)
         
         # Encoder
@@ -278,7 +327,7 @@ class Resnet18(nn.Module):
         self._init_weight()
 
     def forward(self, inputs):
-        if self.training and self.detection_loss != None:
+        if self.training:
             x, labels = inputs
         else:
             x = inputs
@@ -307,7 +356,7 @@ class Resnet18(nn.Module):
             
         "decode"
         out = self.head(feats)
-        if self.training and self.detection_loss != None:
+        if self.training:
             cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
             return cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss
         return out
@@ -328,14 +377,26 @@ class Resnet18(nn.Module):
 
         nn.init.constant_(self.head.offset_output.weight, 0)
         nn.init.constant_(self.head.offset_output.bias, 0.05)
-        
-from typing import Tuple, List, Union, Dict
-import random
-import torch.nn as nn
-import torch
-import torch.nn.functional as F
-import numpy as np
-from utils.box_utils import bbox_decode, make_anchors, zyxdhw2zyxzyx
+
+def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Generate anchors from a feature.
+    Returns:
+        num_anchor is the number of anchors in the feature map, which is d * h * w.
+        A tuple of two tensors:
+            anchor_points: torch.Tensor
+                A tensor of shape (num_anchors, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
+            stride_tensor: torch.Tensor
+                A tensor of shape (num_anchors, 3) containing the strides of the anchor points, the strides of each anchor point are same.
+    """
+    dtype, device = feat.dtype, feat.device
+    _, _, d, h, w = feat.shape
+    strides = torch.tensor([input_size[0] / d, input_size[1] / h, input_size[2] / w], dtype=dtype, device=device)
+    sx = torch.arange(end=w, device=device, dtype=dtype) + grid_cell_offset  # shift x
+    sy = torch.arange(end=h, device=device, dtype=dtype) + grid_cell_offset  # shift y
+    sz = torch.arange(end=d, device=device, dtype=dtype) + grid_cell_offset  # shift z
+    anchor_points = torch.cartesian_prod(sz, sy, sx)
+    stride_tensor = strides.repeat(d * h * w, 1)
+    return anchor_points, stride_tensor
 
 class DetectionLoss(nn.Module):
     def __init__(self, 
@@ -347,10 +408,8 @@ class DetectionLoss(nn.Module):
                  cls_fn_weight = 4.0,
                  cls_fn_threshold = 0.8,
                  cls_neg_pos_ratio = 100,
-                 cls_hard_fp_thrs1 = 0.5,
-                 cls_hard_fp_thrs2 = 0.7,
-                 cls_hard_fp_w1 = 1.5,
-                 cls_hard_fp_w2 = 2.0):
+                 cls_hard_fp_weight = 2.0,
+                 cls_hard_fp_threshold = 0.7):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -362,15 +421,12 @@ class DetectionLoss(nn.Module):
         self.cls_fn_threshold = cls_fn_threshold
         
         self.cls_neg_pos_ratio = cls_neg_pos_ratio
-        
-        self.cls_hard_fp_thrs1 = cls_hard_fp_thrs1
-        self.cls_hard_fp_thrs2 = cls_hard_fp_thrs2
-        self.cls_hard_fp_w1 = cls_hard_fp_w1
-        self.cls_hard_fp_w2 = cls_hard_fp_w2
+        self.cls_hard_fp_weight = cls_hard_fp_weight
+        self.cls_hard_fp_threshold = cls_hard_fp_threshold
         
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, 
-                 hard_fp_thrs1 = 0.5, hard_fp_thrs2 = 0.7, hard_fp_w1 = 1.5, hard_fp_w2 = 2.0):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, 
+                 neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, hard_fp_weight = 2.0, hard_fp_threshold = 0.7):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
 
@@ -390,6 +446,7 @@ class DetectionLoss(nn.Module):
         Returns:
             torch.Tensor: The calculated classification loss
         """
+        # classification_losses = []
         cls_pos_losses = []
         cls_neg_losses = []
         batch_size = pred.shape[0]
@@ -418,10 +475,16 @@ class DetectionLoss(nn.Module):
                 cls_loss[FN_index == 1] *= fn_weight
                 
                 # Weight the hard false positives(FP)
-                if hard_fp_thrs1 != -1 and hard_fp_w1 != -1 and hard_fp_thrs2 != -1 and hard_fp_w2 != -1:
-                    hard_FP_weight = hard_fp_w1 + torch.clamp((cls_prob - hard_fp_thrs1) / (hard_fp_thrs2 - hard_fp_thrs1), min=0.0, max=1.0) * (hard_fp_w2 - hard_fp_w1)
-                    hard_FP_index = torch.gt(cls_prob, hard_fp_thrs1) & (record_targets == 0)
-                    cls_loss[hard_FP_index == 1] *= hard_FP_weight[hard_FP_index == 1]
+                if hard_fp_threshold != -1 and hard_fp_weight != -1:
+                    hard_FP_thre1, hard_FP_thrs2 = 0.5, 0.7
+                    hard_FP_w1, hard_FP_w2 = 1.5, 2
+                    hard_FP_weight = hard_FP_w1 + torch.clamp((cls_prob - hard_FP_thre1) / (hard_FP_thrs2 - hard_FP_thre1), min=0.0, max=1.0) * (hard_FP_w2 - hard_FP_w1)
+                    hard_fp_index = torch.gt(cls_prob, hard_FP_w1) & (record_targets == 0)
+                    cls_loss[hard_fp_index == 1] *= hard_FP_weight[hard_fp_index == 1]
+                    # hard_FP_index = torch.gt(cls_prob, hard_fp_threshold) & (record_targets == 0)
+                    # cls_loss[hard_FP_index == 1] *= hard_fp_weight
+                    # less_hard_FP_index = torch.gt(cls_prob, 0.5) & (record_targets == 0) & torch.lt(cls_prob, hard_fp_threshold)
+                    # cls_loss[less_hard_FP_index] *= 1.5
                     
                 Positive_loss = cls_loss[record_targets == 1]
                 Negative_loss = cls_loss[record_targets == 0]
@@ -442,10 +505,16 @@ class DetectionLoss(nn.Module):
                 cls_neg_losses.append(Negative_loss)
             else: # no positive pixels
                 # Weight the hard false positives(FP)
-                if hard_fp_thrs1 != -1 and hard_fp_w1 != -1 and hard_fp_thrs2 != -1 and hard_fp_w2 != -1:
-                    hard_FP_weight = hard_fp_w1 + torch.clamp((cls_prob - hard_fp_thrs1) / (hard_fp_thrs2 - hard_fp_thrs1), min=0.0, max=1.0) * (hard_fp_w2 - hard_fp_w1)
-                    hard_FP_index = torch.gt(cls_prob, hard_fp_thrs1) & (record_targets == 0)
-                    cls_loss[hard_FP_index == 1] *= hard_FP_weight[hard_FP_index == 1]
+                if hard_fp_threshold != -1 and hard_fp_weight != -1:
+                    hard_FP_thre1, hard_FP_thrs2 = 0.5, 0.7
+                    hard_FP_w1, hard_FP_w2 = 1.5, 2.0
+                    hard_FP_weight = hard_FP_w1 + torch.clamp((cls_prob - hard_FP_thre1) / (hard_FP_thrs2 - hard_FP_thre1), min=0.0, max=1.0) * (hard_FP_w2 - hard_FP_w1)
+                    hard_fp_index = torch.gt(cls_prob, hard_FP_w1) & (record_targets == 0)
+                    cls_loss[hard_fp_index == 1] *= hard_FP_weight[hard_fp_index == 1]
+                    # hard_FP_index = torch.gt(cls_prob, hard_fp_threshold) & (record_targets == 0)
+                    # cls_loss[hard_FP_index == 1] *= hard_fp_weight
+                    # less_hard_FP_index = torch.gt(cls_prob, 0.5) & (record_targets == 0) & torch.lt(cls_prob, hard_fp_threshold)
+                    # cls_loss[less_hard_FP_index] *= 1.5
                 
                 # Randomly sample negative pixels
                 Negative_loss = cls_loss[record_targets == 0]
@@ -677,10 +746,8 @@ class DetectionLoss(nn.Module):
                                                    num_neg = self.cls_num_neg,
                                                    fn_weight = self.cls_fn_weight, 
                                                    fn_threshold = self.cls_fn_threshold,
-                                                   hard_fp_thrs1=self.cls_hard_fp_thrs1,
-                                                   hard_fp_thrs2=self.cls_hard_fp_thrs2,
-                                                    hard_fp_w1=self.cls_hard_fp_w1,
-                                                    hard_fp_w2=self.cls_hard_fp_w2)
+                                                   hard_fp_weight = self.cls_hard_fp_weight,
+                                                   hard_fp_threshold = self.cls_hard_fp_threshold)
         
         # Only calculate the loss of positive samples                                 
         fg_mask = target_scores.squeeze(-1).bool()
@@ -694,3 +761,62 @@ class DetectionLoss(nn.Module):
             iou_loss = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return cls_pos_loss, cls_neg_loss, reg_loss, offset_loss, iou_loss
+
+class DetectionPostprocess(nn.Module):
+    def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96], min_size: int=-1):
+        super(DetectionPostprocess, self).__init__()
+        self.topk = topk
+        self.threshold = threshold
+        self.nms_threshold = nms_threshold
+        self.nms_topk = nms_topk
+        self.crop_size = crop_size
+        self.min_size = min_size
+
+    def forward(self, output, device, is_logits=True):
+        Cls = output['Cls']
+        Shape = output['Shape']
+        Offset = output['Offset']
+        batch_size = Cls.size()[0]
+        anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0)
+        # view shape
+        pred_scores = Cls.view(batch_size, 1, -1)
+        pred_shapes = Shape.view(batch_size, 3, -1)
+        pred_offsets = Offset.view(batch_size, 3, -1)
+
+        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
+        if is_logits:
+            pred_scores = pred_scores.sigmoid()
+        pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
+        pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
+        
+        # recale to input_size
+        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor)
+        # Get the topk scores and indices
+        topk_scores, topk_indices = torch.topk(pred_scores.squeeze(), self.topk, dim=-1, largest=True)
+        
+        dets = (-torch.ones((batch_size, self.topk, 8))).to(device)
+        for j in range(batch_size):
+            # Get indices of scores greater than threshold
+            topk_score = topk_scores[j]
+            topk_idx = topk_indices[j]
+            keep_box_mask = (topk_score > self.threshold)
+            keep_box_n = keep_box_mask.sum()
+            
+            if keep_box_n > 0:
+                keep_topk_score = topk_score[keep_box_mask]
+                keep_topk_idx = topk_idx[keep_box_mask]
+                
+                # 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                det = (-torch.ones((keep_box_n, 8))).to(device)
+                det[:, 0] = 1
+                det[:, 1] = keep_topk_score
+                det[:, 2:] = pred_bboxes[j][keep_topk_idx]
+            
+                keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
+                dets[j][:len(keep)] = det[keep.long()]
+
+        if self.min_size > 0:
+            dets_volumes = dets[:, :, 4] * dets[:, :, 5] * dets[:, :, 6]
+            dets[dets_volumes < self.min_size] = -1
+                
+        return dets

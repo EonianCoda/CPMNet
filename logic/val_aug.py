@@ -112,7 +112,6 @@ def val(args,
                 Shape_output = Shape_output.view(-1, num_aug, 3, d, h, w)
                 Offset_output = Offset_output.view(-1, num_aug, 3, d, h, w)
                 
-                # ctr_transforms = all_ctr_transforms[i * batch_size:end] # (bs, num_aug)
                 feat_transforms = all_feat_transforms[i * batch_size:end] # (bs, num_aug)
                 for b_i in range(len(feat_transforms)):
                     for aug_i in range(num_aug):

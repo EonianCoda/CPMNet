@@ -157,8 +157,8 @@ class UpsamplingBlock(nn.Module):
         return x
 
 class ASPP(nn.Module):
-    def __init__(self, channels, ratio=4,
-                 dilations=[1, 2, 3, 4],
+    def __init__(self, channels, ratio=2,
+                 dilations=[1, 1, 2, 3],
                  norm_type='batchnorm', act_type='ReLU'):
         super(ASPP, self).__init__()
         # assert dilations[0] == 1, 'The first item in dilations should be `1`'
@@ -225,15 +225,90 @@ class ClsRegHead(nn.Module):
         dict1['Offset'] = Offset
         return dict1
 
+class FPN3D(nn.Module):
+    def __init__(self, n_filters, feature_size=64, norm_type='batchnorm', act_type='ReLU'):
+        super(FPN3D, self).__init__()
+
+        # FPN
+        self.P5_1 = ConvBlock(n_filters[-1], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
+        self.P5_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
+        # self.P5_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
+        
+        self.P4_1 = ConvBlock(n_filters[-2], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
+        self.P4_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
+        # self.P4_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
+
+        self.P3_1 = ConvBlock(n_filters[-3], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
+        if len(n_filters) == 4:
+            self.P3_upsampled = UpsamplingDeconvBlock(feature_size, feature_size, stride=2, norm_type=norm_type, act_type='none')
+            # self.P3_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
+            self.P2_1 = ConvBlock(n_filters[-4], feature_size, kernel_size=1, norm_type=norm_type, act_type='none')
+            self.P2_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
+        else:
+            self.P3_2 = ConvBlock(feature_size, feature_size, kernel_size=3, norm_type=norm_type, act_type='none')
+
+    def forward(self, inputs):
+        if getattr(self, 'P3_upsampled', None) is not None:
+            C2, C3, C4, C5 = inputs
+        else:
+            C3, C4, C5 = inputs
+        P5_x = self.P5_1(C5)
+        P5_upsampled_x = self.P5_upsampled(P5_x)
+        # P5_x = self.P5_2(P5_x)
+
+        P4_x = self.P4_1(C4)
+        P4_x = P4_x + P5_upsampled_x
+        P4_upsampled_x = self.P4_upsampled(P4_x)
+        # P4_x = self.P4_2(P4_x)
+
+        P3_x = self.P3_1(C3)
+        P3_x = P3_x + P4_upsampled_x
+        if hasattr(self, 'P3_upsampled'):
+            P3_upsampled_x = self.P3_upsampled(P3_x)
+            P2_x = self.P2_1(C2)
+            P2_x = P2_x + P3_upsampled_x
+            P2_x = self.P2_2(P2_x)
+            return P2_x
+        else:
+            P3_x = self.P3_2(P3_x)
+            return P3_x
+
+class StemBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, norm_type='none', act_type='ReLU'):
+        super(StemBlock, self).__init__()
+        feat_size = out_channels // 2
+        self.conv1_1 = ConvBlock(in_channels, feat_size, kernel_size=1, norm_type=norm_type, act_type='none')
+        
+        self.conv2_1 = ConvBlock(in_channels, feat_size, kernel_size=1, norm_type=norm_type, act_type='none')
+        self.conv2_2 = ConvBlock(feat_size, feat_size, kernel_size=3, norm_type=norm_type, act_type='none')
+        
+        self.conv3_1 = ConvBlock(in_channels, feat_size, kernel_size=1, norm_type=norm_type, act_type='none')
+        self.conv3_2 = ConvBlock(feat_size, feat_size, kernel_size=5, norm_type=norm_type, act_type='none')
+        
+        self.trans = ConvBlock(feat_size * 3, out_channels, kernel_size=1, norm_type=norm_type, act_type=act_type)
+    
+    def forward(self, x):
+        x1 = self.conv1_1(x)
+        x2 = self.conv2_2(self.conv2_1(x))
+        x3 = self.conv3_2(self.conv3_1(x))
+        
+        x = torch.cat([x1, x2, x3], dim=1)
+        x = self.trans(x)
+        return x
+        
 class Resnet18(nn.Module):
-    def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32, norm_type='batchnorm', 
-                 head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0, first_stride=(2, 2, 2)):
+    def __init__(self, n_channels=1, n_blocks=[2, 3, 3, 3], n_filters=[64, 96, 128, 160], stem_filters=32,
+                 norm_type='batchnorm', head_norm='batchnorm', act_type='ReLU', se=True, aspp=False, dw_type='conv', up_type='deconv', dropout=0.0,
+                 first_stride=(2, 2, 2), detection_loss=None, device=None, out_stride=4):
         super(Resnet18, self).__init__()
         assert len(n_blocks) == 4, 'The length of n_blocks should be 4'
         assert len(n_filters) == 4, 'The length of n_filters should be 4'
-
+        self.detection_loss = detection_loss
+        self.device = device
+        self.out_stride = out_stride
         # Stem
-        self.in_conv = ConvBlock(n_channels, stem_filters, stride=1, norm_type=norm_type, act_type=act_type)
+        self.in_conv = nn.Sequential(StemBlock(n_channels, stem_filters, norm_type=norm_type, act_type=act_type),
+                                     StemBlock(stem_filters, stem_filters, norm_type=norm_type, act_type=act_type))
         self.in_dw = ConvBlock(stem_filters, n_filters[0], stride=first_stride, norm_type=norm_type, act_type=act_type)
         
         # Encoder
@@ -259,55 +334,51 @@ class Resnet18(nn.Module):
         else:
             self.dropout = None
             
-        # Decoder
-        up_block = UpsamplingDeconvBlock if up_type == 'deconv' else UpsamplingBlock
-        self.block33_up = up_block(n_filters[3], n_filters[2], norm_type=norm_type, act_type=act_type)
-        self.block33_res = LayerBasic(1, n_filters[2], n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
-        self.block33 = LayerBasic(2, n_filters[2] * 2, n_filters[2], norm_type=norm_type, act_type=act_type, se=se)
-
-        self.block22_up = up_block(n_filters[2], n_filters[1], norm_type=norm_type, act_type=act_type)
-        self.block22_res = LayerBasic(1, n_filters[1], n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
-        self.block22 = LayerBasic(2, n_filters[1] * 2, n_filters[1], norm_type=norm_type, act_type=act_type, se=se)
+        if out_stride == 4:
+            self.fpn = FPN3D(n_filters[1:], feature_size=n_filters[1], norm_type=norm_type, act_type=act_type)
+            # Head
+            self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
+        elif out_stride == 2:
+            self.fpn = FPN3D(n_filters, feature_size=n_filters[0], norm_type=norm_type, act_type=act_type)
+            # Head
+            self.head = ClsRegHead(in_channels=n_filters[0], feature_size=n_filters[0], conv_num=3, norm_type=head_norm, act_type=act_type)
         
-        # Head
-        self.head = ClsRegHead(in_channels=n_filters[1], feature_size=n_filters[1], conv_num=3, norm_type=head_norm, act_type=act_type)
         self._init_weight()
 
     def forward(self, inputs):
-        x = inputs
+        if self.training:
+            x, labels = inputs
+        else:
+            x = inputs
         "input encode"
         x = self.in_conv(x)
         x = self.in_dw(x)
         
         x1 = self.block1(x)
+        
         x = self.block1_dw(x1)
-
         x2 = self.block2(x)
-        x = self.block2_dw(x2)
 
+        x = self.block2_dw(x2)
         if self.dropout is not None:
             x2 = self.dropout(x2)
-
         x3 = self.block3(x)
-        x = self.block3_dw(x3)
 
+        x = self.block3_dw(x3)
         if self.dropout is not None:
             x3 = self.dropout(x3)
+        x4 = self.block4(x)
 
-        x = self.block4(x)
-
+        if self.out_stride == 4:
+            feats = self.fpn([x2, x3, x4])
+        else:
+            feats = self.fpn([x1, x2, x3, x4])
+            
         "decode"
-        x = self.block33_up(x)
-        x3 = self.block33_res(x3)
-        x = torch.cat([x, x3], dim=1)
-        x = self.block33(x)
-
-        x = self.block22_up(x)
-        x2 = self.block22_res(x2)
-        x = torch.cat([x, x2], dim=1)
-        x = self.block22(x)
-
-        out = self.head(x)
+        out = self.head(feats)
+        if self.training:
+            cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
+            return cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss
         return out
 
     def _init_weight(self):
@@ -355,7 +426,10 @@ class DetectionLoss(nn.Module):
                  cls_num_neg = 10000,
                  cls_num_hard = 100,
                  cls_fn_weight = 4.0,
-                 cls_fn_threshold = 0.8):
+                 cls_fn_threshold = 0.8,
+                 cls_neg_pos_ratio = 100,
+                 cls_hard_fp_weight = 2.0,
+                 cls_hard_fp_threshold = 0.7):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -365,8 +439,14 @@ class DetectionLoss(nn.Module):
         self.cls_num_hard = cls_num_hard
         self.cls_fn_weight = cls_fn_weight
         self.cls_fn_threshold = cls_fn_threshold
+        
+        self.cls_neg_pos_ratio = cls_neg_pos_ratio
+        self.cls_hard_fp_weight = cls_hard_fp_weight
+        self.cls_hard_fp_threshold = cls_hard_fp_threshold
+        
     @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
+    def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, 
+                 neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, hard_fp_weight = 2.0, hard_fp_threshold = 0.7):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
 
@@ -381,17 +461,21 @@ class DetectionLoss(nn.Module):
             ratio (int): The ratio of negative to positive pixels to consider (default: 100)
             fn_weight (float): The weight for false negative pixels (default: 4.0)
             fn_threshold (float): The threshold for considering a pixel as a false negative (default: 0.8)
-
+            hard_fp_weight (float): The weight for hard false positive pixels (default: 2.0)
+            hard_fp_threshold (float): The threshold for considering a pixel as a hard false positive (default: 0.7)
         Returns:
             torch.Tensor: The calculated classification loss
         """
-        classification_losses = []
+        # classification_losses = []
+        cls_pos_losses = []
+        cls_neg_losses = []
         batch_size = pred.shape[0]
         for j in range(batch_size):
             pred_b = pred[j]
             target_b = target[j]
             mask_ignore_b = mask_ignore[j]
             
+            # Calculate the focal weight
             cls_prob = torch.sigmoid(pred_b.detach())
             cls_prob = torch.clamp(cls_prob, 1e-4, 1.0 - 1e-4)
             alpha_factor = torch.ones(pred_b.shape).to(pred_b.device) * alpha
@@ -399,41 +483,83 @@ class DetectionLoss(nn.Module):
             focal_weight = torch.where(torch.eq(target_b, 1.), 1. - cls_prob, cls_prob)
             focal_weight = alpha_factor * torch.pow(focal_weight, gamma)
 
+            # Calculate the binary cross entropy loss
             bce = F.binary_cross_entropy_with_logits(pred_b, target_b, reduction='none')
             num_positive_pixels = torch.sum(target_b == 1)
             cls_loss = focal_weight * bce
             cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
             record_targets = target_b.clone()
             if num_positive_pixels > 0:
-                # FN_weights = 4.0  # 10.0  for ablation study
+                # Weight the hard false negatives(FN)
                 FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
-                cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
+                cls_loss[FN_index == 1] *= fn_weight
                 
-                Negative_loss = cls_loss[record_targets == 0]
+                # Weight the hard false positives(FP)
+                if hard_fp_threshold != -1 and hard_fp_weight != -1:
+                    hard_FP_thre1, hard_FP_thrs2 = 0.5, 0.7
+                    hard_FP_w1, hard_FP_w2 = 1.5, 2
+                    hard_FP_weight = hard_FP_w1 + torch.clamp((cls_prob - hard_FP_thre1) / (hard_FP_thrs2 - hard_FP_thre1), min=0.0, max=1.0) * (hard_FP_w2 - hard_FP_w1)
+                    hard_fp_index = torch.gt(cls_prob, hard_FP_w1) & (record_targets == 0)
+                    cls_loss[hard_fp_index == 1] *= hard_FP_weight[hard_fp_index == 1]
+                    # hard_FP_index = torch.gt(cls_prob, hard_fp_threshold) & (record_targets == 0)
+                    # cls_loss[hard_FP_index == 1] *= hard_fp_weight
+                    # less_hard_FP_index = torch.gt(cls_prob, 0.5) & (record_targets == 0) & torch.lt(cls_prob, hard_fp_threshold)
+                    # cls_loss[less_hard_FP_index] *= 1.5
+                    
                 Positive_loss = cls_loss[record_targets == 1]
-                
+                Negative_loss = cls_loss[record_targets == 0]
+                # Randomly sample negative pixels
                 if num_neg != -1:
                     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
-                    Negative_loss = Negative_loss[neg_idcs] 
-                _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
+                    Negative_loss = Negative_loss[neg_idcs]
+                    
+                # Get the top k negative pixels
+                _, keep_idx = torch.topk(Negative_loss, min(neg_pos_ratio * num_positive_pixels, len(Negative_loss))) 
                 Negative_loss = Negative_loss[keep_idx] 
                 
-                Positive_loss = Positive_loss.sum()
-                Negative_loss = Negative_loss.sum()
-                cls_loss = Positive_loss + Negative_loss
-
-            else:
+                # Calculate the loss
+                num_positive_pixels = torch.clamp(num_positive_pixels.float(), min=1.0)
+                Positive_loss = Positive_loss.sum() / num_positive_pixels
+                Negative_loss = Negative_loss.sum() / num_positive_pixels
+                cls_pos_losses.append(Positive_loss)
+                cls_neg_losses.append(Negative_loss)
+            else: # no positive pixels
+                # Weight the hard false positives(FP)
+                if hard_fp_threshold != -1 and hard_fp_weight != -1:
+                    hard_FP_thre1, hard_FP_thrs2 = 0.5, 0.7
+                    hard_FP_w1, hard_FP_w2 = 1.5, 2.0
+                    hard_FP_weight = hard_FP_w1 + torch.clamp((cls_prob - hard_FP_thre1) / (hard_FP_thrs2 - hard_FP_thre1), min=0.0, max=1.0) * (hard_FP_w2 - hard_FP_w1)
+                    hard_fp_index = torch.gt(cls_prob, hard_FP_w1) & (record_targets == 0)
+                    cls_loss[hard_fp_index == 1] *= hard_FP_weight[hard_fp_index == 1]
+                    # hard_FP_index = torch.gt(cls_prob, hard_fp_threshold) & (record_targets == 0)
+                    # cls_loss[hard_FP_index == 1] *= hard_fp_weight
+                    # less_hard_FP_index = torch.gt(cls_prob, 0.5) & (record_targets == 0) & torch.lt(cls_prob, hard_fp_threshold)
+                    # cls_loss[less_hard_FP_index] *= 1.5
+                
+                # Randomly sample negative pixels
                 Negative_loss = cls_loss[record_targets == 0]
                 if num_neg != -1:
                     neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
                     Negative_loss = Negative_loss[neg_idcs]
-                assert len(Negative_loss) > num_hard
+                
+                # Get the top k negative pixels   
                 _, keep_idx = torch.topk(Negative_loss, num_hard)
+                
+                # Calculate the loss
                 Negative_loss = Negative_loss[keep_idx]
                 Negative_loss = Negative_loss.sum()
-                cls_loss = Negative_loss
-            classification_losses.append(cls_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
-        return torch.mean(torch.stack(classification_losses))
+                cls_neg_losses.append(Negative_loss)
+                
+        if len(cls_pos_losses) == 0:
+            cls_pos_loss = torch.tensor(0.0, device=pred.device)
+        else:
+            cls_pos_loss = torch.sum(torch.stack(cls_pos_losses)) / batch_size
+            
+        if len(cls_neg_losses) == 0:
+            cls_neg_loss = torch.tensor(0.0, device=pred.device)
+        else:
+            cls_neg_loss = torch.sum(torch.stack(cls_neg_losses)) / batch_size
+        return cls_pos_loss, cls_neg_loss
     
     @staticmethod
     def target_proprocess(annotations: torch.Tensor, 
@@ -631,329 +757,30 @@ class DetectionLoss(nn.Module):
                                                                                                      ignore_ratio = self.pos_ignore_ratio)
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
+        mask_ignore = mask_ignore.int()
+        cls_pos_loss, cls_neg_loss = self.cls_loss(pred = pred_scores, 
+                                                   target = target_scores, 
+                                                   mask_ignore = mask_ignore, 
+                                                   neg_pos_ratio = self.cls_neg_pos_ratio,
+                                                   num_hard = self.cls_num_hard, 
+                                                   num_neg = self.cls_num_neg,
+                                                   fn_weight = self.cls_fn_weight, 
+                                                   fn_threshold = self.cls_fn_threshold,
+                                                   hard_fp_weight = self.cls_hard_fp_weight,
+                                                   hard_fp_threshold = self.cls_hard_fp_threshold)
+        
+        # Only calculate the loss of positive samples                                 
         fg_mask = target_scores.squeeze(-1).bool()
-        classification_losses = self.cls_loss(pred_scores, target_scores, mask_ignore.int(), 
-                                              num_hard=self.cls_num_hard, 
-                                              num_neg=self.cls_num_neg,
-                                              fn_weight=self.cls_fn_weight, 
-                                              fn_threshold=self.cls_fn_threshold)
-                                              
         if fg_mask.sum() == 0:
-            reg_losses = torch.tensor(0).float().to(device)
-            offset_losses = torch.tensor(0).float().to(device)
-            iou_losses = torch.tensor(0).float().to(device)
+            reg_loss = torch.tensor(0.0, device=device)
+            offset_loss = torch.tensor(0.0, device=device)
+            iou_loss = torch.tensor(0.0, device=device)
         else:
-            reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
-            offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            reg_loss = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
+            offset_loss = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
+            iou_loss = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
-        return classification_losses, reg_losses, offset_losses, iou_losses
-    
-class Unsupervised_DetectionLoss(nn.Module):
-    def __init__(self, 
-                 crop_size=[64, 128, 128], 
-                 pos_target_topk = 7, 
-                 pos_ignore_ratio = 3,
-                 cls_num_neg = 10000,
-                 cls_num_hard = 100,
-                 cls_fn_weight = 4.0,
-                 cls_fn_threshold = 0.8):
-        super(Unsupervised_DetectionLoss, self).__init__()
-        self.crop_size = crop_size
-        self.pos_target_topk = pos_target_topk
-        self.pos_ignore_ratio = pos_ignore_ratio
-        
-        self.cls_num_neg = cls_num_neg
-        self.cls_num_hard = cls_num_hard
-        self.cls_fn_weight = cls_fn_weight
-        self.cls_fn_threshold = cls_fn_threshold
-    @staticmethod  
-    def cls_loss(pred: torch.Tensor, target, mask_ignore, background_mask, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, ratio = 100, fn_weight = 4.0, fn_threshold = 0.8):
-        """
-        Calculates the classification loss using focal loss and binary cross entropy.
-
-        Args:
-            pred (torch.Tensor): The predicted logits of shape (b, num_points, 1)
-            target: The target labels of shape (b, num_points, 1)
-            mask_ignore: The mask indicating which pixels to ignore of shape (b, num_points, 1)
-            alpha (float): The alpha factor for focal loss (default: 0.75)
-            gamma (float): The gamma factor for focal loss (default: 2.0)
-            num_neg (int): The maximum number of negative pixels to consider (default: 10000, if -1, use all negative pixels)
-            num_hard (int): The number of hard negative pixels to keep (default: 100)
-            ratio (int): The ratio of negative to positive pixels to consider (default: 100)
-            fn_weight (float): The weight for false negative pixels (default: 4.0)
-            fn_threshold (float): The threshold for considering a pixel as a false negative (default: 0.8)
-
-        Returns:
-            torch.Tensor: The calculated classification loss
-        """
-        classification_losses = []
-        batch_size = pred.shape[0]
-        background_mask = background_mask.unsqueeze(-1) # shape = (b, num_points, 1)
-        for j in range(batch_size):
-            pred_b = pred[j]
-            target_b = target[j]
-            mask_ignore_b = mask_ignore[j]
-            
-            cls_prob = torch.sigmoid(pred_b.detach())
-            cls_prob = torch.clamp(cls_prob, 1e-4, 1.0 - 1e-4)
-            alpha_factor = torch.ones(pred_b.shape).to(pred_b.device) * alpha
-            alpha_factor = torch.where(torch.eq(target_b, 1.), alpha_factor, 1. - alpha_factor)
-            focal_weight = torch.where(torch.eq(target_b, 1.), 1. - cls_prob, cls_prob)
-            focal_weight = alpha_factor * torch.pow(focal_weight, gamma)
-
-            bce = F.binary_cross_entropy_with_logits(pred_b, target_b, reduction='none')
-            num_positive_pixels = torch.sum(target_b == 1)
-            cls_loss = focal_weight * bce
-            cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
-            record_targets = target_b.clone()
-            if num_positive_pixels > 0:
-                ##TODO no fn for semi-supervised
-                # FN_weights = 4.0  # 10.0  for ablation study
-                # FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
-                # cls_loss[FN_index == 1] = fn_weight * cls_loss[FN_index == 1]
-                Positive_loss = cls_loss[record_targets == 1]
-                Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
-                if num_neg != -1:
-                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss))) 
-                    Negative_loss = Negative_loss[neg_idcs]
-                _, keep_idx = torch.topk(Negative_loss, min(ratio * num_positive_pixels, len(Negative_loss))) 
-                Negative_loss = Negative_loss[keep_idx]
-                
-                Positive_loss = Positive_loss.sum()
-                Negative_loss = Negative_loss.sum()
-                cls_loss = Positive_loss + Negative_loss
-
-            else:
-                Negative_loss = cls_loss[torch.logical_and(record_targets == 0, background_mask[j])]
-                if num_neg != -1:
-                    neg_idcs = random.sample(range(len(Negative_loss)), min(num_neg, len(Negative_loss)))
-                    Negative_loss = Negative_loss[neg_idcs]
-                assert len(Negative_loss) > num_hard
-                _, keep_idx = torch.topk(Negative_loss, num_hard)
-                Negative_loss = Negative_loss[keep_idx]
-                Negative_loss = Negative_loss.sum()
-                cls_loss = Negative_loss
-            classification_losses.append(cls_loss / torch.clamp(num_positive_pixels.float(), min=1.0))
-        return torch.mean(torch.stack(classification_losses))
-    
-    @staticmethod
-    def target_proprocess(annotations: torch.Tensor, 
-                          device, 
-                          input_size: List[int],
-                          mask_ignore: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Preprocess the annotations to generate the targets for the network.
-        In this function, we remove some annotations that the area of nodule is too small in the crop box. (Probably cropped by the edge of the image)
-        
-        Args:
-            annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
-                (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
-            device: torch.device, the device of the model.
-            input_size: List[int]
-                A list of length 3 containing the (z, y, x) dimensions of the input.
-            mask_ignore: torch.Tensor
-                A zero tensor of shape (batch_size, 1, z, y, x) to store the mask ignore.
-        Returns: 
-            A tuple of two tensors:
-                (1) annotations_new: torch.Tensor
-                    A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
-                    (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
-                (2) mask_ignore: torch.Tensor
-                    A tensor of shape (batch_size, 1, z, y, x) to store the mask ignore.
-        """
-        batch_size = annotations.shape[0]
-        annotations_new = -1 * torch.ones_like(annotations, device=device)
-        for sample_i in range(batch_size):
-            annots = annotations[sample_i]
-            gt_bboxes = annots[annots[:, -1] > -1] # -1 means ignore, it is used to make each sample has same number of bbox (pad with -1)
-            bbox_annotation_target = []
-            
-            crop_box = torch.tensor([0., 0., 0., input_size[0], input_size[1], input_size[2]], device=device)
-            for s in range(len(gt_bboxes)):
-                each_label = gt_bboxes[s] # (z_ctr, y_ctr, x_ctr, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1)
-                # coordinate convert zmin, ymin, xmin, d, h, w
-                z1 = (torch.max(each_label[0] - each_label[3]/2., crop_box[0]))
-                y1 = (torch.max(each_label[1] - each_label[4]/2., crop_box[1]))
-                x1 = (torch.max(each_label[2] - each_label[5]/2., crop_box[2]))
-
-                z2 = (torch.min(each_label[0] + each_label[3]/2., crop_box[3]))
-                y2 = (torch.min(each_label[1] + each_label[4]/2., crop_box[4]))
-                x2 = (torch.min(each_label[2] + each_label[5]/2., crop_box[5]))
-                
-                nd = torch.clamp(z2 - z1, min=0.0)
-                nh = torch.clamp(y2 - y1, min=0.0)
-                nw = torch.clamp(x2 - x1, min=0.0)
-                if nd * nh * nw == 0:
-                    continue
-                percent = nw * nh * nd / (each_label[3] * each_label[4] * each_label[5])
-                if (percent > 0.1) and (nw*nh*nd >= 15):
-                    spacing_z, spacing_y, spacing_x = each_label[6:9]
-                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
-                    bbox_annotation_target.append(bbox.view(1, 10))
-                else:
-                    mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
-            if len(bbox_annotation_target) > 0:
-                bbox_annotation_target = torch.cat(bbox_annotation_target, 0)
-                annotations_new[sample_i, :len(bbox_annotation_target)] = bbox_annotation_target
-        return annotations_new, mask_ignore
-    
-    @staticmethod
-    def bbox_iou(box1, box2, DIoU=True, eps = 1e-7):
-        box1 = zyxdhw2zyxzyx(box1)
-        box2 = zyxdhw2zyxzyx(box2)
-        # Get the coordinates of bounding boxes
-        b1_z1, b1_y1, b1_x1, b1_z2, b1_y2, b1_x2 = box1.chunk(6, -1)
-        b2_z1, b2_y1, b2_x1, b2_z2, b2_y2, b2_x2 = box2.chunk(6, -1)
-        w1, h1, d1 = b1_x2 - b1_x1, b1_y2 - b1_y1, b1_z2 - b1_z1
-        w2, h2, d2 = b2_x2 - b2_x1, b2_y2 - b2_y1, b2_z2 - b2_z1
-
-        # Intersection area
-        inter = (b1_x2.minimum(b2_x2) - b1_x1.maximum(b2_x1)).clamp(0) * \
-                (b1_y2.minimum(b2_y2) - b1_y1.maximum(b2_y1)).clamp(0) * \
-                (b1_z2.minimum(b2_z2) - b1_z1.maximum(b2_z1)).clamp(0) + eps
-
-        # Union Area
-        union = w1 * h1 * d1 + w2 * h2 * d2 - inter
-
-        # IoU
-        iou = inter / union
-        if DIoU:
-            cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
-            ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
-            cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
-            c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + 
-            + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
-            return iou - rho2 / c2  # DIoU
-        return iou  # IoU
-    
-    @staticmethod
-    def get_pos_target(annotations: torch.Tensor,
-                       anchor_points: torch.Tensor,
-                       stride: torch.Tensor,
-                       pos_target_topk = 7, 
-                       ignore_ratio = 3):# larger the ignore_ratio, the more GPU memory is used
-        """Get the positive targets for the network.
-        Steps:
-            1. Calculate the distance between each annotation and each anchor point.
-            2. Find the top k anchor points with the smallest distance for each annotation.
-        Args:
-            annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format: (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1).
-            anchor_points: torch.Tensor
-                A tensor of shape (num_of_point, 3) containing the coordinates of the anchor points, each of which is in the format (z, y, x).
-            stride: torch.Tensor
-                A tensor of shape (1,1,3) containing the strides of each dimension in format (z, y, x).
-        """
-        batchsize, num_of_annots, _ = annotations.size()
-        # -1 means ignore, larger than 0 means positive
-        # After the following operation, mask_gt will be a tensor of shape (batch_size, num_annotations, 1) 
-        # indicating whether the annotation is ignored or not.
-        mask_gt = annotations[:, :, -1].clone().gt_(-1) # (b, num_annotations)
-        
-        # The coordinates in annotations is on original image, we need to convert it to the coordinates on the feature map.
-        ctr_gt_boxes = annotations[:, :, :3] / stride # z0, y0, x0
-        shape = annotations[:, :, 3:6] / 2 # half d h w
-        
-        sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
-        sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
-        
-        # distance (b, n_max_object, anchors)
-        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1))
-        _, topk_inds = torch.topk(distance, (ignore_ratio + 1) * pos_target_topk, dim=-1, largest=True, sorted=True)
-        
-        mask_topk = F.one_hot(topk_inds[:, :, :pos_target_topk], distance.size()[-1]).sum(-2) # (b, num_annotation, num_of_points), the value is 1 or 0
-        mask_ignore = -1 * F.one_hot(topk_inds[:, :, pos_target_topk:], distance.size()[-1]).sum(-2) # the value is -1 or 0
-        
-        # the value is 1 or 0, shape= (b, num_annotations, num_of_points)
-        # mask_gt is 1 mean the annotation is not ignored, 0 means the annotation is ignored
-        # mask_topk is 1 means the point is assigned to positive
-        # mask_topk * mask_gt.unsqueeze(-1) is 1 means the point is assigned to positive and the annotation is not ignored
-        mask_pos = mask_topk * mask_gt.unsqueeze(-1) 
-        
-        mask_ignore = mask_ignore * mask_gt.unsqueeze(-1) # the value is -1 or 0, shape= (b, num_annotations, num_of_points)
-        gt_idx = mask_pos.argmax(-2) # shape = (b, num_of_points), it indicates each point matches which annotation
-        
-        # Flatten the batch dimension
-        batch_ind = torch.arange(end=batchsize, dtype=torch.int64, device=ctr_gt_boxes.device)[..., None] # (b, 1)
-        gt_idx = gt_idx + batch_ind * num_of_annots
-        
-        # Generate the targets of each points
-        target_ctr = ctr_gt_boxes.view(-1, 3)[gt_idx]
-        target_offset = target_ctr - anchor_points
-        target_shape = shape.view(-1, 3)[gt_idx]
-        
-        target_bboxes = annotations[:, :, :6].view(-1, 6)[gt_idx] # zyxdhw
-        target_scores, _ = torch.max(mask_pos, 1) # shape = (b, num_of_points), the value is 1 or 0, 1 means the point is assigned to positive
-        mask_ignore, _ = torch.min(mask_ignore, 1) # shape = (b, num_of_points), the value is -1 or 0, -1 means the point is ignored
-        del target_ctr, distance, mask_topk
-        return target_offset, target_shape, target_bboxes, target_scores.unsqueeze(-1), mask_ignore.unsqueeze(-1)
-    
-    def forward(self, 
-                output: Dict[str, torch.Tensor], 
-                annotations: torch.Tensor,
-                background_mask: torch.Tensor, # shape = (b, num_points)
-                device):
-        """
-        Args:
-            output: Dict[str, torch.Tensor], the output of the model.
-            annotations: torch.Tensor
-                A tensor of shape (batch_size, num_annotations, 10) containing the annotations in the format:
-                (ctr_z, ctr_y, ctr_x, d, h, w, spacing_z, spacing_y, spacing_x, 0 or -1). The last index -1 means the annotation is ignored.
-            device: torch.device, the device of the model.
-        """
-        Cls = output['Cls']
-        Shape = output['Shape']
-        Offset = output['Offset']
-        batch_size = Cls.size()[0]
-        target_mask_ignore = torch.zeros(Cls.size()).to(device)
-        
-        # view shape
-        pred_scores = Cls.view(batch_size, 1, -1) # (b, 1, num_points)
-        pred_shapes = Shape.view(batch_size, 3, -1) # (b, 3, num_points)
-        pred_offsets = Offset.view(batch_size, 3, -1)
-        # (b, num_points, 1 or 3)
-        pred_scores = pred_scores.permute(0, 2, 1).contiguous()
-        pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
-        pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
-        
-        # process annotations
-        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, target_mask_ignore)
-        target_mask_ignore = target_mask_ignore.view(batch_size, 1,  -1)
-        target_mask_ignore = target_mask_ignore.permute(0, 2, 1).contiguous()
-        # generate center points. Only support single scale feature
-        anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0) # shape = (num_anchors, 3)
-        # predict bboxes (zyxdhw)
-        pred_bboxes = bbox_decode(anchor_points, pred_offsets, pred_shapes, stride_tensor) # shape = (b, num_anchors, 6)
-        # assigned points and targets (target bboxes zyxdhw)
-        target_offset, target_shape, target_bboxes, target_scores, mask_ignore = self.get_pos_target(annotations = process_annotations,
-                                                                                                     anchor_points = anchor_points,
-                                                                                                     stride = stride_tensor[0].view(1, 1, 3), 
-                                                                                                     pos_target_topk = self.pos_target_topk,
-                                                                                                     ignore_ratio = self.pos_ignore_ratio)
-        # merge mask ignore
-        mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
-        fg_mask = target_scores.squeeze(-1).bool()
-        classification_losses = self.cls_loss(pred = pred_scores, 
-                                              target = target_scores, 
-                                              mask_ignore = mask_ignore.int(), 
-                                              background_mask = background_mask,
-                                              num_hard=self.cls_num_hard, 
-                                              num_neg=self.cls_num_neg,
-                                              fn_weight=self.cls_fn_weight, 
-                                              fn_threshold=self.cls_fn_threshold)
-                                              
-        if fg_mask.sum() == 0:
-            reg_losses = torch.tensor(0).float().to(device)
-            offset_losses = torch.tensor(0).float().to(device)
-            iou_losses = torch.tensor(0).float().to(device)
-        else:
-            reg_losses = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
-            offset_losses = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_losses = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
-        
-        return classification_losses, reg_losses, offset_losses, iou_losses
+        return cls_pos_loss, cls_neg_loss, reg_loss, offset_loss, iou_loss
 
 class DetectionPostprocess(nn.Module):
     def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96]):
@@ -964,7 +791,7 @@ class DetectionPostprocess(nn.Module):
         self.nms_topk = nms_topk
         self.crop_size = crop_size
 
-    def forward(self, output, device, is_logits=True, threshold=None, nms_topk=None):
+    def forward(self, output, device, is_logits=True):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
@@ -991,10 +818,7 @@ class DetectionPostprocess(nn.Module):
             # Get indices of scores greater than threshold
             topk_score = topk_scores[j]
             topk_idx = topk_indices[j]
-            if threshold is not None:
-                keep_box_mask = (topk_score > threshold)
-            else:
-                keep_box_mask = (topk_score > self.threshold)
+            keep_box_mask = (topk_score > self.threshold)
             keep_box_n = keep_box_mask.sum()
             
             if keep_box_n > 0:
@@ -1006,9 +830,7 @@ class DetectionPostprocess(nn.Module):
                 det[:, 0] = 1
                 det[:, 1] = keep_topk_score
                 det[:, 2:] = pred_bboxes[j][keep_topk_idx]
-                if nms_topk is not None:
-                    keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=nms_topk)
-                else:
-                    keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
+            
+                keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
                 dets[j][:len(keep)] = det[keep.long()]
         return dets

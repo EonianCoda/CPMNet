@@ -97,7 +97,7 @@ def get_args():
     parser.add_argument('--cls_hard_fp_thrs1', type=float, default=0.5, help='threshold of cls_hard_fp1')
     parser.add_argument('--cls_hard_fp_thrs2', type=float, default=0.7, help='threshold of cls_hard_fp2')
     parser.add_argument('--cls_hard_fp_w1', type=float, default=1.5, help='weights of cls_hard_fp1')
-    parser.add_argument('--cls_hard_fp_w2', type=float, default=1.5, help='weights of cls_hard_fp2')
+    parser.add_argument('--cls_hard_fp_w2', type=float, default=2.0, help='weights of cls_hard_fp2')
     
     parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of cls loss')
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')

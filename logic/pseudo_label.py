@@ -44,7 +44,7 @@ def gen_pseu_labels(model: nn.Module,
                     dataloader: DataLoader,
                     device: torch.device,
                     detection_postprocess,
-                    batch_size: int = 8,
+                    batch_size: int = 4,
                     nms_keep_top_k: int = 40,
                     mixed_precision: bool = False,
                     memory_format: str = None) -> Dict[str, np.ndarray]:
@@ -61,6 +61,7 @@ def gen_pseu_labels(model: nn.Module,
     with get_progress_bar('Pseu-Label Generation', len(dataloader)) as pbar:
         for sample in dataloader:
             data = sample['split_images'] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
+            lobes = sample['split_lobes'].to(device, non_blocking=True, memory_format=memory_format)
             nzhws = sample['nzhws']
             num_splits = sample['num_splits']
             series_names = sample['series_names']
@@ -115,12 +116,14 @@ def gen_pseu_labels(model: nn.Module,
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 pred = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
-                pred = detection_postprocess(pred, device=device, is_logits=False) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                lobe = lobes[i * batch_size:end]
+                
+                pred = detection_postprocess(pred, device=device, is_logits=False, lobe_mask = lobe) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 preds.append(pred.data.cpu().numpy())
                 del input, Cls_output, Shape_output, Offset_output, pred
-            del data
-            preds = np.concatenate(preds, 0)
+            del data, lobes
             
+            preds = np.concatenate(preds, 0)
             start_idx = 0
             for i in range(len(num_splits)):
                 n_split = num_splits[i]

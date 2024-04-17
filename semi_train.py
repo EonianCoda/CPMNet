@@ -6,8 +6,9 @@ import os
 import logging
 import pickle
 import numpy as np
-from typing import Tuple
-from networks.ResNet_3D_CPM_semi import Resnet18, DetectionPostprocess, DetectionLoss, Unsupervised_DetectionLoss
+from typing import Tuple, List
+# Loss
+from networks.loss_semi import DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
 from dataload.dataset_semi import TrainDataset, DetDataset, UnLabeledDataset
 from dataload.dataset_val_aug import DetDataset as AugDetDataset
@@ -23,14 +24,15 @@ from logic.semi_threshold_train import train
 from logic.val import val
 from logic.pseudo_label import gen_pseu_labels
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
-from logic.early_stopping_save import EarlyStoppingSave
 ### optimzer ###
 from optimizer.optim import AdamW
 from optimizer.scheduler import GradualWarmupScheduler
 from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
-from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml
+from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml, build_class
+from logic.early_stopping_save import EarlyStoppingSave
+
 from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,7 @@ def get_args():
     parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 250)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
     parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
+    parser.add_argument('--early_end_epoch', type=int, default=-1, help='end epoch')
     # Resume
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
@@ -58,14 +61,15 @@ def get_args():
     parser.add_argument('--test_set', type=str, help='test_list')
     parser.add_argument('--unlabeled_train_set', type=str, help='unlabeled_train_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of nodule, if some nodule's depth < min_d, it will be` ignored")
-    parser.add_argument('--min_size', type=int, default=5, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    parser.add_argument('--min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    parser.add_argument('--post_proces_min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first') # for speed up
-    
     parser.add_argument('--crop_partial', action='store_true', default=False, help='crop partial nodule')
     parser.add_argument('--crop_tp_iou', type=float, default=0.5, help='iou threshold for crop tp use if crop_partial is True')
-    
     parser.add_argument('--use_bg', action='store_true', default=False, help='use background(healthy lung) in training')
+    parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
@@ -73,7 +77,6 @@ def get_args():
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
     parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
     parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
-    parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -81,14 +84,17 @@ def get_args():
     parser.add_argument('--decay_cycle', type=int, default=1, help='decay cycle, 1 means no cycle')
     parser.add_argument('--decay_gamma', type=float, default=0.05, help='decay gamma')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
+    parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
+    # EMA
     parser.add_argument('--apply_ema', action='store_true', default=False, help='apply ema')
-    parser.add_argument('--ema_decay', type=float, default=0.999, help='ema decay')
+    parser.add_argument('--ema_momentum', type=float, default=0.998, help='ema decay')
+    parser.add_argument('--ema_warmup_epochs', type=int, default=150, help='warmup epochs for ema')
     # Loss hyper-parameters
     parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of seg')
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
     parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
-    
+    # Semi hyper-parameters
     parser.add_argument('--lambda_pseu', type=float, default=1.0, help='weights of pseudo label')
     parser.add_argument('--lambda_pseu_cls', type=float, default=4.0, help='weights of seg')
     parser.add_argument('--lambda_pseu_offset', type=float, default=1.0,help='weights of offset')
@@ -102,28 +108,45 @@ def get_args():
     parser.add_argument('--unlabeled_num_samples', type=int, default=5, help='number of samples for each instance')
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
     parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
+    parser.add_argument('--cls_neg_pos_ratio', type=int, default=100, help='ratio of negatives to positives in positive samples')
     parser.add_argument('--cls_num_hard', type=int, default=100, help='hard negative mining')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
+    
+    parser.add_argument('--cls_hard_fp_thrs1', type=float, default=0.5, help='threshold of cls_hard_fp1')
+    parser.add_argument('--cls_hard_fp_thrs2', type=float, default=0.7, help='threshold of cls_hard_fp2')
+    parser.add_argument('--cls_hard_fp_w1', type=float, default=1.5, help='weights of cls_hard_fp1')
+    parser.add_argument('--cls_hard_fp_w2', type=float, default=2.0, help='weights of cls_hard_fp2')
     # Semi hyper-parameters
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
-    parser.add_argument('--pseudo_background_threshold', type=float, default=0.2, help='threshold of pseudo background')
-    parser.add_argument('--semi_ema_alpha', type=int, default=0.998, help='alpha of ema')
+    parser.add_argument('--pseudo_background_threshold', type=float, default=0.4, help='threshold of pseudo background')
+    parser.add_argument('--semi_ema_alpha', type=int, default=0.9998, help='alpha of ema')
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     parser.add_argument('--pseudo_update_interval', type=int, default=30, help='pseudo label update interval')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
     parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
     # Val hyper-parameters
+    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
-    parser.add_argument('--det_threshold', type=float, default=0.2, help='detection threshold')
+    parser.add_argument('--val_det_threshold', type=float, default=0.2, help='detection threshold')
     parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
+    # Val technical settings
+    parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
+    # Semi post process
+    parser.add_argument('--semi_det_post_process_class', type=str, default='networks.detection_post_process_semi')
+    parser.add_argument('--semi_val_det_threshold', type=float, default=0.2, help='detection threshold for semi validation')
+    # Test hyper-parameters
+    parser.add_argument('--test_iou_threshold', type=float, default=0.1, help='iou threshold for test')
+    parser.add_argument('--test_det_threshold', type=float, default=0.2, help='detection threshold for test')
+    parser.add_argument('--test_froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # Network
+    parser.add_argument('--model_class', type=str, default='network.ResNet_3D_CPM', help='model class')
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
@@ -136,19 +159,17 @@ def get_args():
     parser.add_argument('--aspp', action='store_true', default=False, help='use aspp')
     parser.add_argument('--dw_type', default='conv', help='downsample type, conv or maxpool')
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
+    parser.add_argument('--out_stride', type=int, default=4, help='output stride')
     # other
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'froc_mean_recall'], help='metric for validation')
-    parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     parser.add_argument('--val_interval', type=int, default=1, help='validate interval')
     parser.add_argument('--exp_name', type=str, default='', metavar='str', help='experiment name')
     parser.add_argument('--save_model_interval', type=int, default=10, help='how many batches to wait before logging training status')
     # Cheating Options
     parser.add_argument('--use_gt_crop', action='store_true', default=False, help='use gt crop')
     args = parser.parse_args()
-    if args.det_threshold != args.froc_det_thresholds[0]:
-        raise ValueError(f'det_threshold = {args.det_threshold} should be equal to froc_det_thresholds[0] = {args.froc_det_thresholds[0]}')
     return args
 
 def add_weight_decay(net, weight_decay):
@@ -166,7 +187,10 @@ def add_weight_decay(net, weight_decay):
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
 
-def build_model(args) -> Resnet18:
+def build_model(args):
+    logger.info('Build model "{}"'.format(args.model_class))
+    Resnet18 = build_class('{}.Resnet18'.format(args.model_class))
+    
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
                      act_type = args.act_type, 
@@ -178,7 +202,9 @@ def build_model(args) -> Resnet18:
                      stem_filters=args.stem_filters,
                      dropout=args.dropout,
                      dw_type = args.dw_type,
-                     up_type = args.up_type)
+                     up_type = args.up_type,
+                     out_stride = args.out_stride,
+                     device = device)
     return model
 
 def prepare_training(args, device, num_training_steps):
@@ -189,23 +215,50 @@ def prepare_training(args, device, num_training_steps):
                                    pos_target_topk = args.pos_target_topk, 
                                    pos_ignore_ratio = args.pos_ignore_ratio,
                                    cls_num_neg=args.cls_num_neg,
-                                   cls_num_hard = args.cls_num_hard,
+                                   cls_num_hard=args.cls_num_hard,
                                    cls_fn_weight = args.cls_fn_weight,
-                                   cls_fn_threshold = args.cls_fn_threshold)
+                                   cls_fn_threshold = args.cls_fn_threshold,
+                                   cls_neg_pos_ratio = args.cls_neg_pos_ratio,
+                                   cls_hard_fp_thrs1 = args.cls_hard_fp_thrs1,
+                                   cls_hard_fp_thrs2 = args.cls_hard_fp_thrs2,
+                                   cls_hard_fp_w1 = args.cls_hard_fp_w1,
+                                   cls_hard_fp_w2 = args.cls_hard_fp_w2)
+                                   
 
     unsupervised_detection_loss = Unsupervised_DetectionLoss(crop_size = args.crop_size,
                                                             pos_target_topk = args.pos_target_topk_pseu, 
                                                             pos_ignore_ratio = args.unlabeled_pos_ignore_ratio,
-                                                            cls_num_neg=args.cls_num_neg,
+                                                            cls_num_neg = args.cls_num_neg,
+                                                            cls_neg_pos_ratio = args.cls_neg_pos_ratio,
                                                             cls_num_hard = args.cls_num_hard,
                                                             cls_fn_weight = args.cls_fn_weight,
                                                             cls_fn_threshold = args.cls_fn_threshold)
 
-    detection_postprocess = DetectionPostprocess(topk = args.det_topk, 
-                                                 threshold = args.det_threshold, 
-                                                 nms_threshold = args.det_nms_threshold,
-                                                 nms_topk = args.det_nms_topk,
-                                                 crop_size = args.crop_size)
+    logger.info('Build post process "{}" for validation and testing'.format(args.det_post_process_class))
+    
+    DetectionPostprocess = build_class('{}.DetectionPostprocess'.format(args.det_post_process_class))            
+    semi_DetectionPostprocess = build_class('{}.DetectionPostprocess'.format(args.semi_det_post_process_class))
+    
+    semi_det_post_process = semi_DetectionPostprocess(topk = args.det_topk,
+                                                      threshold = args.semi_val_det_threshold,
+                                                        nms_threshold = args.det_nms_threshold,
+                                                        nms_topk = args.det_nms_topk,
+                                                        crop_size = args.crop_size,
+                                                        min_size = args.post_proces_min_size)
+    
+    val_det_postprocess = DetectionPostprocess(topk = args.det_topk, 
+                                                threshold = args.val_det_threshold, 
+                                                nms_threshold = args.det_nms_threshold,
+                                                nms_topk = args.det_nms_topk,
+                                                crop_size = args.crop_size,
+                                                min_size = args.post_proces_min_size)
+    
+    test_det_postprocess = DetectionPostprocess(topk = args.det_topk,
+                                                threshold = args.test_det_threshold,
+                                                nms_threshold = args.det_nms_threshold,
+                                                nms_topk = args.det_nms_topk,
+                                                crop_size = args.crop_size,
+                                                min_size = args.post_proces_min_size)
     
     start_epoch = 0
     memory_format = get_memory_format(getattr(args, 'memory_format', 'channels_first'))
@@ -251,38 +304,29 @@ def prepare_training(args, device, num_training_steps):
         load_states(args.pretrained_model_path, device, model_s)
         load_states(args.pretrained_model_path, device, model_t)
         
-    return start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess
+    return start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, val_det_postprocess, test_det_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
+    rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
+    rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
     transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
-    # transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_xz, trans_zy=rot_yz))
+    transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
     transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}'.format([True, rot_yz, rot_xz], args.use_crop))
+    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
 def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    if crop_size[0] == crop_size[1] == crop_size[2]:
-        rot_yz = True
-        rot_xz = True
-    else:
-        rot_yz = False
-        rot_xz = False
+    rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
+    rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
     transform_list_train = [transform.SemiRandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.SemiRandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_xz, rot_yz=rot_yz))
+    transform_list_train.append(transform.SemiRandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
@@ -292,7 +336,7 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
     return train_transform
 
 def build_weak_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
-    transform_list_train = []
+    transform_list_train = [transform.SemiRandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
     transform_list_train.append(transform.SemiCoordToAnnot())
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
@@ -333,9 +377,10 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     # Build unlabeled detection dataloader for generating pseudo labels
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     det_dataset_u = AugDetDataset(series_list_path = args.unlabeled_train_set, 
-                               SplitComb=split_comber, 
-                               image_spacing=IMAGE_SPACING, 
-                               norm_method=args.data_norm_method)
+                                SplitComb=split_comber, 
+                                image_spacing=IMAGE_SPACING, 
+                                norm_method=args.data_norm_method,
+                                apply_lobe=True) # Always apply lobe for detection
     det_loader_u = DataLoader(det_dataset_u, batch_size=1, shuffle=False, collate_fn=infer_aug_collate_fn, 
                               num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=False)
     
@@ -424,7 +469,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
-    start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, detection_postprocess = prepare_training(args, device, len(train_loader_u))
+    start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, val_det_postprocess, test_det_postprocess = prepare_training(args, device, len(train_loader_u))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
@@ -439,18 +484,20 @@ if __name__ == '__main__':
     if not args.use_gt_crop:
         psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
         if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '': # Update pseudo labels only at the beginning
-            updata_pseudo_label(args, model_t, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
+            updata_pseudo_label(args, model_t, det_loader_u, device, test_det_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold, pseudo_pickle_path=args.pseudo_pickle_path)
         else:
             logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
     
     for epoch in range(start_epoch, args.epochs + 1):
-        args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
+        # args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
+        args.pseudo_label_threshold = original_psuedo_label_threshold
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and args.pseudo_update_interval > 0 and not (epoch == 0 and args.pseudo_pickle_path != ''):
             # args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
             psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
-            updata_pseudo_label(args, model_t, det_loader_u, device, detection_postprocess, train_loader_u.dataset, psuedo_label_save_path, prob_threshold=args.pseudo_crop_threshold)
+            updata_pseudo_label(args, model_t, det_loader_u, device, test_det_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
+                                prob_threshold=args.pseudo_crop_threshold)
             
         train_metrics = train(args = args,
                             model_t = model_t,
@@ -460,7 +507,7 @@ if __name__ == '__main__':
                             optimizer = optimizer,
                             dataloader_u = train_loader_u,
                             dataloader_l = train_loader_l,
-                            detection_postprocess = detection_postprocess,
+                            detection_postprocess = semi_det_post_process,
                             num_iters = len(train_loader_u),
                             device = device)
         scheduler_warm.step()
@@ -488,7 +535,7 @@ if __name__ == '__main__':
             
             val_metrics = val(args = args,
                             model = model_s,
-                            detection_postprocess=detection_postprocess,
+                            detection_postprocess=val_det_postprocess,
                             val_loader = val_loader, 
                             device = device,
                             image_spacing = IMAGE_SPACING,
@@ -515,7 +562,7 @@ if __name__ == '__main__':
         load_states(model_path, device, model_s)
         test_metrics = val(args = args,
                             model = model_s,
-                            detection_postprocess=detection_postprocess,
+                            detection_postprocess=test_det_postprocess,
                             val_loader = test_loader,
                             device = device,
                             image_spacing = IMAGE_SPACING,
@@ -525,7 +572,8 @@ if __name__ == '__main__':
                             epoch = 'test_best_{}'.format(target_metric),
                             min_d=args.min_d,
                             min_size=args.min_size,
-                            nodule_size_mode=args.nodule_size_mode)
+                            nodule_size_mode=args.nodule_size_mode,
+                            val_type = 'test')
         write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
         with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
             f.write('Best epoch: {}\n'.format(best_epoch))

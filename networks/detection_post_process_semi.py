@@ -1,7 +1,7 @@
-import torch
-import torch.nn as nn
-from utils.box_utils import nms_3D, bbox_decode, make_anchors
 from typing import List
+import torch.nn as nn
+import torch
+from utils.box_utils import bbox_decode, make_anchors, nms_3D
 
 class DetectionPostprocess(nn.Module):
     def __init__(self, topk: int=60, threshold: float=0.15, nms_threshold: float=0.05, nms_topk: int=20, crop_size: List[int]=[96, 96, 96], min_size: int=-1):
@@ -13,7 +13,7 @@ class DetectionPostprocess(nn.Module):
         self.crop_size = crop_size
         self.min_size = min_size
 
-    def forward(self, output, device, is_logits=True, lobe_mask=None):
+    def forward(self, output, device, is_logits=True, threshold=None, nms_topk=None, lobe_mask=None):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
@@ -48,7 +48,10 @@ class DetectionPostprocess(nn.Module):
             # Get indices of scores greater than threshold
             topk_score = topk_scores[j]
             topk_idx = topk_indices[j]
-            keep_box_mask = (topk_score > self.threshold)
+            if threshold is not None:
+                keep_box_mask = (topk_score > threshold)
+            else:
+                keep_box_mask = (topk_score > self.threshold)
             keep_box_n = keep_box_mask.sum()
             
             if keep_box_n > 0:
@@ -60,8 +63,10 @@ class DetectionPostprocess(nn.Module):
                 det[:, 0] = 1
                 det[:, 1] = keep_topk_score
                 det[:, 2:] = pred_bboxes[j][keep_topk_idx]
-            
-                keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
+                if nms_topk is not None:
+                    keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=nms_topk)
+                else:
+                    keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
                 dets[j][:len(keep)] = det[keep.long()]
 
         if self.min_size > 0:
