@@ -49,14 +49,15 @@ def model_predict_wrapper(memory_format):
     return model_predict
 
 def burn_in_train(args,
-                    model: nn.modules,
-                    optimizer: torch.optim.Optimizer,
-                    dataloader: DataLoader,
-                    device: torch.device,
-                    ema = None,) -> Dict[str, float]:
+                model: nn.modules,
+                detection_loss,
+                optimizer: torch.optim.Optimizer,
+                dataloader: DataLoader,
+                device: torch.device,
+                ema = None,) -> Dict[str, float]:
     model.train()
-    avg_pos_cls_loss = AverageMeter()
-    avg_neg_cls_loss = AverageMeter()
+    avg_cls_pos_loss = AverageMeter()
+    avg_cls_neg_loss = AverageMeter()
     avg_cls_loss = AverageMeter()
     avg_shape_loss = AverageMeter()
     avg_offset_loss = AverageMeter()
@@ -74,25 +75,25 @@ def burn_in_train(args,
     memory_format = get_memory_format(getattr(args, 'memory_format', None))
     if memory_format == torch.channels_last_3d:
         logger.info('Use memory format: channels_last_3d to train')
-    train_one_step = train_one_step_wrapper(memory_format)
+    train_one_step = train_one_step_wrapper(memory_format, detection_loss)
         
     optimizer.zero_grad()
     progress_bar = get_progress_bar('Train', (total_num_steps - 1) // iters_to_accumulate + 1)
     for iter_i, sample in enumerate(dataloader):
         if mixed_precision:
             with torch.cuda.amp.autocast():
-                loss, pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
+                loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss, outputs = train_one_step(args, model, sample, device)
             loss = loss / iters_to_accumulate
             scaler.scale(loss).backward()
         else:
-            loss, pos_cls_loss, neg_cls_loss, shape_loss, offset_loss, iou_loss = train_one_step(args, model, sample, device)
+            loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss, outputs = train_one_step(args, model, sample, device)
             loss = loss / iters_to_accumulate
             loss.backward()
         
         # Update history
-        avg_pos_cls_loss.update(pos_cls_loss.item())
-        avg_neg_cls_loss.update(neg_cls_loss.item())
-        avg_cls_loss.update(pos_cls_loss.item() + neg_cls_loss.item())
+        avg_cls_pos_loss.update(cls_pos_loss.item())
+        avg_cls_neg_loss.update(cls_neg_loss.item())
+        avg_cls_loss.update(cls_pos_loss.item() + cls_neg_loss.item())
         avg_shape_loss.update(shape_loss.item())
         avg_offset_loss.update(offset_loss.item())
         avg_iou_loss.update(iou_loss.item())
@@ -112,9 +113,9 @@ def burn_in_train(args,
                 ema.update()
             
             progress_bar.set_postfix(loss = avg_loss.avg,
-                                    pos_cls = avg_pos_cls_loss.avg,
-                                    neg_cls = avg_neg_cls_loss.avg,
-                                    cls_Loss = avg_cls_loss.avg,
+                                    pos_cls = avg_cls_pos_loss.avg,
+                                    neg_cls = avg_cls_neg_loss.avg,
+                                    cls_loss = avg_cls_loss.avg,
                                     shape_loss = avg_shape_loss.avg,
                                     offset_loss = avg_offset_loss.avg,
                                     iou_loss = avg_iou_loss.avg)
@@ -124,8 +125,8 @@ def burn_in_train(args,
 
     metrics = {'loss': avg_loss.avg,
                 'cls_loss': avg_cls_loss.avg,
-                'pos_cls_loss': avg_pos_cls_loss.avg,
-                'neg_cls_loss': avg_neg_cls_loss.avg,
+                'cls_pos_loss': avg_cls_pos_loss.avg,
+                'cls_neg_loss': avg_cls_neg_loss.avg,
                 'shape_loss': avg_shape_loss.avg,
                 'offset_loss': avg_offset_loss.avg,
                 'iou_loss': avg_iou_loss.avg}
@@ -375,14 +376,13 @@ def train(args,
                 avg_pseu_iou_loss.update(iou_pseu_loss.item())
                 avg_pseu_loss.update(loss_pseu.item())
                 num_pseudo_nodules += len(strong_u_sample['annot'][strong_u_sample['annot'][..., -1] != -1])
+                del outputs_pseu
             else:
                 outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
                 for annot in strong_u_sample['gt_annot'].numpy():
                     if len(annot) > 0:
                         avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
-                continue
-            del outputs_pseu
             ### Labeled data
             try:
                 labeled_sample = next(iter_l)
@@ -438,6 +438,7 @@ def train(args,
             
     recall = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fn_pseu.sum, 1e-3)
     precision = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fp_pseu.sum, 1e-3)
+    f1 = 2 * recall * precision / max(recall + precision, 1e-3)
     metrics = {'loss': avg_loss.avg,
                 'cls_loss': avg_cls_loss.avg,
                 'cls_pos_loss': avg_cls_pos_loss.avg,
@@ -456,6 +457,7 @@ def train(args,
                 'num_pseudo_nodules':  num_pseudo_nodules,
                 'pseu_recall': recall,
                 'pseu_precision': precision,
+                'pseudo_f1': f1,
                 'pseu_tp': avg_tp_pseu.sum,
                 'pseu_fp': avg_fp_pseu.sum,
                 'pseu_fn': avg_fn_pseu.sum}

@@ -21,6 +21,7 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
 from logic.semi_threshold_train import train
+from logic.semi_threshold_train import burn_in_train
 from logic.val import val
 from logic.pseudo_label import gen_pseu_labels
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
@@ -118,12 +119,13 @@ def get_args():
     parser.add_argument('--cls_hard_fp_w1', type=float, default=1.5, help='weights of cls_hard_fp1')
     parser.add_argument('--cls_hard_fp_w2', type=float, default=2.0, help='weights of cls_hard_fp2')
     # Semi hyper-parameters
+    parser.add_argument('--burn_in_epochs', type=int, default=20, help='burn in epochs')
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.4, help='threshold of pseudo background')
     parser.add_argument('--semi_ema_alpha', type=int, default=0.9998, help='alpha of ema')
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
-    parser.add_argument('--pseudo_update_interval', type=int, default=30, help='pseudo label update interval')
+    parser.add_argument('--pseudo_update_interval', type=int, default=-1, help='pseudo label update interval')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
     parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
@@ -498,18 +500,27 @@ if __name__ == '__main__':
             psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
             updata_pseudo_label(args, model_t, det_loader_u, device, test_det_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold)
-            
-        train_metrics = train(args = args,
-                            model_t = model_t,
-                            model_s = model_s,
-                            detection_loss = detection_loss,
-                            unsupervised_detection_loss =  unsupervised_detection_loss,
-                            optimizer = optimizer,
-                            dataloader_u = train_loader_u,
-                            dataloader_l = train_loader_l,
-                            detection_postprocess = semi_det_post_process,
-                            num_iters = len(train_loader_u),
-                            device = device)
+        if epoch < args.burn_in_epochs:
+            logger.info('Burn in epoch: {}'.format(epoch))
+            train_metrics = burn_in_train(args = args,
+                                            model = model_s,
+                                            detection_loss=detection_loss,
+                                            optimizer = optimizer,
+                                            dataloader = train_loader_l,
+                                            device = device)
+        else:
+            logger.info('Mutual Learning epoch: {}'.format(epoch))
+            train_metrics = train(args = args,
+                                model_t = model_t,
+                                model_s = model_s,
+                                detection_loss = detection_loss,
+                                unsupervised_detection_loss =  unsupervised_detection_loss,
+                                optimizer = optimizer,
+                                dataloader_u = train_loader_u,
+                                dataloader_l = train_loader_l,
+                                detection_postprocess = semi_det_post_process,
+                                num_iters = len(train_loader_u),
+                                device = device)
         scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
         for key, value in train_metrics.items():
