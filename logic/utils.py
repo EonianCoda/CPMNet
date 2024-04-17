@@ -69,6 +69,22 @@ def load_model(load_path: str):
         model.load_state_dict(checkpoint['model_state_dict'])
     return model
 
+def load_teacher_model(load_path: str):
+    checkpoint = torch.load(load_path)
+    # Build model
+    if 'model_structure' in checkpoint:
+        model = checkpoint['model_structure']
+    else:
+        from networks.ResNet_3D_CPM import Resnet18
+        model = Resnet18()
+        
+    # Load state dict
+    if 'state_dict' not in checkpoint and 'model_t_state_dict' not in checkpoint:
+        model.load_state_dict(checkpoint)
+    else:
+        model.load_state_dict(checkpoint['model_t_state_dict'])
+    return model
+
 def get_memory_format(memory_format: str):
     if memory_format == 'channels_last':
         return torch.channels_last_3d

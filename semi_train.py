@@ -163,6 +163,7 @@ def get_args():
     parser.add_argument('--up_type', default='deconv', help='upsample type, deconv or interpolate')
     parser.add_argument('--out_stride', type=int, default=4, help='output stride')
     # other
+    parser.add_argument('--no_pin_memory', action='store_true', default=False, help='not use pin memory')
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--best_metrics', nargs='+', type=str, default=['froc_2_recall', 'froc_mean_recall'], help='metric for validation')
@@ -290,7 +291,7 @@ def prepare_training(args, device, num_training_steps):
         model_folder = os.path.join(args.resume_folder, 'model')
         
         # Get the latest model
-        model_names = os.listdir(model_folder)
+        model_names = [name for name in os.listdir(model_folder) if name.endswith('.pth')]
         model_epochs = [int(name.split('.')[0].split('_')[-1]) for name in model_names]
         start_epoch = model_epochs[np.argmax(model_epochs)]
         ckpt_path = os.path.join(model_folder, f'epoch_{start_epoch}.pth')
@@ -300,7 +301,7 @@ def prepare_training(args, device, num_training_steps):
         # Resume best metric
         global early_stopping
         early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model_s)
-        start_epoch = start_epoch + 1
+        # start_epoch = start_epoch + 1
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model_s)
@@ -348,6 +349,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     rand_trans = [int(s * 2/3) for s in overlap_size]
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
+    pin_memory = not args.no_pin_memory
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
@@ -366,7 +368,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     train_dataset_l = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train_l, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
                                  min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_l = DataLoader(train_dataset_l, batch_size=args.batch_size, shuffle=True, collate_fn=train_collate_fn, num_workers=min(args.batch_size, args.max_workers), 
-                                pin_memory=True, drop_last=True, persistent_workers=True)
+                                pin_memory=pin_memory, drop_last=True, persistent_workers=True)
     
     # Build unlabeled dataloader
     weak_aug = build_weak_augmentation(args, crop_size, pad_value, blank_side)
@@ -374,7 +376,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, weak_aug=weak_aug, use_gt_crop=args.use_gt_crop,
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_train_collate_fn, 
-                                num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=True)
+                                num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=True)
     
     # Build unlabeled detection dataloader for generating pseudo labels
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
@@ -384,7 +386,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                 norm_method=args.data_norm_method,
                                 apply_lobe=True) # Always apply lobe for detection
     det_loader_u = DataLoader(det_dataset_u, batch_size=1, shuffle=False, collate_fn=infer_aug_collate_fn, 
-                              num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=True, drop_last=False)
+                              num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=False)
     
     logger.info("There are {} training labeled samples and {} batches in '{}'".format(len(train_loader_l.dataset), len(train_loader_l), args.train_set))
     logger.info("There are {} training unlabeled samples and {} batches in '{}'".format(len(train_loader_u.dataset), len(train_loader_u), args.unlabeled_train_set))
@@ -509,6 +511,11 @@ if __name__ == '__main__':
                                             dataloader = train_loader_l,
                                             device = device)
         else:
+            if epoch == args.burn_in_epochs:
+                logger.info('Burn in finished, start mutual learning')
+                # Copy weight
+                logger.info('Copy weight from student model to teacher model')
+                model_t.load_state_dict(model_s.state_dict())
             logger.info('Mutual Learning epoch: {}'.format(epoch))
             train_metrics = train(args = args,
                                 model_t = model_t,

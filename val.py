@@ -10,7 +10,7 @@ from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 
-from logic.utils import load_model, get_memory_format
+from logic.utils import load_model, load_teacher_model, get_memory_format
 
 from utils.logs import setup_logging
 from utils.utils import init_seed, write_yaml, build_class
@@ -51,6 +51,7 @@ def get_args():
     parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
     parser.add_argument('--apply_aug', action='store_true', default=False, help='apply test time augmentation or not')
     # other
+    parser.add_argument('--load_teacher_model', action='store_true', default=False, help='load teacher model or not')
     parser.add_argument('--nodule_size_mode', type=str, default='seg_size', help='nodule size mode, seg_size or dhw')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     args = parser.parse_args()
@@ -68,7 +69,11 @@ def prepare_validation(args, device):
                                                  min_size=args.post_proces_min_size)
     # load model
     logger.info('Load model from "{}"'.format(args.model_path))
-    model = load_model(args.model_path)
+    if args.load_teacher_model:
+        logger.info('Load teacher model')
+        model = load_teacher_model(args.model_path)
+    else:
+        model = load_model(args.model_path)
     memory_format = get_memory_format(getattr(args, 'memory_format', None))
     model = model.to(device = device, memory_format=memory_format)
     return model, detection_postprocess

@@ -143,7 +143,7 @@ def train(args,
           detection_postprocess,
           num_iters: int,
           device: torch.device) -> Dict[str, float]:
-    model_t.eval()
+    model_t.train()
     model_s.train()
     
     avg_cls_loss = AverageMeter()
@@ -300,11 +300,11 @@ def train(args,
                 all_iou_pseu = []
                 tp, fp, fn = 0, 0, 0
                 for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['gt_annot'].numpy(), transformed_annots_padded, valid_mask)):
+                    annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
                     if not is_valid:
-                        fn += np.count_nonzero((annot[:, -1] != -1))
+                        fn += len(annot)
                         continue
                     
-                    annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
                     pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
                     
                     if len(annot) == 0:
@@ -381,8 +381,9 @@ def train(args,
                 outputs_pseu = None
                 loss_pseu = torch.tensor(0.0, device=device)
                 for annot in strong_u_sample['gt_annot'].numpy():
+                    annot = annot[annot[:, -1] != -1]
                     if len(annot) > 0:
-                        avg_fn_pseu.update(np.count_nonzero(annot[annot[:, -1] != -1]))
+                        avg_fn_pseu.update(len(annot))
             ### Labeled data
             try:
                 labeled_sample = next(iter_l)
@@ -428,11 +429,12 @@ def train(args,
             with torch.no_grad():
                 # Update teacher model by exponential moving average
                 for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
-                    teacher_param.data.mul_(args.semi_ema_alpha).add_((1 - args.semi_ema_alpha) * param.data)
-                for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
-                    if 'num_batches_tracked' in name_s:
-                        continue
-                    buffer_t.data.mul_(args.semi_ema_alpha).add_((1 - args.semi_ema_alpha) * buffer_s.data)
+                    if param.requires_grad:
+                        teacher_param.data.mul_(args.semi_ema_alpha).add_(param.data, alpha = 1 - args.semi_ema_alpha)
+                # for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
+                #     if 'num_batches_tracked' in name_s:
+                #         continue
+                #     buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
                     
             torch.cuda.empty_cache()
             
