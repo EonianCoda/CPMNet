@@ -260,7 +260,7 @@ class Resnet18(nn.Module):
         self._init_weight()
 
     def forward(self, inputs):
-        if self.training:
+        if self.training and self.detection_loss != None:
             x, labels = inputs
         else:
             x = inputs
@@ -303,7 +303,7 @@ class Resnet18(nn.Module):
             x = self.block11(x)
 
         out = self.head(x)
-        if self.training:
+        if self.training and self.detection_loss != None:
             cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
             return cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss
         return out

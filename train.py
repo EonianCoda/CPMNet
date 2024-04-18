@@ -119,7 +119,7 @@ def get_args():
     parser.add_argument('--test_det_threshold', type=float, default=0.2, help='detection threshold for test')
     parser.add_argument('--test_froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # Model
-    parser.add_argument('--model_class', type=str, default='network.ResNet_3D_CPM', help='model class')
+    parser.add_argument('--model_class', type=str, default='networks.ResNet_3D_CPM', help='model class')
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
@@ -144,6 +144,17 @@ def get_args():
     if args.val_det_threshold != args.froc_det_thresholds[0]:
         raise ValueError(f'val_det_threshold = {args.val_det_threshold} should be equal to froc_det_thresholds[0] = {args.froc_det_thresholds[0]}')
     return args
+
+def freeze_model(model):
+    for name, param in model.named_parameters():
+        if 'in_conv' in name or 'in_dw' in name or 'block1' in name and 'norm' in name:
+            param.requires_grad = False
+    return model
+
+def unfreeze_model(model):
+    for name, param in model.named_parameters():
+        param.requires_grad = True
+    return model
 
 def add_weight_decay(net, weight_decay):
     """no weight decay on bias and normalization layer
@@ -385,6 +396,12 @@ if __name__ == '__main__':
         end_epoch = args.epochs
         
     for epoch in range(start_epoch, end_epoch + 1):
+        # if args.pretrained_model_path != '' and epoch == 0:
+        #     logger.info('Freeze the first 3 layers')
+        #     model = freeze_model(model)
+        # elif args.resume_folder != '' and epoch == args.warmup_epochs:
+        #     logger.info('Unfreeze the first 3 layers')
+        #     model = unfreeze_model(model)
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,

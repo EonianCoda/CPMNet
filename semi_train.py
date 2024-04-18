@@ -148,7 +148,7 @@ def get_args():
     parser.add_argument('--test_det_threshold', type=float, default=0.2, help='detection threshold for test')
     parser.add_argument('--test_froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # Network
-    parser.add_argument('--model_class', type=str, default='network.ResNet_3D_CPM', help='model class')
+    parser.add_argument('--model_class', type=str, default='networks.ResNet_3D_CPM', help='model class')
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
