@@ -20,6 +20,7 @@ def train_one_step_wrapper(memory_format):
         cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = model([image, labels])
         cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
         loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        del image, labels
         return loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss
     return train_one_step
 

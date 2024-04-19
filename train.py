@@ -94,6 +94,8 @@ def get_args():
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     
+    parser.add_argument('--cls_focal_alpha', type=float, default=0.75, help='alpha of focal loss')
+    
     parser.add_argument('--cls_hard_fp_thrs1', type=float, default=0.5, help='threshold of cls_hard_fp1')
     parser.add_argument('--cls_hard_fp_thrs2', type=float, default=0.7, help='threshold of cls_hard_fp2')
     parser.add_argument('--cls_hard_fp_w1', type=float, default=1.5, help='weights of cls_hard_fp1')
@@ -192,7 +194,8 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                                    cls_hard_fp_thrs1 = args.cls_hard_fp_thrs1,
                                    cls_hard_fp_thrs2 = args.cls_hard_fp_thrs2,
                                    cls_hard_fp_w1 = args.cls_hard_fp_w1,
-                                   cls_hard_fp_w2 = args.cls_hard_fp_w2)
+                                   cls_hard_fp_w2 = args.cls_hard_fp_w2,
+                                   cls_focal_alpha = args.cls_focal_alpha)
                                         
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
@@ -292,10 +295,10 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
     if args.not_use_itk_rotate:
-        from dataload.crop_fast import InstanceCrop
+        from dataload.crop_fastV3 import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        mmap_mode = 'c'
+        mmap_mode = None
         logger.info('Not use itk rotate')
     elif args.use_rand_spacing:
         from dataload.crop_rand_spacing import InstanceCrop

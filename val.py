@@ -30,7 +30,7 @@ def get_args():
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
     parser.add_argument('--min_d', type=int, default=0, help="min depth of nodule, if some nodule's depth < min_d, it will be` ignored")
     parser.add_argument('--min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
-    parser.add_argument('--post_proces_min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    parser.add_argument('--post_process_min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first')
@@ -66,7 +66,7 @@ def prepare_validation(args, device):
                                                  nms_threshold=args.det_nms_threshold,
                                                  nms_topk=args.det_nms_topk,
                                                  crop_size=args.crop_size,
-                                                 min_size=args.post_proces_min_size)
+                                                 min_size=args.post_process_min_size)
     # load model
     logger.info('Load model from "{}"'.format(args.model_path))
     if args.load_teacher_model:

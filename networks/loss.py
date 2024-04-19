@@ -19,7 +19,8 @@ class DetectionLoss(nn.Module):
                  cls_hard_fp_thrs1 = 0.5,
                  cls_hard_fp_thrs2 = 0.7,
                  cls_hard_fp_w1 = 1.5,
-                 cls_hard_fp_w2 = 2.0):
+                 cls_hard_fp_w2 = 2.0,
+                 cls_focal_alpha = 0.75):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -36,6 +37,8 @@ class DetectionLoss(nn.Module):
         self.cls_hard_fp_thrs2 = cls_hard_fp_thrs2
         self.cls_hard_fp_w1 = cls_hard_fp_w1
         self.cls_hard_fp_w2 = cls_hard_fp_w2
+        
+        self.cls_focal_alpha = cls_focal_alpha
         
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, 
@@ -263,12 +266,13 @@ class DetectionLoss(nn.Module):
         sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
         sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
         
-        # distance (b, n_max_object, anchors)
-        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1))
+        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1)) # (b, num_annotation, num_of_points)
         _, topk_inds = torch.topk(distance, (ignore_ratio + 1) * pos_target_topk, dim=-1, largest=True, sorted=True)
         
-        mask_topk = F.one_hot(topk_inds[:, :, :pos_target_topk], distance.size()[-1]).sum(-2) # (b, num_annotation, num_of_points), the value is 1 or 0
-        mask_ignore = -1 * F.one_hot(topk_inds[:, :, pos_target_topk:], distance.size()[-1]).sum(-2) # the value is -1 or 0
+        # mask_topk = F.one_hot(topk_inds[:, :, :pos_target_topk], distance.size()[-1]).sum(-2) # (b, num_annotation, num_of_points), the value is 1 or 0
+        # mask_ignore = -1 * F.one_hot(topk_inds[:, :, pos_target_topk:], distance.size()[-1]).sum(-2) # the value is -1 or 0
+        mask_topk = torch.zeros_like(distance, device=distance.device).scatter_(-1, topk_inds[:, :, :pos_target_topk], 1) # (b, num_annotation, num_of_points)
+        mask_ignore = torch.zeros_like(distance, device=distance.device).scatter_(-1, topk_inds[:, :, pos_target_topk:], -1) # (b, num_annotation, num_of_points)
         
         # the value is 1 or 0, shape= (b, num_annotations, num_of_points)
         # mask_gt is 1 mean the annotation is not ignored, 0 means the annotation is ignored
@@ -349,7 +353,8 @@ class DetectionLoss(nn.Module):
                                                    hard_fp_thrs1=self.cls_hard_fp_thrs1,
                                                    hard_fp_thrs2=self.cls_hard_fp_thrs2,
                                                     hard_fp_w1=self.cls_hard_fp_w1,
-                                                    hard_fp_w2=self.cls_hard_fp_w2)
+                                                    hard_fp_w2=self.cls_hard_fp_w2,
+                                                    alpha=self.cls_focal_alpha)
         
         # Only calculate the loss of positive samples                                 
         fg_mask = target_scores.squeeze(-1).bool()
