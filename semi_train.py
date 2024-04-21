@@ -551,7 +551,7 @@ if __name__ == '__main__':
                 ema.apply_shadow()
             
             val_metrics = val(args = args,
-                            model = model_s,
+                            model = model_t, # Use teacher model to validate
                             detection_postprocess=val_det_postprocess,
                             val_loader = val_loader, 
                             device = device,
