@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
-import SimpleITK as sitk
 import numpy as np
 import random
 from itertools import product
@@ -83,9 +82,7 @@ class InstanceCrop(object):
         x_crop_centers = self.get_crop_centers(shape, 2)
         
         # Generate crop centers
-        crop_centers = [*product(z_crop_centers, y_crop_centers, x_crop_centers)]
-        crop_centers = np.array(crop_centers)
-        
+        crop_centers = np.array([*product(z_crop_centers, y_crop_centers, x_crop_centers)])
         if self.instance_crop and len(instance_loc) > 0:
             if self.rand_trans is not None:
                 instance_crop = instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(instance_loc), 3))

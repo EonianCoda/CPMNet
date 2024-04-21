@@ -230,160 +230,127 @@ def train(args,
                 outputs_t = detection_postprocess(feats_t, device=device, threshold = args.pseudo_label_threshold, nms_topk=args.pseudo_nms_topk)
                 del feats_w_t, feats_s_t, Cls_w_t, Shape_w_t, Cls_s_t, Shape_s_t
                 
-            # np.save('weak_image.npy', weak_u_sample['image'].numpy())
-            # np.save('outputs_t.npy', outputs_t.cpu().numpy())
-            
             # Add label
             # Remove the padding, -1 means invalid
-            valid_mask = (outputs_t[..., 0] != -1.0)
-            if torch.count_nonzero(valid_mask) != 0:
-                bs = outputs_t.shape[0]
-                # Calculate and transofmr background mask
-                cls_prob = feats_t['Cls'].sigmoid() # shape: (bs, 1, d, h, w)
-                background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
-                weak_feat_transforms = weak_u_sample['feat_transform'] # shape = (bs,)
-                strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
-                for batch_i in range(bs):
-                    for transform in reversed(weak_feat_transforms[batch_i]):
-                        background_mask[batch_i] = transform.backward(background_mask[batch_i])
-                    for transform in strong_feat_transforms[batch_i]:
-                        background_mask[batch_i] = transform.forward(background_mask[batch_i])
+            bs = outputs_t.shape[0]
+            # Calculate and transofmr background mask
+            cls_prob = feats_t['Cls'].sigmoid() # shape: (bs, 1, d, h, w)
+            background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
+            weak_feat_transforms = weak_u_sample['feat_transform'] # shape = (bs,)
+            strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
+            for batch_i in range(bs):
+                for transform in reversed(weak_feat_transforms[batch_i]):
+                    background_mask[batch_i] = transform.backward(background_mask[batch_i])
+                for transform in strong_feat_transforms[batch_i]:
+                    background_mask[batch_i] = transform.forward(background_mask[batch_i])
+            
+            # Process pseudo label
+            outputs_t = outputs_t.cpu().numpy()
+            weak_ctr_transforms = weak_u_sample['ctr_transform'] # shape = (bs,)
+            strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
+            weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
+            transformed_annots = []
+            for batch_i in range(bs):
+                output = outputs_t[batch_i]
+                valid_mask = (output[:, 0] != -1.0)
+                output = output[valid_mask]
+                if len(output) == 0:
+                    transformed_annots.append(np.zeros((0, 10), dtype='float32'))
+                    continue
+                ctrs = output[:, 2:5]
+                shapes = output[:, 5:8]
+                spacing = weak_spacings[batch_i]
+                for transform in reversed(weak_ctr_transforms[batch_i]):
+                    ctrs = transform.backward_ctr(ctrs)
+                    shapes = transform.backward_rad(shapes)
+                    spacing = transform.backward_spacing(spacing)
                 
-                # Process pseudo label
-                outputs_t = outputs_t.cpu().numpy()
-                weak_ctr_transforms = weak_u_sample['ctr_transform'] # shape = (bs,)
-                strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
-                weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
-                transformed_annots = []
-                for batch_i in range(bs):
-                    output = outputs_t[batch_i]
-                    valid_mask = (output[:, 0] != -1.0)
-                    output = output[valid_mask]
-                    if len(output) == 0:
-                        transformed_annots.append(np.zeros((0, 10), dtype='float32'))
-                        continue
-                    ctrs = output[:, 2:5]
-                    shapes = output[:, 5:8]
-                    spacing = weak_spacings[batch_i]
-                    for transform in reversed(weak_ctr_transforms[batch_i]):
-                        ctrs = transform.backward_ctr(ctrs)
-                        shapes = transform.backward_rad(shapes)
-                        spacing = transform.backward_spacing(spacing)
-                    
-                    for transform in strong_ctr_transforms[batch_i]:
-                        ctrs = transform.forward_ctr(ctrs)
-                        shapes = transform.forward_rad(shapes)
-                        spacing = transform.forward_spacing(spacing)
-                    
-                    sample = {'ctr': ctrs, 
-                            'rad': shapes, 
-                            'cls': np.zeros((len(ctrs), 1), dtype='int32'),
-                            'spacing': spacing}
-                    
-                    sample = coord_to_annot(sample)
-                    transformed_annots.append(sample['annot'])
-        
-                # Pad the pseudo label
-                valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
-                valid_mask = (valid_mask == 1)
-                max_num_annots = max(annot.shape[0] for annot in transformed_annots)
-                if max_num_annots > 0:
-                    transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
-                    for idx, annot in enumerate(transformed_annots):
-                        if annot.shape[0] > 0:
-                            transformed_annots_padded[idx, :annot.shape[0], :] = annot
-                else:
-                    transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
-
-                ## For analysis
-                # Compute iou between pseudo label and original label
-                all_iou_pseu = []
-                tp, fp, fn = 0, 0, 0
-                for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['gt_annot'].numpy(), transformed_annots_padded, valid_mask)):
-                    annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
-                    if not is_valid:
-                        fn += len(annot)
-                        continue
-                    
-                    pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
-                    
-                    if len(annot) == 0:
-                        fp += len(pseudo_annot)
-                        continue
-                    elif len(pseudo_annot) == 0:
-                        fn += len(annot)
-                        continue
-                    
-                    bboxes = np.stack([annot[:, :3] - annot[:, 3:6] / 2, annot[:, :3] + annot[:, 3:6] / 2], axis=1)
-                    pseudo_bboxes = np.stack([pseudo_annot[:, :3] - pseudo_annot[:, 3:6] / 2, pseudo_annot[:, :3] + pseudo_annot[:, 3:6] / 2], axis=1)
-                    ious = compute_bbox3d_iou(pseudo_bboxes, bboxes)
-                    
-                    iou_pseu = ious.max(axis=1)
-                    iou = ious.max(axis=0)
-                    
-                    all_iou_pseu.extend(iou_pseu.tolist())    
-                    tp += np.count_nonzero(iou > 1e-3)
-                    fp += np.count_nonzero(iou_pseu < 1e-3)
-
-                    # Cheating, set FP to 0
-                    # for j in np.where(iou_pseu < 1e-3)[0]:
-                    #     transformed_annots_padded[i, j, ...] = -1
-                    
-                if len(all_iou_pseu) > 0:
-                    avg_iou_pseu.update(np.mean(all_iou_pseu))
-                avg_tp_pseu.update(tp)
-                avg_fp_pseu.update(fp)
-                avg_fn_pseu.update(fn)
-                # Apply valid mask
-                # transformed_annots = []
-                # for i in range(len(transformed_annots_padded)):
-                #     transformed_annots.append(transformed_annots_padded[i][transformed_annots_padded[i, :, -1] != -1])
+                for transform in strong_ctr_transforms[batch_i]:
+                    ctrs = transform.forward_ctr(ctrs)
+                    shapes = transform.forward_rad(shapes)
+                    spacing = transform.forward_spacing(spacing)
                 
-                # valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
-                # valid_mask = (valid_mask == 1)
-                # max_num_annots = max(annot.shape[0] for annot in transformed_annots)
-                # if max_num_annots > 0:
-                #     transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
-                #     for idx, annot in enumerate(transformed_annots):
-                #         if annot.shape[0] > 0:
-                #             transformed_annots_padded[idx, :annot.shape[0], :] = annot
-                # else:
-                #     transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
-                transformed_annots_padded = transformed_annots_padded[valid_mask]
-                strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
-                strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
+                sample = {'ctr': ctrs, 
+                        'rad': shapes, 
+                        'cls': np.zeros((len(ctrs), 1), dtype='int32'),
+                        'spacing': spacing}
                 
-                background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
-                background_mask = background_mask[valid_mask]
-                
-                # original_annot = original_annot[valid_mask]
-                # np.save('image.npy', strong_u_sample['image'].numpy())
-                # np.save('original_annot.npy', original_annot)
-                # np.save('annot.npy', strong_u_sample['annot'].numpy())
-                # np.save('background_mask.npy', background_mask.cpu().numpy())
-                # raise ValueError('Check the pseudo label')
-                if mixed_precision:
-                    with torch.cuda.amp.autocast():
-                        loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
-                else:
-                    loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
-                
-                avg_pseu_cls_loss.update(cls_pos_pseu_loss.item() + cls_neg_pseu_loss.item())
-                avg_pseu_cls_pos_loss.update(cls_pos_pseu_loss.item())
-                avg_pseu_cls_neg_loss.update(cls_neg_pseu_loss.item())
-                avg_pseu_shape_loss.update(shape_pseu_loss.item())
-                avg_pseu_offset_loss.update(offset_pseu_loss.item())
-                avg_pseu_iou_loss.update(iou_pseu_loss.item())
-                avg_pseu_loss.update(loss_pseu.item())
-                num_pseudo_nodules += len(strong_u_sample['annot'][strong_u_sample['annot'][..., -1] != -1])
-                del outputs_pseu
+                sample = coord_to_annot(sample)
+                transformed_annots.append(sample['annot'])
+    
+            # Pad the pseudo label
+            valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
+            valid_mask = (valid_mask == 1)
+            max_num_annots = max(annot.shape[0] for annot in transformed_annots)
+            if max_num_annots > 0:
+                transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
+                for idx, annot in enumerate(transformed_annots):
+                    if annot.shape[0] > 0:
+                        transformed_annots_padded[idx, :annot.shape[0], :] = annot
             else:
-                outputs_pseu = None
-                loss_pseu = torch.tensor(0.0, device=device)
-                for annot in strong_u_sample['gt_annot'].numpy():
-                    annot = annot[annot[:, -1] != -1]
-                    if len(annot) > 0:
-                        avg_fn_pseu.update(len(annot))
+                transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
+
+            ## For analysis
+            # Compute iou between pseudo label and original label
+            all_iou_pseu = []
+            tp, fp, fn = 0, 0, 0
+            for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['gt_annot'].numpy(), transformed_annots_padded, valid_mask)):
+                annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
+                if not is_valid:
+                    fn += len(annot)
+                    continue
+                
+                pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
+                
+                if len(annot) == 0:
+                    fp += len(pseudo_annot)
+                    continue
+                elif len(pseudo_annot) == 0:
+                    fn += len(annot)
+                    continue
+                
+                bboxes = np.stack([annot[:, :3] - annot[:, 3:6] / 2, annot[:, :3] + annot[:, 3:6] / 2], axis=1)
+                pseudo_bboxes = np.stack([pseudo_annot[:, :3] - pseudo_annot[:, 3:6] / 2, pseudo_annot[:, :3] + pseudo_annot[:, 3:6] / 2], axis=1)
+                ious = compute_bbox3d_iou(pseudo_bboxes, bboxes)
+                
+                iou_pseu = ious.max(axis=1)
+                iou = ious.max(axis=0)
+                
+                all_iou_pseu.extend(iou_pseu.tolist())    
+                tp += np.count_nonzero(iou > 1e-3)
+                fp += np.count_nonzero(iou_pseu < 1e-3)
+
+                # Cheating, set FP to 0
+                # for j in np.where(iou_pseu < 1e-3)[0]:
+                #     transformed_annots_padded[i, j, ...] = -1
+                
+            if len(all_iou_pseu) > 0:
+                avg_iou_pseu.update(np.mean(all_iou_pseu))
+            avg_tp_pseu.update(tp)
+            avg_fp_pseu.update(fp)
+            avg_fn_pseu.update(fn)
+            # transformed_annots_padded = transformed_annots_padded[valid_mask]
+            # strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
+            strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
+            
+            background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
+            # background_mask = background_mask[valid_mask]
+            
+            if mixed_precision:
+                with torch.cuda.amp.autocast():
+                    loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
+            else:
+                loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
+            
+            avg_pseu_cls_loss.update(cls_pos_pseu_loss.item() + cls_neg_pseu_loss.item())
+            avg_pseu_cls_pos_loss.update(cls_pos_pseu_loss.item())
+            avg_pseu_cls_neg_loss.update(cls_neg_pseu_loss.item())
+            avg_pseu_shape_loss.update(shape_pseu_loss.item())
+            avg_pseu_offset_loss.update(offset_pseu_loss.item())
+            avg_pseu_iou_loss.update(iou_pseu_loss.item())
+            avg_pseu_loss.update(loss_pseu.item())
+            num_pseudo_nodules += len(strong_u_sample['annot'][strong_u_sample['annot'][..., -1] != -1])
+            del outputs_pseu
             ### Labeled data
             try:
                 labeled_sample = next(iter_l)
