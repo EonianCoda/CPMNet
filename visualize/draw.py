@@ -24,7 +24,7 @@ def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.
     return image
 
 def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), half_image = True, axis_off = True, 
-                       save_path = None, extra_sup_title = None) -> None:
+                       save_path = None, extra_sup_title = None, show = False) -> None:
     """
     Args:
         image: a 3D image with shape [Z, Y, X, 3]
@@ -34,6 +34,14 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
         image = image[..., np.newaxis]
         image = np.repeat(image, 3, axis=-1)
     
+    if bboxes.dtype != np.int32:
+        bboxes = bboxes.astype(np.int32)
+    if len(bboxes.shape) == 3:
+        bboxes = bboxes.reshape(-1, 6)
+        
+    max_z, max_y, max_x, _ = image.shape
+    bboxes = np.clip(bboxes, 0, [max_z - 1, max_y - 1, max_x - 1, max_z, max_y, max_x])
+        
     for bbox in bboxes:
         z1, y1, x1, z2, y2, x2 = bbox
         center_x = (x1 + x2) / 2
@@ -69,7 +77,11 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
         plt.tight_layout()
         if save_path is not None:
             plt.savefig(save_path)
-        plt.close(fig)
+        
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
         
 def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bboxes_pseu: np.ndarray, color = (0, 255, 0), color_pseu = (255, 0, 0), 
                                       half_image = True, axis_off = True, save_path = None, extra_sup_title = None) -> None:

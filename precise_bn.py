@@ -15,7 +15,7 @@ import torchvision
 
 from config import IMAGE_SPACING, DEFAULT_OVERLAP_RATIO
 from logic.utils import load_model, save_states
-from dataload.crop import InstanceCrop
+from dataload.crop_fastV3 import InstanceCrop
 from dataload.dataset import TrainDataset
 from torch.utils.data import DataLoader
 from dataload.utils import get_image_padding_value, load_series_list
@@ -142,17 +142,16 @@ def update_bn_stats(
 
     with get_progress_bar('Precise BN', len(data_loader)) as progress_bar:
         for iter, sample in enumerate(data_loader):
-            images = sample['image'].to(device, non_blocking=True) # z, y, x
-            labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
+            images = sample['image'] # z, y, x
+            # labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
             for i in range(int(math.ceil(images.size(0) / batch_size))):
                 batch_size_per_bn_layer.clear()
                 end = (i + 1) * batch_size
                 if end > images.size(0):
                     end = images.size(0)
                 
-                image = images[i * batch_size:end]
-                label = labels[i * batch_size:end]
-                model([image, label])
+                image = images[i * batch_size:end].to(device, non_blocking=True)
+                model(image)
                 for i, bn in enumerate(bn_layers):
                     # Accumulates the bn stats.
                     bs = batch_size_per_bn_layer.get(bn, None)
@@ -190,16 +189,15 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: i
     rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
-    transform_list_train = [transform.Pad(output_size=crop_size),
-                            transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomTranspose(p=0.5, trans_xy=True, trans_zx=rot_zx, trans_zy=rot_zy))
-        
+    # transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    # transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
+    transform_list_train = []
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
-    transform_list_train.append(transform.CoordToAnnot(blank_side=blank_side))
+    transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random transpose: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
+    logger.info('Augmentation: random flip: True, random rotation: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -211,12 +209,15 @@ def get_args():
     
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='ratio of positive samples in a crop')
     parser.add_argument('--tp_iou', type=float, default=0.7, help='IoU threshold for positive samples')
-    parser.add_argument('--batch_size', type=int, default=3, help='batch size for training')
-    parser.add_argument('--num_samples', type=int, default=5, help='number of samples in a crop')
+    parser.add_argument('--batch_size', type=int, default=6, help='batch size for training')
+    parser.add_argument('--num_samples', type=int, default=16, help='number of samples in a crop')
     
-    parser.add_argument('--min_d', type=int, default=1, help='minimum distance between two instances')
+    parser.add_argument('--min_d', type=int, default=0, help='minimum distance between two instances')
+    parser.add_argument('--min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
+    parser.add_argument('--use_bg', action='store_true', help='use background samples')
+    
     parser.add_argument('--data_norm_method', type=str, default='none', help='data normalization method')
-    parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
+    parser.add_argument('--rand_rot', nargs='+', type=int, default=[0, 0, 0], help='random rotate')
     parser.add_argument('--use_crop', action='store_true', help='use random crop augmentation')
     
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
@@ -237,14 +238,15 @@ if __name__ == "__main__":
     
     crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot, sample_num=args.num_samples, instance_crop=True)
     
-    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, 
-                                 transform_post = train_transform, min_d=args.min_d, norm_method=args.data_norm_method)
+    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
+                                 min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method)
     
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=train_collate_fn, 
                               num_workers=min(args.batch_size, args.max_workers), pin_memory=True)
     
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     model = load_model(args.model_path)
+    model.detection_loss = None
     model = model.to(device)
     logger.info('Number of samples: {}'.format(len(train_dataset) * args.num_samples))
     update_bn_stats(model, train_loader, device)
