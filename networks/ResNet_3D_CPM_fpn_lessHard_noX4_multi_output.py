@@ -312,8 +312,6 @@ class Resnet18(nn.Module):
             cls_pos_loss_s2, cls_neg_loss_s2, shape_loss_s2, offset_loss_s2, iou_loss_s2 = self.detection_loss_s2(out_s2, labels, device=self.device)
             cls_pos_loss_s4, cls_neg_loss_s4, shape_loss_s4, offset_loss_s4, iou_loss_s4 = self.detection_loss_s4(out_s4, labels, device=self.device)
 
-            print(cls_pos_loss_s2, cls_neg_loss_s2, shape_loss_s2, offset_loss_s2, iou_loss_s2)
-            print(cls_pos_loss_s4, cls_neg_loss_s4, shape_loss_s4, offset_loss_s4, iou_loss_s4)
             cls_pos_loss = (cls_pos_loss_s2 + cls_pos_loss_s4) / 2
             cls_neg_loss = (cls_neg_loss_s2 + cls_neg_loss_s4) / 2
             shape_loss = (shape_loss_s2 + shape_loss_s4) / 2
