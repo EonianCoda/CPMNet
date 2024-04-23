@@ -34,11 +34,14 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
         image = image[..., np.newaxis]
         image = np.repeat(image, 3, axis=-1)
     
+    if image.dtype != np.uint8:
+        image = (image * 255).astype(np.uint8)
+    
     if bboxes.dtype != np.int32:
         bboxes = bboxes.astype(np.int32)
     if len(bboxes.shape) == 3:
         bboxes = bboxes.reshape(-1, 6)
-        
+    
     max_z, max_y, max_x, _ = image.shape
     bboxes = np.clip(bboxes, 0, [max_z - 1, max_y - 1, max_x - 1, max_z, max_y, max_x])
         

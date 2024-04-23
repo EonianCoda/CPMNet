@@ -2,7 +2,7 @@ from typing import List, Tuple, Dict
 
 import numpy as np
 
-from dataload.utils import ALL_LOC, ALL_RAD
+from dataload.utils import ALL_LOC, ALL_RAD, ALL_PROB
 from evaluationScript.nodule_finding import NoduleFinding
 from evaluationScript.nodule_typer import NoduleTyper
 from typing import List, Tuple
@@ -29,6 +29,21 @@ from typing import List, Tuple
 #         nodule_finding = NoduleFinding(ctr_x=x, ctr_y=y, ctr_z=z, w=w, h=h, d=d, prob=1.0, is_gt=True)
 #         nodules.append(nodule_finding)
 #     return nodules
+
+def label2bboxes(label: dict, conf_threshold=0.0) -> np.ndarray:
+    """
+    Return: A numpy array of shape (N, 2, 3) where N is the number of nodules
+    """
+    ctr = label[ALL_LOC]
+    rad = label[ALL_RAD]
+    if ALL_PROB in label:
+        conf = label[ALL_PROB]
+        ctr = ctr[conf >= conf_threshold]
+        rad = rad[conf >= conf_threshold]
+    if len(ctr) != 0:
+        return np.stack([ctr - rad / 2, ctr + rad / 2], axis=1) # (N, 2, 3)
+    else:
+        return np.zeros((0, 2, 3))
 
 def noduleFinding2cude(nodules: List[NoduleFinding], shape: Tuple[int, int, int]) -> np.ndarray:
     if not isinstance(nodules, list):
