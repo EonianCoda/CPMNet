@@ -27,7 +27,7 @@ class InstanceCrop(object):
     """Randomly crop the input image (shape [C, D, H, W]
     """
 
-    def __init__(self, crop_size, rand_trans=None, rand_rot=None, instance_crop=True, overlap_size=[16, 32, 32], 
+    def __init__(self, crop_size, rand_trans=None, rand_rot=None, instance_crop=True, overlap_ratio: float = 0.25, 
                  tp_ratio=0.7, sample_num=2, blank_side=0, sample_cls=[0], tp_iou = 0.7):
         """This is crop function with spatial augmentation for training Lesion Detection.
 
@@ -43,14 +43,16 @@ class InstanceCrop(object):
         """
         self.sample_cls = sample_cls
         self.crop_size = np.array(crop_size, dtype=np.int32)
-        self.overlap_size = np.array(overlap_size, dtype=np.int32)
+        self.overlap_ratio = overlap_ratio
+        self.overlap_size = (self.crop_size * self.overlap_ratio).astype(np.int32)
         self.stride_size = self.crop_size - self.overlap_size
         
         self.tp_ratio = tp_ratio
         self.sample_num = sample_num
         self.blank_side = blank_side
         self.instance_crop = instance_crop
-        self.tp_iou = tp_iou
+        
+        self.tp_iou = 0.0 #TODO
 
         if rand_trans == None:
             self.rand_trans = None
@@ -266,8 +268,8 @@ class InstanceCrop(object):
                     rot_nodule_bb_min = rot_nodule_bb_min - valid_range[0]
                     rot_nodule_bb_max = rot_nodule_bb_max - valid_range[0]
                     
-                    rot_nodule_bb_min = np.clip(rot_nodule_bb_min, a_min=0, a_max=None)
-                    rot_nodule_bb_max = np.clip(rot_nodule_bb_max, a_min=None, a_max=self.crop_size)
+                    # rot_nodule_bb_min = np.clip(rot_nodule_bb_min, a_min=0, a_max=None)
+                    # rot_nodule_bb_max = np.clip(rot_nodule_bb_max, a_min=None, a_max=self.crop_size)
                     
                     ctr = (rot_nodule_bb_min + rot_nodule_bb_max) / 2
                     rad = rot_nodule_bb_max - rot_nodule_bb_min
@@ -296,5 +298,6 @@ class InstanceCrop(object):
             sample['ctr'] = ctr
             sample['rad'] = rad
             sample['cls'] = cls
+            sample['spacing'] = image_spacing
             samples.append(sample)
         return samples

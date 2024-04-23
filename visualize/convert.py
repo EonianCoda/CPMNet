@@ -30,6 +30,16 @@ from typing import List, Tuple
 #         nodules.append(nodule_finding)
 #     return nodules
 
+def annot2bboxes(annot):
+    annot = annot[annot[:, -1] != -1]
+    if len(annot) == 0:
+        return np.zeros((0, 6))
+    else:
+        # ctr_z, ctr_y, ctr_x, d, h, w
+        bboxes = np.stack([annot[:, :3] - annot[:, 3:6] / 2, annot[:, :3] + annot[:, 3:6] / 2], axis=1)
+        bboxes = bboxes.reshape(-1, 6)
+        return bboxes
+
 def label2bboxes(label: dict, conf_threshold=0.0) -> np.ndarray:
     """
     Return: A numpy array of shape (N, 2, 3) where N is the number of nodules

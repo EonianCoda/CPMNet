@@ -16,7 +16,7 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.train import train
+from logic.train_NPLL import train
 from logic.val import val
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
 ### optimzer ###
@@ -83,7 +83,7 @@ def get_args():
     parser.add_argument('--ema_momentum', type=float, default=0.998, help='ema decay')
     parser.add_argument('--ema_warmup_epochs', type=int, default=150, help='warmup epochs for ema')
     # Loss hyper-parameters
-    parser.add_argument('--loss_class', type=str, default='networks.loss', help='loss class')
+    parser.add_argument('--loss_class', type=str, default='networks.loss_NPLL', help='loss class')
     
     parser.add_argument('--pos_target_topk', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pos_ignore_ratio', type=int, default=3)
@@ -105,6 +105,7 @@ def get_args():
     parser.add_argument('--lambda_cls', type=float, default=4.0, help='weights of cls loss')
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
     parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
+    parser.add_argument('--lambda_shape_std', type=float, default=1.0, help='weights of reg')
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
@@ -122,7 +123,7 @@ def get_args():
     parser.add_argument('--test_det_threshold', type=float, default=0.2, help='detection threshold for test')
     parser.add_argument('--test_froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
     # Model
-    parser.add_argument('--model_class', type=str, default='networks.ResNet_3D_CPM', help='model class')
+    parser.add_argument('--model_class', type=str, default='networks.ResNet_3D_CPM_fpn_lessHard_noX4_NPLL', help='model class')
     parser.add_argument('--norm_type', type=str, default='batchnorm', help='norm type of backbone')
     parser.add_argument('--head_norm', type=str, default='batchnorm', help='norm type of head')
     parser.add_argument('--act_type', type=str, default='ReLU', help='act type of network')
@@ -315,7 +316,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
     elif args.my_rot:
         from dataload.crop_fast_rot import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=[15, 0, 0],
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = None
         logger.info('Use my rotate')
