@@ -46,7 +46,6 @@ def train(args,
     avg_shape_loss2 = AverageMeter()
     avg_offset_loss2 = AverageMeter()
     avg_iou_loss2 = AverageMeter()
-    avg_loss2 = AverageMeter()
     
     iters_to_accumulate = args.iters_to_accumulate
     # mixed precision training
@@ -141,7 +140,6 @@ def train(args,
                 'shape_loss': avg_shape_loss.avg,
                 'offset_loss': avg_offset_loss.avg,
                 'iou_loss': avg_iou_loss.avg,
-                'loss2': avg_loss2.avg,
                 'cls_loss2': avg_cls_loss2.avg,
                 'cls_pos_loss2': avg_cls_pos_loss2.avg,
                 'cls_neg_loss2': avg_cls_neg_loss2.avg,
