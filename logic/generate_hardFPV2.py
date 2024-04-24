@@ -154,6 +154,16 @@ def gen_hard_FP(model: nn.Module,
                                         ALL_HARD_FP_RAD: pseu_rads,
                                         ALL_HARD_FP_PROB: pseud_prob}
             continue
+        elif len(pseu_bboxes) == 0:
+            all_samples[series_name] = {ALL_RAD: label[ALL_RAD],
+                                        ALL_LOC: label[ALL_LOC],
+                                        ALL_PROB: np.zeros((0,)),
+                                        ALL_IOU: np.zeros((0,)),
+                                        ALL_CLS: np.zeros((0, 3), dtype=np.int32),
+                                        ALL_HARD_FP_LOC: np.zeros((0, 3)),
+                                        ALL_HARD_FP_RAD: np.zeros((0,)),
+                                        ALL_HARD_FP_PROB: np.zeros((0,))}
+            continue
         
         ious = compute_bbox3d_iou(pseu_bboxes, gt_bboxes)
         

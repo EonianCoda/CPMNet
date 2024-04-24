@@ -67,6 +67,7 @@ def val(args,
                            nodule_min_size=min_size)
     
     model.eval()
+    model2.eval()
     split_comber = val_loader.dataset.splitcomb
     all_preds = []
     memory_format = get_memory_format(getattr(args, 'memory_format', None))
@@ -103,7 +104,7 @@ def val(args,
                             # Cls, Shape, Offset
                             output['Cls'] = (output['Cls'] + output2['Cls']) / 2
                             output['Shape'] = (output['Shape'] + output2['Shape']) / 2
-                            # output['Offset'] = (output['Offset'] + output2['Offset']) / 2
+                            output['Offset'] = (output['Offset'] + output2['Offset']) / 2
                             output = detection_postprocess(output, device=device, lobe_mask=lobe)
                             del output2
                     # else:

@@ -15,7 +15,7 @@ import torchvision
 
 from config import IMAGE_SPACING, DEFAULT_OVERLAP_RATIO
 from logic.utils import load_model, save_states
-from dataload.crop_fastV3 import InstanceCrop
+from dataload.crop_fast import InstanceCrop
 from dataload.dataset import TrainDataset
 from torch.utils.data import DataLoader
 from dataload.utils import get_image_padding_value, load_series_list

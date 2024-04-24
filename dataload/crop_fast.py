@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 from __future__ import print_function, division
-import SimpleITK as sitk
 import numpy as np
 import random
 from itertools import product
@@ -67,11 +66,15 @@ class InstanceCrop(object):
         all_rad = sample['all_rad']
         all_cls = sample['all_cls']
         
-        all_rad_pixel = all_rad / image_spacing
-        all_nodule_bb_min = all_loc - all_rad_pixel / 2
-        all_nodule_bb_max = all_loc + all_rad_pixel / 2
-        nodule_bboxes = np.stack([all_nodule_bb_min, all_nodule_bb_max], axis=1) # [N, 2, 3]
-        nodule_volumes = np.prod(all_rad_pixel, axis=1) # [N]
+        if len(all_rad) != 0:
+            all_rad_pixel = all_rad / image_spacing
+            all_nodule_bb_min = all_loc - all_rad_pixel / 2
+            all_nodule_bb_max = all_loc + all_rad_pixel / 2
+            nodule_bboxes = np.stack([all_nodule_bb_min, all_nodule_bb_max], axis=1) # [N, 2, 3]
+            nodule_volumes = np.prod(all_rad_pixel, axis=1) # [N]
+        else:
+            nodule_bboxes = np.zeros((0, 2, 3))
+            nodule_volumes = np.zeros(0)
         
         instance_loc = all_loc[np.sum([all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
 
@@ -83,9 +86,7 @@ class InstanceCrop(object):
         x_crop_centers = self.get_crop_centers(shape, 2)
         
         # Generate crop centers
-        crop_centers = [*product(z_crop_centers, y_crop_centers, x_crop_centers)]
-        crop_centers = np.array(crop_centers)
-        
+        crop_centers = np.array([*product(z_crop_centers, y_crop_centers, x_crop_centers)])
         if self.instance_crop and len(instance_loc) > 0:
             if self.rand_trans is not None:
                 instance_crop = instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(instance_loc), 3))
@@ -104,11 +105,15 @@ class InstanceCrop(object):
         all_crop_bboxes = np.stack([all_crop_bb_min, all_crop_bb_max], axis=1) # [M, 2, 3]
         
         # Compute IoU to determine the label of the patches
-        inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes) # [M, N]
-        all_ious = inter_volumes / nodule_volumes[np.newaxis, :] # [M, N]
-        max_ious = np.max(all_ious, axis=1) # [M]
+        if len(nodule_bboxes) != 0:
+            inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes) # [M, N]
+            all_ious = inter_volumes / nodule_volumes[np.newaxis, :] # [M, N]
+            max_ious = np.max(all_ious, axis=1) # [M]
+        else:
+            all_ious = np.zeros((len(all_crop_bboxes), 1))
+            max_ious = np.zeros(len(all_crop_bboxes))
         
-        tp_indices = max_ious > self.tp_iou
+        tp_indices = max_ious > 0
         neg_indices = ~tp_indices
 
         # Sample patches
@@ -130,7 +135,7 @@ class InstanceCrop(object):
             image_crop = np.expand_dims(image_crop, axis=0)
             
             ious = all_ious[sample_i] # [N]
-            in_idx = np.where(ious > self.tp_iou)[0]
+            in_idx = np.where(ious > 0)[0]
             if in_idx.size > 0:
                 # Compute new ctr and rad because of the crop
                 all_nodule_bb_min_crop = all_nodule_bb_min - crop_bb_min
@@ -139,8 +144,8 @@ class InstanceCrop(object):
                 nodule_bb_min_crop = all_nodule_bb_min_crop[in_idx]
                 nodule_bb_max_crop = all_nodule_bb_max_crop[in_idx]
                 
-                nodule_bb_min_crop = np.clip(nodule_bb_min_crop, a_min=0, a_max=None)
-                nodule_bb_max_crop = np.clip(nodule_bb_max_crop, a_min=None, a_max=crop_size)
+                # nodule_bb_min_crop = np.clip(nodule_bb_min_crop, a_min=0, a_max=None)
+                # nodule_bb_max_crop = np.clip(nodule_bb_max_crop, a_min=None, a_max=crop_size)
                 
                 ctr = (nodule_bb_min_crop + nodule_bb_max_crop) / 2
                 rad = nodule_bb_max_crop - nodule_bb_min_crop

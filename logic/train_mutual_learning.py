@@ -31,6 +31,7 @@ def train(args,
           ema = None,
           ema2 = None) -> Dict[str, float]:
     model.train()
+    model2.train()
     avg_cls_pos_loss = AverageMeter()
     avg_cls_neg_loss = AverageMeter()
     avg_cls_loss = AverageMeter()
@@ -82,7 +83,7 @@ def train(args,
                     f2 = feats2[i].contiguous().view(bs, c, -1).permute(0, 2, 1).contiguous().view(-1, c)
                     feat_loss += feat_loss_fn(f1, f2, torch.ones(num_target, device=device)) 
             
-            loss = (loss + loss2 + feat_loss) / iters_to_accumulate    
+            loss = (loss + loss2 + feat_loss * args.lambda_feat) / iters_to_accumulate    
             scaler.scale(loss).backward()
             
             del image, labels, feats, feats2

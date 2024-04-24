@@ -17,7 +17,7 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
 from logic.train_mutual_learning import train
-from logic.val import val
+from logic.val_mutual import val
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
 ### optimzer ###
 from optimizer.optim import AdamW
@@ -26,7 +26,7 @@ from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml, build_class
-from logic.early_stopping_save import EarlyStoppingSave
+from logic.early_stopping_save_mutual_learning import EarlyStoppingSave
 from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,7 @@ def get_args():
     parser.add_argument('--lambda_offset', type=float, default=1.0,help='weights of offset')
     parser.add_argument('--lambda_shape', type=float, default=0.1, help='weights of reg')
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
+    parser.add_argument('--lambda_feat', type=float, default=1.0, help='weights of iou loss')
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -318,7 +319,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
     if args.not_use_itk_rotate:
-        from dataload.crop_fastV3 import InstanceCrop
+        from dataload.crop_fast import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = None
@@ -414,7 +415,7 @@ if __name__ == '__main__':
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
-        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model)
+        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model, model2=model2)
         
     if args.early_end_epoch > 0:
         end_epoch = args.early_end_epoch
@@ -457,6 +458,7 @@ if __name__ == '__main__':
                 ema.apply_shadow()
             val_metrics = val(args = args,
                             model = model,
+                            model2=model2,
                             detection_postprocess=val_det_postprocess,
                             val_loader = val_loader, 
                             device = device,
@@ -513,6 +515,7 @@ if __name__ == '__main__':
         logger.info('Load best model from "{}"'.format(model_path))
         train_infer_metrics = val(args = args,
                                 model = model,
+                                model2 = model2,
                                 detection_postprocess=test_det_postprocess,
                                 val_loader = train_infer_loader,
                                 device = device,
