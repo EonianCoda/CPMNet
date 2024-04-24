@@ -96,6 +96,7 @@ def get_args():
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     
     parser.add_argument('--cls_focal_alpha', type=float, default=0.75, help='alpha of focal loss')
+    parser.add_argument('--cls_focal_gamma', type=float, default=2.0, help='gamma of focal loss')
     
     parser.add_argument('--cls_hard_fp_thrs1', type=float, default=0.5, help='threshold of cls_hard_fp1')
     parser.add_argument('--cls_hard_fp_thrs2', type=float, default=0.7, help='threshold of cls_hard_fp2')
@@ -196,7 +197,8 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                                    cls_hard_fp_thrs2 = args.cls_hard_fp_thrs2,
                                    cls_hard_fp_w1 = args.cls_hard_fp_w1,
                                    cls_hard_fp_w2 = args.cls_hard_fp_w2,
-                                   cls_focal_alpha = args.cls_focal_alpha)
+                                   cls_focal_alpha = args.cls_focal_alpha,
+                                   cls_focal_gamma = args.cls_focal_gamma)
                                         
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 

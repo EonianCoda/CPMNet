@@ -20,7 +20,8 @@ class DetectionLoss(nn.Module):
                  cls_hard_fp_thrs2 = 0.7,
                  cls_hard_fp_w1 = 1.5,
                  cls_hard_fp_w2 = 2.0,
-                 cls_focal_alpha = 0.75):
+                 cls_focal_alpha = 0.75,
+                 cls_focal_gamma = 2.0):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -39,6 +40,7 @@ class DetectionLoss(nn.Module):
         self.cls_hard_fp_w2 = cls_hard_fp_w2
         
         self.cls_focal_alpha = cls_focal_alpha
+        self.cls_focal_gamma = cls_focal_gamma
         
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, 
@@ -354,7 +356,8 @@ class DetectionLoss(nn.Module):
                                                    hard_fp_thrs2=self.cls_hard_fp_thrs2,
                                                     hard_fp_w1=self.cls_hard_fp_w1,
                                                     hard_fp_w2=self.cls_hard_fp_w2,
-                                                    alpha=self.cls_focal_alpha)
+                                                    alpha=self.cls_focal_alpha,
+                                                    gamma=self.cls_focal_gamma)
         
         # Only calculate the loss of positive samples                                 
         fg_mask = target_scores.squeeze(-1).bool()
