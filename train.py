@@ -67,6 +67,7 @@ def get_args():
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     parser.add_argument('--use_itk_rotate', action='store_true', default=False, help='use itk rotate')
     parser.add_argument('--my_rot', action='store_true', default=False, help='use our rotate')
+    parser.add_argument('--crop_designed', action='store_true', default=False, help='use designed crop')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
     parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
     parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
@@ -324,14 +325,19 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = None
         logger.info('Use my rotate')
+    elif args.crop_designed:
+        from dataload.crop_fast_designed import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
+        mmap_mode = None
+        logger.info('Use crop designed')
     else:
         from dataload.crop_fast import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = None
         logger.info('Not use itk rotate')
-
-    train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
     
     train_set_class = build_class('{}.TrainDataset'.format(args.data_set_class))
     train_dataset = train_set_class(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
