@@ -7,7 +7,6 @@ import logging
 import numpy as np
 from typing import Tuple, Any
 ### data ###
-from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
 from dataload.split_combine import SplitComb
@@ -49,6 +48,7 @@ def get_args():
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
     # Data
+    parser.add_argument('--data_set_class', type=str, default='dataload.dataset', help='data set class')
     parser.add_argument('--train_set', type=str, help='train_list')
     parser.add_argument('--val_set', type=str, help='val_list')
     parser.add_argument('--test_set', type=str, help='test_list')
@@ -327,7 +327,9 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         logger.info('Use itk rotate {}'.format(args.rand_rot))
 
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
-    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
+    
+    train_set_class = build_class('{}.TrainDataset'.format(args.data_set_class))
+    train_dataset = train_set_class(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
                                  min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
     train_loader = DataLoader(train_dataset, 
@@ -348,10 +350,11 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
-    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
+    det_set_class = build_class('{}.DetDataset'.format(args.data_set_class))
+    val_dataset = det_set_class(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
 
-    test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
+    test_dataset = det_set_class(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
@@ -365,7 +368,8 @@ def get_train_infer_dataloader(args) -> DataLoader:
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
-    train_infer_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
+    det_set_class = build_class('{}.DetDataset'.format(args.data_set_class))
+    train_infer_dataset = det_set_class(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     train_infer_loader = DataLoader(train_infer_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     return train_infer_loader
 
