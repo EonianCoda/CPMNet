@@ -34,12 +34,6 @@ class DetectionLoss(nn.Module):
         
         self.cls_neg_pos_ratio = cls_neg_pos_ratio
         
-        self.cls_hard_fn_thrs1 = 0.5
-        self.cls_hard_fn_thrs2 = 0.9
-        self.cls_hard_fn_w1 = 4.0
-        self.cls_hard_fn_w2 = 1.5
-        
-        
         self.cls_hard_fp_thrs1 = cls_hard_fp_thrs1
         self.cls_hard_fp_thrs2 = cls_hard_fp_thrs2
         self.cls_hard_fp_w1 = cls_hard_fp_w1
@@ -47,9 +41,9 @@ class DetectionLoss(nn.Module):
         
         self.cls_focal_alpha = cls_focal_alpha
         self.cls_focal_gamma = cls_focal_gamma
+        
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, 
-                 hard_fn_thrs1 = 0.5, hard_fn_thrs2 = 0.9, hard_fn_w1 = 5.0, hard_fn_w2 = 2.5,
                  hard_fp_thrs1 = 0.5, hard_fp_thrs2 = 0.7, hard_fp_w1 = 1.5, hard_fp_w2 = 2.0):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
@@ -94,12 +88,8 @@ class DetectionLoss(nn.Module):
             record_targets = target_b.clone()
             if num_positive_pixels > 0:
                 # Weight the hard false negatives(FN)
-                # FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
-                # cls_loss[FN_index == 1] *= fn_weight
-                if hard_fn_thrs1 != -1 and hard_fn_w1 != -1 and hard_fn_thrs2 != -1 and hard_fn_w2 != -1:
-                    hard_FN_weight = hard_fn_w1 - torch.clamp((cls_prob - hard_fn_thrs1) / (hard_fn_thrs2 - hard_fn_thrs1), min=0.0, max=1.0) * (hard_fn_w1 - hard_fn_w2)
-                    hard_FN_index = torch.lt(cls_prob, hard_fn_thrs2) & (record_targets == 1)
-                    cls_loss[hard_FN_index == 1] *= hard_FN_weight[hard_FN_index == 1]
+                FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
+                cls_loss[FN_index == 1] *= fn_weight
                 
                 # Weight the hard false positives(FP)
                 if hard_fp_thrs1 != -1 and hard_fp_w1 != -1 and hard_fp_thrs2 != -1 and hard_fp_w2 != -1:
@@ -237,15 +227,15 @@ class DetectionLoss(nn.Module):
 
         # IoU
         iou = inter / union
-        if DIoU:
-            cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
-            ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
-            cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
-            c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
-            rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + 
-            + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
-            return iou - rho2 / c2  # DIoU
-        return iou  # IoU
+        cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
+        ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
+        cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
+        c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
+        rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + 
+        + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
+        return (iou.detach() ** 0.5) * (1 - iou + rho2 / c2)  # DIoU
+        
+        # return iou  # IoU
     
     @staticmethod
     def get_pos_target(annotations: torch.Tensor,
@@ -378,6 +368,6 @@ class DetectionLoss(nn.Module):
         else:
             reg_loss = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             offset_loss = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_loss = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
+            iou_loss = (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return cls_pos_loss, cls_neg_loss, reg_loss, offset_loss, iou_loss

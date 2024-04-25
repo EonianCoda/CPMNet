@@ -34,12 +34,6 @@ class DetectionLoss(nn.Module):
         
         self.cls_neg_pos_ratio = cls_neg_pos_ratio
         
-        self.cls_hard_fn_thrs1 = 0.5
-        self.cls_hard_fn_thrs2 = 0.9
-        self.cls_hard_fn_w1 = 4.0
-        self.cls_hard_fn_w2 = 1.5
-        
-        
         self.cls_hard_fp_thrs1 = cls_hard_fp_thrs1
         self.cls_hard_fp_thrs2 = cls_hard_fp_thrs2
         self.cls_hard_fp_w1 = cls_hard_fp_w1
@@ -47,10 +41,10 @@ class DetectionLoss(nn.Module):
         
         self.cls_focal_alpha = cls_focal_alpha
         self.cls_focal_gamma = cls_focal_gamma
+        
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, 
-                 hard_fn_thrs1 = 0.5, hard_fn_thrs2 = 0.9, hard_fn_w1 = 5.0, hard_fn_w2 = 2.5,
-                 hard_fp_thrs1 = 0.5, hard_fp_thrs2 = 0.7, hard_fp_w1 = 1.5, hard_fp_w2 = 2.0):
+                 hard_fp_thrs1 = 0.5, hard_fp_thrs2 = 0.7, hard_fp_w1 = 1.5, hard_fp_w2 = 2.0, iou = None):
         """
         Calculates the classification loss using focal loss and binary cross entropy.
 
@@ -73,6 +67,7 @@ class DetectionLoss(nn.Module):
         cls_pos_losses = []
         cls_neg_losses = []
         batch_size = pred.shape[0]
+        iou_idx = 0
         for j in range(batch_size):
             pred_b = pred[j]
             target_b = target[j]
@@ -92,15 +87,12 @@ class DetectionLoss(nn.Module):
             cls_loss = focal_weight * bce
             cls_loss = torch.where(torch.eq(mask_ignore_b, 0), cls_loss, 0)
             record_targets = target_b.clone()
+            
+            # target_scores.squeeze(-1).bool()
             if num_positive_pixels > 0:
                 # Weight the hard false negatives(FN)
-                # FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
-                # cls_loss[FN_index == 1] *= fn_weight
-                if hard_fn_thrs1 != -1 and hard_fn_w1 != -1 and hard_fn_thrs2 != -1 and hard_fn_w2 != -1:
-                    hard_FN_weight = hard_fn_w1 - torch.clamp((cls_prob - hard_fn_thrs1) / (hard_fn_thrs2 - hard_fn_thrs1), min=0.0, max=1.0) * (hard_fn_w1 - hard_fn_w2)
-                    hard_FN_index = torch.lt(cls_prob, hard_fn_thrs2) & (record_targets == 1)
-                    cls_loss[hard_FN_index == 1] *= hard_FN_weight[hard_FN_index == 1]
-                
+                FN_index = torch.lt(cls_prob, fn_threshold) & (record_targets == 1)  # 0.9
+                cls_loss[FN_index == 1] *= fn_weight
                 # Weight the hard false positives(FP)
                 if hard_fp_thrs1 != -1 and hard_fp_w1 != -1 and hard_fp_thrs2 != -1 and hard_fp_w2 != -1:
                     hard_FP_weight = hard_fp_w1 + torch.clamp((cls_prob - hard_fp_thrs1) / (hard_fp_thrs2 - hard_fp_thrs1), min=0.0, max=1.0) * (hard_fp_w2 - hard_fp_w1)
@@ -108,6 +100,8 @@ class DetectionLoss(nn.Module):
                     cls_loss[hard_FP_index == 1] *= hard_FP_weight[hard_FP_index == 1]
                     
                 Positive_loss = cls_loss[record_targets == 1]
+                if iou is not None:
+                    Positive_loss = Positive_loss * (1 + (1 - iou[iou_idx : iou_idx + num_positive_pixels.item()]) ** 0.5)
                 Negative_loss = cls_loss[record_targets == 0]
                 # Randomly sample negative pixels
                 if num_neg != -1:
@@ -144,7 +138,7 @@ class DetectionLoss(nn.Module):
                 Negative_loss = Negative_loss[keep_idx]
                 Negative_loss = Negative_loss.sum()
                 cls_neg_losses.append(Negative_loss)
-                
+            iou_idx += int(num_positive_pixels.item())
         if len(cls_pos_losses) == 0:
             cls_pos_loss = torch.tensor(0.0, device=pred.device)
         else:
@@ -244,8 +238,11 @@ class DetectionLoss(nn.Module):
             c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
             rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + 
             + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
-            return iou - rho2 / c2  # DIoU
-        return iou  # IoU
+            
+            iou_loss = 1 - (iou - (rho2 / c2))  # DIoU
+        else:
+            iou_loss = 1 - iou
+        return iou_loss.mean(), iou.detach()  # IoU
     
     @staticmethod
     def get_pos_target(annotations: torch.Tensor,
@@ -351,11 +348,24 @@ class DetectionLoss(nn.Module):
                                                                                                      stride = stride_tensor[0].view(1, 1, 3), 
                                                                                                      pos_target_topk = self.pos_target_topk,
                                                                                                      ignore_ratio = self.pos_ignore_ratio)
+        # Only calculate the loss of positive samples                                 
+        fg_mask = target_scores.squeeze(-1).bool()
+        if fg_mask.sum() == 0:
+            reg_loss = torch.tensor(0.0, device=device)
+            offset_loss = torch.tensor(0.0, device=device)
+            iou_loss = torch.tensor(0.0, device=device)
+            iou = None
+        else:
+            reg_loss = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
+            offset_loss = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
+            iou_loss, iou = (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask]))
+            
         # merge mask ignore
         mask_ignore = mask_ignore.bool() | target_mask_ignore.bool()
         mask_ignore = mask_ignore.int()
         cls_pos_loss, cls_neg_loss = self.cls_loss(pred = pred_scores, 
                                                    target = target_scores, 
+                                                   iou = iou.squeeze(-1),
                                                    mask_ignore = mask_ignore, 
                                                    neg_pos_ratio = self.cls_neg_pos_ratio,
                                                    num_hard = self.cls_num_hard, 
@@ -369,15 +379,5 @@ class DetectionLoss(nn.Module):
                                                     alpha=self.cls_focal_alpha,
                                                     gamma=self.cls_focal_gamma)
         
-        # Only calculate the loss of positive samples                                 
-        fg_mask = target_scores.squeeze(-1).bool()
-        if fg_mask.sum() == 0:
-            reg_loss = torch.tensor(0.0, device=device)
-            offset_loss = torch.tensor(0.0, device=device)
-            iou_loss = torch.tensor(0.0, device=device)
-        else:
-            reg_loss = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
-            offset_loss = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
-            iou_loss = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
         
         return cls_pos_loss, cls_neg_loss, reg_loss, offset_loss, iou_loss

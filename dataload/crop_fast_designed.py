@@ -147,11 +147,12 @@ class InstanceCrop(object):
                 random_order = np.random.permutation(len(fg_centers))
                 while num_remain > 0:
                     center = fg_centers[random_order[cur_i]]
-                    center = center + get_random_offset(self.crop_size // 2, 1, lower=self.crop_size // 4)
+                    center = center + get_random_offset(self.crop_size // 2 - np.random.randint(2, 10), 1, lower=self.crop_size // 3)
                     bbox_min = center - crop_size // 2
                     bbox_min = np.clip(bbox_min, a_min=0 + np.random.randint(2, 10), a_max=shape - crop_size - np.random.randint(2, 10))
                     all_crop_bb_min.append(bbox_min)
                     cur_i = (cur_i + 1) % len(fg_centers)
+                    num_remain = num_remain - 1
         
         # Sample bg patches
         if num_bg > 0:
@@ -163,15 +164,16 @@ class InstanceCrop(object):
             all_crop_bb_min.append(bg_bboxes_min[bg_indices])
     
         all_crop_bb_min = np.concatenate(all_crop_bb_min, axis=0)
- 
+        all_crop_bb_max = all_crop_bb_min + crop_size
+        all_crop_bboxes = np.stack([all_crop_bb_min, all_crop_bb_max], axis=1)
         # Compute IoU to determine the label of the patches
         if len(nodule_bboxes) != 0:
-            inter_volumes = compute_bbox3d_intersection_volume(all_crop_bb_min, nodule_bboxes)
+            inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes)
             all_ious = inter_volumes / nodule_volumes[np.newaxis, :]
             max_ious = np.max(all_ious, axis=1)
         else:
-            all_ious = np.zeros((len(all_crop_bb_min), 1))
-            max_ious = np.zeros(len(all_crop_bb_min))
+            all_ious = np.zeros((len(all_crop_bboxes), 1))
+            max_ious = np.zeros(len(all_crop_bboxes))
             
         # Crop patches
         samples = []
