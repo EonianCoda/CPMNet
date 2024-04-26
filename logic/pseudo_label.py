@@ -44,7 +44,7 @@ def gen_pseu_labels(model: nn.Module,
                     dataloader: DataLoader,
                     device: torch.device,
                     detection_postprocess,
-                    batch_size: int = 4,
+                    batch_size: int = 2,
                     nms_keep_top_k: int = 40,
                     mixed_precision: bool = False,
                     memory_format: str = None) -> Dict[str, np.ndarray]:
@@ -106,9 +106,9 @@ def gen_pseu_labels(model: nn.Module,
                 Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
                 Cls_output = Cls_output.sigmoid()
                 ignore_offset = 2
-                Cls_output[:, :, 0:ignore_offset, :, :] = 0
-                Cls_output[:, :, :, 0:ignore_offset, :] = 0
-                Cls_output[:, :, :, :, 0:ignore_offset] = 0
+                Cls_output[:, :, :ignore_offset, :, :] = 0
+                Cls_output[:, :, :, :ignore_offset, :] = 0
+                Cls_output[:, :, :, :, :ignore_offset] = 0
                 Cls_output[:, :, -ignore_offset:, :, :] = 0
                 Cls_output[:, :, :, -ignore_offset:, :] = 0
                 Cls_output[:, :, :, :, -ignore_offset:] = 0

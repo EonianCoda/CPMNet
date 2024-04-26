@@ -9,7 +9,7 @@ from dataload.utils import ALL_LOC, ALL_RAD, load_image, load_label, gen_dicom_p
 from evaluationScript.nodule_finding_original import NoduleFinding
 from .convert import noduleFinding2cude
 
-MAX_IMAGE_IN_ROW = 9
+MAX_IMAGES = 15
 SUBPLOT_WIDTH = 3.5
 SUBPLOT_HEIGHT = 3
 
@@ -24,7 +24,7 @@ def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.
     return image
 
 def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), half_image = True, axis_off = True, 
-                       save_path = None, extra_sup_title = None, show = False) -> None:
+                       save_path = None, extra_sup_title = None, show = False, offset = 0, bbox_offset = 0) -> None:
     """
     Args:
         image: a 3D image with shape [Z, Y, X, 3]
@@ -48,7 +48,11 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
     for bbox in bboxes:
         z1, y1, x1, z2, y2, x2 = bbox
         center_x = (x1 + x2) / 2
-        bboxed_image = draw_bbox(image.copy(), bbox[np.newaxis, ...], color)
+        expaned_bbox = bbox.copy()
+        if bbox_offset > 0: # expand bbox for better visualization, but only on x and y axis
+            expaned_bbox[1:3] = np.maximum(0, expaned_bbox[1:3] - bbox_offset)
+            expaned_bbox[4:6] = np.minimum([max_y, max_x], expaned_bbox[4:6] + bbox_offset)
+        bboxed_image = draw_bbox(image.copy(), expaned_bbox[np.newaxis, ...], color)
         
         # Crop image to save drawing time and space
         if half_image:
@@ -57,10 +61,12 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             else: # right
                 bboxed_image = bboxed_image[:, :, bboxed_image.shape[2] // 2:]
         
-        if (z2 - z1) > MAX_IMAGE_IN_ROW:
-            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+        expaned_z1 = max(0, z1 - offset) # expand z axis for better visualization
+        expaned_z2 = min(max_z, z2 + offset) # expand z axis for better visualization
+        if (expaned_z2 - expaned_z1) > MAX_IMAGES:
+            zs = list(range(expaned_z1, expaned_z2, (expaned_z2 - expaned_z1) // MAX_IMAGES))
         else:
-            zs = list(range(z1, z2))
+            zs = list(range(expaned_z1, expaned_z2))
             
         # Draw
         n_row = max(int(math.sqrt(len(zs))), 1)
@@ -69,7 +75,11 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
         for i, z in enumerate(zs):
             ax = plt.subplot(n_row, n_col, i+1)
             ax.imshow(bboxed_image[z], cmap='gray')
-            ax.set_title(f'z={z}')
+            if i == len(zs) // 2:
+                title = f'z={z}(center)'
+            else:
+                title = f'z={z}'
+            ax.set_title(title)
             if axis_off:
                 ax.axis('off')
         sup_title = 'ctrXYZ=({}, {}, {}), whd=({}, {}, {})'.format(int(center_x), int((y1 + y2) / 2), int((z1 + z2) / 2),
@@ -111,13 +121,13 @@ def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bbo
             else: # right
                 bboxed_image = bboxed_image[:, :, bboxed_image.shape[2] // 2:]
         
-        if (z2 - z1) > MAX_IMAGE_IN_ROW:
-            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+        if (z2 - z1) > MAX_IMAGES:
+            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGES))
         else:
             zs = list(range(z1, z2))
             
-        if (z2 - z1) > MAX_IMAGE_IN_ROW:
-            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+        if (z2 - z1) > MAX_IMAGES:
+            zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGES))
         else:
             zs = list(range(z1, z2))
         # Draw
@@ -143,8 +153,8 @@ def draw_pseu_bbox_and_label_on_image(image: np.ndarray, bboxes: np.ndarray, bbo
     if save_path is None:
         for bbox_pseu in bboxes_pseu:
             z1, y1, x1, z2, y2, x2 = bbox_pseu
-            if (z2 - z1) > MAX_IMAGE_IN_ROW:
-                zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGE_IN_ROW))
+            if (z2 - z1) > MAX_IMAGES:
+                zs = list(range(z1, z2, (z2 - z1) // MAX_IMAGES))
             else:
                 zs = list(range(z1, z2))
             # Draw
