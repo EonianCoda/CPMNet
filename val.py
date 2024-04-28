@@ -25,7 +25,7 @@ def get_args():
     parser.add_argument('--val_mixed_precision', action='store_true', default=False, help='use mixed precision')
     parser.add_argument('--batch_size', type=int, default=2, help='input batch size for training (default: 2)')
     parser.add_argument('--crop_size', nargs='+', type=int, default=[96, 96, 96], help='crop size')
-    parser.add_argument('--overlap_ratio', type=float, default=DEFAULT_OVERLAP_RATIO, help='overlap ratio')
+    parser.add_argument('--overlap_ratio', nargs='+', type=float, default=[DEFAULT_OVERLAP_RATIO, DEFAULT_OVERLAP_RATIO, DEFAULT_OVERLAP_RATIO], help='overlap ratio')
     parser.add_argument('--model_path', type=str, default='')
     # data
     parser.add_argument('--val_set', type=str, default='./data/all_client_test.txt', help='val_list')
@@ -91,7 +91,7 @@ def prepare_validation(args, device):
 
 def val_data_prepare(args, model_out_stride=4):
     crop_size = args.crop_size
-    overlap_size = [int(crop_size[i] * args.overlap_ratio) for i in range(len(crop_size))]
+    overlap_size = [int(crop_size[i] * args.overlap_ratio[i]) for i in range(len(crop_size))]
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     
     logger.info('Crop size: {}, overlap size: {}'.format(crop_size, overlap_size))
