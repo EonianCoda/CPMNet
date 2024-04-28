@@ -11,6 +11,9 @@ from typing import Tuple, List
 from networks.loss_semi import DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
 from dataload.dataset_semi import TrainDataset, DetDataset, UnLabeledDataset
+# Build crop function
+from dataload.crop_fast import InstanceCrop
+from dataload.crop_semi_fastV3 import InstanceCrop as InstanceCrop_semi
 from dataload.dataset_val_aug import DetDataset as AugDetDataset
 from dataload.utils import get_image_padding_value, ALL_LOC, ALL_RAD, ALL_CLS, ALL_PROB
 from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_train_collate_fn, infer_aug_collate_fn
@@ -73,7 +76,7 @@ def get_args():
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
-    parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
+    # parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
     parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
     parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
@@ -352,15 +355,12 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
-    # Build crop function
-    from dataload.crop_fast import InstanceCrop
-    from dataload.crop_semi_fastV3 import InstanceCrop as InstanceCrop_semi
     crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                 sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
     crop_fn_train_u = InstanceCrop_semi(crop_size=crop_size, overlap_ratio=args.overlap_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                 sample_num=args.unlabeled_num_samples, blank_side=blank_side)
     mmap_mode = None
-    logger.info('Use itk rotate {}'.format(args.rand_rot))
+    # logger.info('Use itk rotate {}'.format(args.rand_rot))
 
     # Build labeled dataloader
     train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
@@ -378,7 +378,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=True)
     
     # Build unlabeled detection dataloader for generating pseudo labels
-    split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
+    split_comber = SplitComb(crop_size=[160, 160, 160], overlap_size=[16, 16, 16], pad_value=pad_value, do_padding=False)
     det_dataset_u = AugDetDataset(series_list_path = args.unlabeled_train_set, 
                                 SplitComb=split_comber, 
                                 image_spacing=IMAGE_SPACING, 
@@ -452,7 +452,6 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
     
 if __name__ == '__main__':
     args = get_args()
-    
     if args.resume_folder != '': # resume training
         exp_folder = args.resume_folder
         setting_yaml_path = os.path.join(exp_folder, 'setting.yaml')
