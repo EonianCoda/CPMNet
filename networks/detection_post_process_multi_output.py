@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from utils.box_utils import nms_3D, bbox_decode, make_anchors
 from typing import List
 
@@ -44,20 +45,28 @@ class DetectionPostprocess(nn.Module):
 
         return topk_scores, topk_indices, pred_bboxes
 
-    def forward(self, output, device, is_logits=True, lobe_mask1=None, lobe_mask2=None):
+    def forward(self, output, device, is_logits=True, lobe_mask=None):
         out1, out2 = output
         
         batch_size = out1['Cls'].size()[0]
-        num_anchors = out1['Cls'].size()[2] * out1['Cls'].size()[3] * out1['Cls'].size()[4]
         
-        topk_scores, topk_indices, pred_bboxes = self.get_scores(out1, is_logits, lobe_mask1)
-        topk_scores2, topk_indices2, pred_bboxes2 = self.get_scores(out2, is_logits, lobe_mask2)
+        # out1['Cls'] = (F.interpolate(out2['Cls'], scale_factor=2, mode='nearest') + out1['Cls']) / 2
+        # topk_scores, topk_indices, pred_bboxes = self.get_scores(out1, is_logits, lobe_mask1)
         
-        topk_indices2 = topk_indices2 + num_anchors
-        # Concatenate the topk scores and indices
-        topk_scores = torch.cat((topk_scores, topk_scores2), dim=1) # (b, topk * 2)
-        topk_indices = torch.cat((topk_indices, topk_indices2), dim=1) # (b, topk * 2)
-        pred_bboxes = torch.cat((pred_bboxes, pred_bboxes2), dim=1) # (b, num_anchors * 2, 6)
+        out2['Cls'] = (F.max_pool3d(out1['Cls'], kernel_size=2, stride=2) + out2['Cls']) / 2
+        out2['Shape'] = (F.max_pool3d(out1['Shape'], kernel_size=2, stride=2) + out2['Shape']) / 2
+        topk_scores, topk_indices, pred_bboxes = self.get_scores(out2, is_logits, lobe_mask)
+        
+        # num_anchors = out1['Cls'].size()[2] * out1['Cls'].size()[3] * out1['Cls'].size()[4]
+        
+        # topk_scores, topk_indices, pred_bboxes = self.get_scores(out1, is_logits, lobe_mask1)
+        # topk_scores2, topk_indices2, pred_bboxes2 = self.get_scores(out2, is_logits, lobe_mask2)
+        
+        # topk_indices2 = topk_indices2 + num_anchors
+        # # Concatenate the topk scores and indices
+        # topk_scores = torch.cat((topk_scores, topk_scores2), dim=1) # (b, topk * 2)
+        # topk_indices = torch.cat((topk_indices, topk_indices2), dim=1) # (b, topk * 2)
+        # pred_bboxes = torch.cat((pred_bboxes, pred_bboxes2), dim=1) # (b, num_anchors * 2, 6)
         
         dets = (-torch.ones((batch_size, self.topk * 2, 8))).to(device)
         for j in range(batch_size):

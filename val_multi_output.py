@@ -40,7 +40,7 @@ def get_args():
     parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
     # detection-hyper-parameters
-    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
+    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process_multi_output')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
@@ -133,7 +133,7 @@ if __name__ == '__main__':
         
     # Get val function
     if args.apply_aug:
-        from logic.val_aug import val
+        from logic.val_aug_multi_output import val
     else:
         from logic.val import val
         

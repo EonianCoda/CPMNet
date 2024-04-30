@@ -29,20 +29,23 @@ def save_states(save_path: str, model: nn.Module, optimizer: torch.optim.Optimiz
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     torch.save(save_dict, save_path)
     
-def load_states(load_path: str, device: torch.device, model: nn.Module, optimizer: torch.optim.Optimizer = None, scheduler: torch.optim.lr_scheduler = None, ema = None, **kwargs):
+def load_states(load_path: str, device: torch.device, model: nn.Module = None, optimizer: torch.optim.Optimizer = None, scheduler: torch.optim.lr_scheduler = None, ema = None, **kwargs):
     checkpoint = torch.load(load_path, map_location=device)
     
-    if 'state_dict' not in checkpoint and 'model_state_dict' not in checkpoint:
-        model.load_state_dict(checkpoint)
-    else:
-        model.load_state_dict(checkpoint['model_state_dict'])
+    if model is not None:
+        if 'state_dict' not in checkpoint and 'model_state_dict' not in checkpoint:
+            model.load_state_dict(checkpoint)
+        else:
+            model.load_state_dict(checkpoint['model_state_dict'])
     
     if optimizer is not None:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
     if scheduler is not None:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         if getattr(scheduler, 'after_scheduler', None) is not None:
             scheduler.after_scheduler.load_state_dict(checkpoint['after_scheduler_state_dict'])
+    
     if ema is not None:
         ema.load_state_dict(checkpoint['ema_state_dict'])
         
