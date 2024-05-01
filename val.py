@@ -179,6 +179,9 @@ if __name__ == '__main__':
             else:
                 save_folder_name += '_ol{:.2f}_{:.2f}_{:.2f}'.format(args.overlap_ratio[0], args.overlap_ratio[1], args.overlap_ratio[2])
         
+        if args.patch_label_type != 'none':
+            save_folder_name += '_PT{}'.format(args.patch_label_type)
+        
         metrics = val(args = args,
                     model = model,
                     detection_postprocess=detection_postprocess,
