@@ -11,7 +11,7 @@ import numpy as np
 import random
 import math
 from collections import defaultdict
-from dataload.utils import load_label, load_series_list, gen_label_path, ALL_CLS, ALL_RAD, ALL_LOC, NODULE_SIZE, compute_bbox3d_iou
+from dataload.utils import load_label, load_series_list, gen_label_path, gen_patch_label_path, load_patch_label, ALL_CLS, ALL_RAD, ALL_LOC, NODULE_SIZE, compute_bbox3d_iou
 from functools import cmp_to_key
 from .markdown_writer import MarkDownWriter
 from .nodule_finding import NoduleFinding
@@ -295,12 +295,15 @@ class Evaluation:
                  nodule_type_diameters: Dict[str, float],
                  prob_threshold: float = 0.65,
                  iou_threshold: float = 0.1,
+                 patch_label_type: str = 'none',
                  nodule_size_mode = 'dhw', # or 'seg_size'
                  nodule_min_d: int = 0,
                  nodule_min_size: int = 0):
         self.series_list_path = series_list_path
         self.image_spacing = np.array(image_spacing)
         self.iou_threshold = iou_threshold
+        self.patch_label_type = patch_label_type
+        
         self.prob_threshold = prob_threshold
         self.voxel_volume = np.prod(self.image_spacing)
         
@@ -331,6 +334,7 @@ class Evaluation:
         """
         Collects all ground truth nodules from the series list file and stores them in a dictionary.
         """
+        self.all_ignore_nodules = defaultdict(list)
         self.all_gt_nodules = defaultdict(list)
         self.num_of_all_gt_nodules = 0
         for info in load_series_list(series_list_path):
@@ -340,6 +344,44 @@ class Evaluation:
             label_path = gen_label_path(series_dir, series_name)
             label = load_label(label_path, self.image_spacing, self.nodule_min_d, self.nodule_min_size)
             
+            if self.patch_label_type != 'none':
+                patch_label_path = gen_patch_label_path(series_dir, series_name)
+                if os.path.exists(patch_label_path):
+                    patch_label = load_patch_label(patch_label_path, self.image_spacing)
+                    
+                    if self.patch_label_type == 'tp':
+                        tp_mask = (patch_label[ALL_CLS] == 0)
+                    elif self.patch_label_type == 'benign':
+                        tp_mask = (patch_label[ALL_CLS] <= 1)
+                    elif self.patch_label_type == 'confuse':
+                        tp_mask = (patch_label[ALL_CLS] <= 2)
+                    elif self.patch_label_type == 'all':
+                        tp_mask = (patch_label[ALL_CLS] <= 100)
+                    else:
+                        raise ValueError('Invalid patch label type: {}'.format(self.patch_label_type))
+                    
+                    tp_patch_nodule_locs = patch_label[ALL_LOC][tp_mask]
+                    tp_patch_nodule_rads = patch_label[ALL_RAD][tp_mask]
+                    tp_patch_nodule_sizes = patch_label[NODULE_SIZE][tp_mask]
+                    
+                    if len(tp_patch_nodule_locs) != 0:
+                        label[ALL_LOC] = np.concatenate([label[ALL_LOC], tp_patch_nodule_locs], axis=0)
+                        label[ALL_RAD] = np.concatenate([label[ALL_RAD], tp_patch_nodule_rads], axis=0)
+                        label[NODULE_SIZE] = np.concatenate([label[NODULE_SIZE], tp_patch_nodule_sizes], axis=0)
+                    
+                    # Add ignore nodules
+                    ignore_mask = ~tp_mask
+                    if np.count_nonzero(ignore_mask) != 0:
+                        ignore_patch_nodule_locs = patch_label[ALL_LOC][ignore_mask]
+                        ignore_patch_nodule_rads = patch_label[ALL_RAD][ignore_mask]
+                        ignore_patch_nodule_sizes = patch_label[NODULE_SIZE][ignore_mask]
+
+                        for ctrs, dhws, seg_size in zip(ignore_patch_nodule_locs, ignore_patch_nodule_rads, ignore_patch_nodule_sizes):
+                            ctr_z, ctr_y, ctr_x = ctrs
+                            d, h, w = dhws
+                            d, h, w = d / self.image_spacing[0], h / self.image_spacing[1], w / self.image_spacing[2]
+                            self.all_ignore_nodules[series_name].append(self._build_nodule_finding(series_name, ctr_x, ctr_y, ctr_z, w, h, d, nodule_size=seg_size, is_gt=True))
+
             # If there are no nodules in the series, skip it
             if len(label[ALL_LOC]) == 0:
                 self.all_gt_nodules[series_name] = []
@@ -387,10 +429,11 @@ class Evaluation:
         for series_name in all_series_names:
             pred_cands = all_pred_cands[series_name]
             gt_nodules = self.all_gt_nodules[series_name]
-            
+            ignore_nodules = self.all_ignore_nodules[series_name]
             # Compute the iou between all ground truth nodules and all predicted nodules
             gt_bboxes = np.array([gt_nodule.get_box() for gt_nodule in gt_nodules]) # [M, 2, 3], 3 is for [x, y, z]
             pred_bboxes = np.array([cand.get_box() for cand in pred_cands]) # [N, 2, 3], 3 is for [x, y, z]
+            ignore_bboxes = np.array([ignore_nodule.get_box() for ignore_nodule in ignore_nodules])
             
             if len(gt_bboxes) != 0 and len(pred_bboxes) != 0:
                 all_ious = compute_bbox3d_iou(gt_bboxes, pred_bboxes) # [M, N]
@@ -427,17 +470,29 @@ class Evaluation:
                         FN_gt_nodules.append(gt_nodule)
                         froc.add(is_pos=True, is_FN=True, prob=-1, series_name=series_name, nodule=gt_nodule)
                 
+            # Compute ignore nodules matched with predicted nodules
+            ignore_indices = []
+            if len(ignore_nodules) != 0 and len(pred_cands) != 0:
+                ignore_ious = compute_bbox3d_iou(ignore_bboxes, pred_bboxes)
+                matched_masks = (ignore_ious >= self.iou_threshold) if self.iou_threshold != 0 else (ignore_ious > 0)
+                for ignore_idx, ignore_nodule in enumerate(ignore_nodules):
+                    match_mask = matched_masks[ignore_idx]
+                    ignore_indices.extend(np.where(match_mask == True)[0])
+                ignore_indices = list(set(ignore_indices))
+                
             # Compute FP
             if len(pred_cands) != 0:
                 if len(all_ious) != 0:
                     pred_ious = np.max(all_ious, axis=0)
-                    for iou, cand in zip(pred_ious, pred_cands):
-                        if (iou >= self.iou_threshold and self.iou_threshold != 0) or (iou > 0 and self.iou_threshold == 0):
+                    for pred_i, (iou, cand) in enumerate(zip(pred_ious, pred_cands)):
+                        if (pred_i in ignore_indices) or (iou >= self.iou_threshold and self.iou_threshold != 0) or (iou > 0 and self.iou_threshold == 0):
                             continue
                         cand.set_match(iou, None)
                         froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
                 else:
-                    for cand in pred_cands:
+                    for pred_i, cand in enumerate(pred_cands):
+                        if pred_i in ignore_indices:
+                            continue
                         cand.set_match(0, None)
                         froc.add(is_pos=False, is_FN=False, prob=cand.prob, series_name=series_name, nodule=cand)
 

@@ -21,6 +21,8 @@ ALL_HARD_FP_LOC = 'all_hard_fp_loc'
 ALL_HARD_FP_RAD = 'all_hard_fp_rad'
 ALL_HARD_FP_PROB = 'all_hard_fp_prob'
 
+TRUE_NODULE_TYPE = 'true_nodule_type' # For patch json
+
 def gen_dicom_path(folder: str, series_name: str) -> str:
     return os.path.join(folder, 'npy', f'{series_name}_crop.npy')
 
@@ -29,6 +31,9 @@ def gen_label_path(dir_name: str, name: str) -> str:
 
 def gen_lobe_path(dir_name: str, name: str) -> str:
     return os.path.join(dir_name, 'npy', f'{name}_lobe_crop.npz')
+
+def gen_patch_label_path(dir_name: str, name: str) -> str:
+    return os.path.join(dir_name, 'mask', f'{name}_nodule_count_patch_crop.json')
 
 def load_series_list(series_list_path: str) -> List[List[str]]:
     """
@@ -120,6 +125,76 @@ def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_size =
     nodule_sizes = np.array(info[NODULE_SIZE]) # (n, 1)
     if len(bboxes) == 0:
         label = {ALL_LOC: np.zeros((0, 3), dtype=np.float64),
+                ALL_RAD: np.zeros((0, 3), dtype=np.int32),
+                ALL_CLS: np.zeros((0,), dtype=np.float64),
+                NODULE_SIZE: np.zeros((0,), dtype=np.int32)}
+    else:
+        bboxes[:, 0, :] = np.maximum(bboxes[:, 0, :], 0) # clip to 0
+        if (bboxes < 0).any():
+            print(f'Warning: {label_path} has negative values')
+        # calculate center of bboxes
+        all_loc = ((bboxes[:, 0] + bboxes[:, 1]) / 2).astype(np.float64) # (y, x, z)
+        all_rad = (bboxes[:, 1] - bboxes[:, 0]).astype(np.float64) # (y, x, z)
+        
+        all_loc = all_loc[:, [2, 0, 1]] # (z, y, x)
+        all_rad = all_rad[:, [2, 0, 1]] # (z, y, x)
+        
+        valid_mask = all_rad[:, 0] >= min_d
+        if min_size > 0:
+            valid_mask = valid_mask & (nodule_sizes >= min_size)
+        
+        all_rad = all_rad * image_spacing # (z, y, x)
+        all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
+
+        if np.sum(valid_mask) == 0:
+            label = {ALL_LOC: np.zeros((0, 3), dtype=np.float64),
+                    ALL_RAD: np.zeros((0, 3), dtype=np.int32),
+                    ALL_CLS: np.zeros((0, ), dtype=np.float64),
+                    NODULE_SIZE: np.zeros((0,), dtype=np.int32)}
+        else:
+            all_loc = all_loc[valid_mask]
+            all_rad = all_rad[valid_mask]
+            all_cls = all_cls[valid_mask]
+            nodule_sizes = nodule_sizes[valid_mask]
+            label = {ALL_LOC: all_loc, 
+                    ALL_RAD: all_rad,
+                    ALL_CLS: all_cls,
+                    NODULE_SIZE: nodule_sizes}
+    return label
+
+def load_patch_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_size = 0) -> Dict[str, np.ndarray]:
+    """ Load patch label from json file
+    Patch label is a json file which contains some missing nodule compared to the original label file
+    Args:
+        label_path: str, path to the patch label file
+        image_spacing: np.ndarray, spacing of the image in z, y, x
+        min_d: int, minimum depth of nodule
+        min_size: int, minimum size of nodule
+    Return:
+        A dictionary with keys 'all_loc', 'all_rad', 'all_cls'
+        (1) 'all_loc': 3D numpy array with shape (n, 3) (z, y, x)
+        (2) 'all_rad': depth, height, width of nodules with shape (n, 3) (z, y, x)
+        (3) 'all_cls': 1D numpy array with shape (n,)
+    """
+    min_d = int(min_d)
+    with open(label_path, 'r') as f:
+        info = json.load(f)
+    
+    bboxes = np.array(info[BBOXES]) # (n, 2, 3)
+    nodule_sizes = np.array(info[NODULE_SIZE]) # (n, 1)
+    true_nodule_type = info[TRUE_NODULE_TYPE]
+    
+    nodule_cls = []
+    for nodule_type in true_nodule_type:
+        if nodule_type == 'tp':
+            nodule_cls.append(0)
+        elif nodule_type == 'benign':
+            nodule_cls.append(1)
+        elif nodule_type == 'confuse':
+            nodule_cls.append(2)
+            
+    if len(bboxes) == 0:
+        label = {ALL_LOC: np.zeros((0, 3), dtype=np.float64),
                 ALL_CLS: np.zeros((0, 3), dtype=np.float64),
                 ALL_RAD: np.zeros((0,), dtype=np.int32),
                 NODULE_SIZE: np.zeros((0,), dtype=np.int32)}
@@ -150,10 +225,13 @@ def load_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_size =
             all_loc = all_loc[valid_mask]
             all_rad = all_rad[valid_mask]
             all_cls = all_cls[valid_mask]
+            
+            nodule_cls = np.array(nodule_cls, dtype=np.int32)[valid_mask]
+            
             nodule_sizes = nodule_sizes[valid_mask]
             label = {ALL_LOC: all_loc, 
                     ALL_RAD: all_rad,
-                    ALL_CLS: all_cls,
+                    ALL_CLS: nodule_cls,
                     NODULE_SIZE: nodule_sizes}
     return label
 

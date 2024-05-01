@@ -33,6 +33,8 @@ def get_args():
     parser.add_argument('--min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     parser.add_argument('--post_process_min_size', type=int, default=27, help="min size of nodule, if some nodule's size < min_size, it will be ignored")
     
+    parser.add_argument('--patch_label_type', type=str, default='none', help='whether to use some missing labels compared to the original label, none or benign or all or tp')
+    
     parser.add_argument('--data_norm_method', type=str, default='none', help='normalize method, mean_std or scale or none')
     parser.add_argument('--memory_format', type=str, default='channels_first')
     parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')

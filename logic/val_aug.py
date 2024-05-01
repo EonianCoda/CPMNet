@@ -56,11 +56,17 @@ def val(args,
         iou_threshold = args.val_iou_threshold
     elif val_type == 'test':
         iou_threshold = args.test_iou_threshold
+        
+    patch_label_type = getattr(args, 'patch_label_type', 'none')
+    if patch_label_type != 'none':
+        logger.info('When validating, use the patch label type: {}'.format(patch_label_type))
+        
     evaluator = Evaluation(series_list_path=series_list_path, 
                            image_spacing=image_spacing,
                            nodule_type_diameters=nodule_type_diameters,
                            prob_threshold=args.val_fixed_prob_threshold,
                            iou_threshold = iou_threshold,
+                           patch_label_type=patch_label_type,
                            nodule_size_mode=nodule_size_mode,
                            nodule_min_d=min_d, 
                            nodule_min_size=min_size)
