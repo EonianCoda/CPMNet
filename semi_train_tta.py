@@ -484,7 +484,12 @@ if __name__ == '__main__':
         else:
             logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
     
-    for epoch in range(start_epoch, args.epochs + 1):
+    if args.early_end_epoch > 0:
+        end_epoch = args.early_end_epoch
+    else:
+        end_epoch = args.epochs
+        
+    for epoch in range(start_epoch, end_epoch + 1):
         # args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
         args.pseudo_label_threshold = original_psuedo_label_threshold
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))

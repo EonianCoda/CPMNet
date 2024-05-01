@@ -137,6 +137,11 @@ if __name__ == '__main__':
     else:
         from logic.val import val
         
+    if len(args.overlap_ratio) == 1:
+        args.overlap_ratio = [args.overlap_ratio[0]] * 3
+    if len(args.crop_size) == 1:
+        args.crop_size = [args.crop_size[0]] * 3
+        
     for model_path in model_paths:
         model_name = os.path.basename(model_path)
         exp_folder = os.path.join(base_exp_folder, model_name)
