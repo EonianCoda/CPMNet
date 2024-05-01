@@ -164,6 +164,7 @@ def train(args,
     avg_pseu_loss = AverageMeter()
     
     # For analysis
+    avg_num_neg_patches_pseu = AverageMeter()
     avg_iou_pseu = AverageMeter()
     avg_tp_pseu = AverageMeter()
     avg_fp_pseu = AverageMeter()
@@ -182,16 +183,14 @@ def train(args,
     unsupervised_train_one_step = unsupervised_train_one_step_wrapper(memory_format, unsupervised_detection_loss)
     # model_predict =model_predict_wrapper(memory_format)
     
-    optimizer.zero_grad()
     iter_l = iter(dataloader_l)
     
     num_pseudo_nodules = 0
     coord_to_annot = CoordToAnnot()
     
-    with get_progress_bar('Train', num_iters) as progress_bar:
-        for sample_u in dataloader_u:         
-            optimizer.zero_grad(set_to_none=True)
-            
+    optimizer.zero_grad()
+    with get_progress_bar('Train', math.ceil(num_iters / iters_to_accumulate)) as progress_bar:
+        for iter_i, sample_u in enumerate(dataloader_u): 
             ### Unlabeled data
             weak_u_sample = sample_u['weak']
             strong_u_sample = sample_u['strong']
@@ -314,6 +313,9 @@ def train(args,
             # Pad the pseudo label
             valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
             valid_mask = (valid_mask == 1)
+            
+            avg_num_neg_patches_pseu.update(np.count_nonzero(valid_mask == 0))
+            
             max_num_annots = max(annot.shape[0] for annot in transformed_annots)
             if max_num_annots > 0:
                 transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
@@ -370,7 +372,7 @@ def train(args,
             background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
             
             ##TODO: sharpen the pseudo label
-            # cls_prob = sharpen_prob(cls_prob, t=0.7)
+            cls_prob = sharpen_prob(cls_prob, t=0.7)
             
             if mixed_precision:
                 with torch.cuda.amp.autocast():
@@ -409,38 +411,44 @@ def train(args,
             avg_iou_loss.update(iou_loss.item())
             avg_loss.update(loss.item())
             
-            # Update model
             total_loss = loss + loss_pseu * args.lambda_pseu
+            # Compute gradient
+            total_loss = total_loss / iters_to_accumulate
             if mixed_precision:
                 scaler.scale(total_loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
             else:
                 total_loss.backward()
-                optimizer.step()
-            del labeled_sample, outputs, loss, loss_pseu
-            progress_bar.set_postfix(cls_pos_l = avg_cls_pos_loss.avg,
-                                    cls_neg_l = avg_cls_neg_loss.avg,
-                                    cls_pos_u = avg_pseu_cls_pos_loss.avg,
-                                    cls_neg_u = avg_pseu_cls_neg_loss.avg,
-                                    cls_soft_u = avg_pseu_cls_soft_loss.avg,
-                                    avg_iou_pseu = avg_iou_pseu.avg,
-                                    num_u = num_pseudo_nodules,
-                                    tp = avg_tp_pseu.sum,
-                                    fp = avg_fp_pseu.sum,
-                                    fn = avg_fn_pseu.sum)
-            progress_bar.update()
             
-            with torch.no_grad():
-                # Update teacher model by exponential moving average
-                for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
-                    if param.requires_grad:
-                        teacher_param.data.mul_(args.semi_ema_alpha).add_(param.data, alpha = 1 - args.semi_ema_alpha)
-                # for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
-                #     if 'num_batches_tracked' in name_s:
-                #         continue
-                #     buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
-                    
+            if (iter_i + 1) % iters_to_accumulate == 0 or iter_i == num_iters - 1:
+                if mixed_precision:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                progress_bar.set_postfix(cls_pos_l = avg_cls_pos_loss.avg,
+                                        cls_neg_l = avg_cls_neg_loss.avg,
+                                        cls_pos_u = avg_pseu_cls_pos_loss.avg,
+                                        cls_neg_u = avg_pseu_cls_neg_loss.avg,
+                                        cls_soft_u = avg_pseu_cls_soft_loss.avg,
+                                        avg_iou_pseu = avg_iou_pseu.avg,
+                                        num_u = num_pseudo_nodules,
+                                        num_neg = avg_num_neg_patches_pseu.sum,
+                                        tp = avg_tp_pseu.sum,
+                                        fp = avg_fp_pseu.sum,
+                                        fn = avg_fn_pseu.sum)
+                progress_bar.update()
+                
+                with torch.no_grad():
+                    # Update teacher model by exponential moving average
+                    for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
+                        if param.requires_grad:
+                            teacher_param.data.mul_(args.semi_ema_alpha).add_(param.data, alpha = 1 - args.semi_ema_alpha)
+                    # for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
+                    #     if 'num_batches_tracked' in name_s:
+                    #         continue
+                    #     buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
+            del labeled_sample, outputs, loss, loss_pseu
             torch.cuda.empty_cache()
             
     recall = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fn_pseu.sum, 1e-3)
@@ -463,6 +471,7 @@ def train(args,
                 'avg_iou_pseu': avg_iou_pseu.avg,
                 'iou_loss_pseu': avg_pseu_iou_loss.avg,
                 'num_pseudo_nodules':  num_pseudo_nodules,
+                'num_neg_patches_pseu': avg_num_neg_patches_pseu.sum,
                 'pseu_recall': recall,
                 'pseu_precision': precision,
                 'pseudo_f1': f1,

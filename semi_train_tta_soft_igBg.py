@@ -23,7 +23,7 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.semi_threshold_tta_train_soft import train, burn_in_train
+from logic.semi_threshold_tta_train_soft_igBg import train, burn_in_train
 from logic.val import val
 from logic.pseudo_label import gen_pseu_labels
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
@@ -568,31 +568,31 @@ if __name__ == '__main__':
             if ema is not None:
                 ema.restore()
     # Test
-    logger.info('Test the best model')
-    test_save_dir = os.path.join(exp_folder, 'test')
-    os.makedirs(test_save_dir, exist_ok=True)
-    for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
-        logger.info('Load best model from "{}"'.format(model_path))
-        load_states(model_path, device, model_t=model_t)
-        test_metrics = val(args = args,
-                            model = model_t, # Use teacher model to validate
-                            detection_postprocess=test_det_postprocess,
-                            val_loader = test_loader,
-                            device = device,
-                            image_spacing = IMAGE_SPACING,
-                            series_list_path=args.test_set,
-                            nodule_type_diameters=NODULE_TYPE_DIAMETERS,
-                            exp_folder=exp_folder,
-                            epoch = 'test_best_{}'.format(target_metric),
-                            min_d=args.min_d,
-                            min_size=args.min_size,
-                            nodule_size_mode=args.nodule_size_mode,
-                            val_type = 'test')
-        write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
-        with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
-            f.write('Best epoch: {}\n'.format(best_epoch))
-            f.write('-' * 30 + '\n')
-            max_length = max([len(key) for key in test_metrics.keys()])
-            for key, value in test_metrics.items():
-                f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
-    writer.close()
+    # logger.info('Test the best model')
+    # test_save_dir = os.path.join(exp_folder, 'test')
+    # os.makedirs(test_save_dir, exist_ok=True)
+    # for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
+    #     logger.info('Load best model from "{}"'.format(model_path))
+    #     load_states(model_path, device, model_t=model_t)
+    #     test_metrics = val(args = args,
+    #                         model = model_t, # Use teacher model to validate
+    #                         detection_postprocess=test_det_postprocess,
+    #                         val_loader = test_loader,
+    #                         device = device,
+    #                         image_spacing = IMAGE_SPACING,
+    #                         series_list_path=args.test_set,
+    #                         nodule_type_diameters=NODULE_TYPE_DIAMETERS,
+    #                         exp_folder=exp_folder,
+    #                         epoch = 'test_best_{}'.format(target_metric),
+    #                         min_d=args.min_d,
+    #                         min_size=args.min_size,
+    #                         nodule_size_mode=args.nodule_size_mode,
+    #                         val_type = 'test')
+    #     write_metrics(test_metrics, epoch, 'test/best_{}'.format(target_metric), writer)
+    #     with open(os.path.join(test_save_dir, 'test_best_{}.txt'.format(target_metric)), 'w') as f:
+    #         f.write('Best epoch: {}\n'.format(best_epoch))
+    #         f.write('-' * 30 + '\n')
+    #         max_length = max([len(key) for key in test_metrics.keys()])
+    #         for key, value in test_metrics.items():
+    #             f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
+    # writer.close()
