@@ -305,6 +305,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         from dataload.crop import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
         mmap_mode = None
         logger.info('Use itk rotate {}'.format(args.rand_rot))
     elif args.use_rand_spacing:

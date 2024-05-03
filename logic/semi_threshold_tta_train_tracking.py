@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 TTA_BATCH_SIZE = 8
 
 def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
-    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, soft_prob, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
         labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
         # Compute loss
         outputs = model(image)
-        cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, soft_prob, device = device)
-        cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), cls_soft_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-        loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss + cls_soft_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-        return loss, cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss, outputs
+        cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, device = device)
+        cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
+        loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        return loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
 def train_one_step_wrapper(memory_format, loss_fn):
@@ -43,10 +43,12 @@ def train_one_step_wrapper(memory_format, loss_fn):
         return loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
-@torch.no_grad()
-def sharpen_prob(cls_prob, t=0.7):
-    cls_prob_s = cls_prob ** (1 / t)
-    return (cls_prob_s / (cls_prob_s + (1 - cls_prob_s) ** (1 / t)))
+# def model_predict_wrapper(memory_format):
+#     def model_predict(model: nn.modules, sample: Dict[str, torch.Tensor], device: torch.device) -> Dict[str, torch.Tensor]:
+#         image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
+#         outputs = model(image) # Dict[str, torch.Tensor], key: 'Cls', 'Shape', 'Offset'
+#         return outputs
+#     return model_predict
 
 def burn_in_train(args,
                 model: nn.modules,
@@ -143,23 +145,7 @@ def train(args,
           detection_postprocess,
           num_iters: int,
           device: torch.device) -> Dict[str, float]:
-    
-    ema_buffer = getattr(args, 'ema_buffer', False)
-    sharpen_cls = getattr(args, 'sharpen_cls', -1)
-    select_fg_crop = getattr(args, 'select_fg_crop', False)
-    
-    if ema_buffer:
-        logger.info('Use EMA buffer')
-    if sharpen_cls > 0:
-        logger.info('Use sharpen cls = {:.3f}'.format(sharpen_cls))
-    if select_fg_crop:
-        logger.info('Random select some bg crop')
-        
-    if not ema_buffer:
-        model_t.train()
-    else:
-        model_t.eval()
-        
+    model_t.train()
     model_s.train()
     
     avg_cls_loss = AverageMeter()
@@ -173,14 +159,12 @@ def train(args,
     avg_pseu_cls_loss = AverageMeter()
     avg_pseu_cls_pos_loss = AverageMeter()
     avg_pseu_cls_neg_loss = AverageMeter()
-    avg_pseu_cls_soft_loss = AverageMeter()
     avg_pseu_shape_loss = AverageMeter()
     avg_pseu_offset_loss = AverageMeter()
     avg_pseu_iou_loss = AverageMeter()
     avg_pseu_loss = AverageMeter()
     
     # For analysis
-    avg_num_neg_patches_pseu = AverageMeter()
     avg_iou_pseu = AverageMeter()
     avg_tp_pseu = AverageMeter()
     avg_fp_pseu = AverageMeter()
@@ -199,14 +183,16 @@ def train(args,
     unsupervised_train_one_step = unsupervised_train_one_step_wrapper(memory_format, unsupervised_detection_loss)
     # model_predict =model_predict_wrapper(memory_format)
     
+    optimizer.zero_grad()
     iter_l = iter(dataloader_l)
     
     num_pseudo_nodules = 0
     coord_to_annot = CoordToAnnot()
     
-    optimizer.zero_grad()
-    with get_progress_bar('Train', math.ceil(num_iters / iters_to_accumulate)) as progress_bar:
-        for iter_i, sample_u in enumerate(dataloader_u): 
+    with get_progress_bar('Train', num_iters) as progress_bar:
+        for sample_u in dataloader_u:         
+            optimizer.zero_grad(set_to_none=True)
+            
             ### Unlabeled data
             weak_u_sample = sample_u['weak']
             strong_u_sample = sample_u['strong']
@@ -215,10 +201,12 @@ def train(args,
             weak_transform_weights = weak_u_sample['transform_weights'] # (N, num_aug)
             weak_transform_weights = torch.from_numpy(weak_transform_weights).to(device, non_blocking=True)
             weak_feat_transforms = weak_u_sample['feat_transform'] # (N, num_aug)
+            weak_annots = weak_u_sample['annot'] # list of list of dict, first list is scan, second is n_samples
             num_aug = weak_u_sample['image'].size(1)
             
             weak_images = weak_u_sample['image']
             weak_lobes = weak_u_sample['lobe'].to(device, non_blocking=True, memory_format=memory_format)
+            weak_series_names = weak_u_sample['series_name']
             cls_prob = []
             outputs_t = []
             for i in range(int(math.ceil(weak_images.size(0) / TTA_BATCH_SIZE))):
@@ -280,38 +268,93 @@ def train(args,
             # Remove the padding, -1 means invalid
             outputs_t = np.concatenate(outputs_t, axis=0) # (bs, topk, 8)
             
-            gt_ctrs = []
-            gt_rads = []
-            for annot in weak_u_sample['annot']:
-                ctrs = []
-                rads = []
-                for a in annot:
-                    ctrs.append(a['gt_ctr'])
-                    rads.append(a['gt_rad'])
-                gt_ctrs.append(ctrs)
-                gt_rads.append(rads)
-            
             bs = outputs_t.shape[0]
-            # Calculate and transform background mask
+            # Calculate and transofmr background mask
             cls_prob = torch.cat(cls_prob, dim=0) # shape: (bs, 1, d, h, w)
+            background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
             strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
             for batch_i in range(bs):
                 for transform in strong_feat_transforms[batch_i]:
-                    cls_prob[batch_i] = transform.forward(cls_prob[batch_i])
-            # Process pseudo label
-            strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
-            weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
-            transformed_annots = []
+                    background_mask[batch_i] = transform.forward(background_mask[batch_i])
+            sample_annots = []
+            
+            # EMA update pseudo label
+            crop_bb_mins = []
+            pseudo_ctrs = []
+            pseudo_rads = []
+            pseudo_prob = []
+            for annot in weak_u_sample['annot']:
+                for a in annot:
+                    crop_bb_mins.append(a['crop_bb_min'])
+                    pseudo_ctrs.append(a['ctr'])
+                    pseudo_rads.append(a['rad'])
+                    pseudo_prob.append(a['prob'])
+
             for batch_i in range(bs):
                 output = outputs_t[batch_i]
+                pseudo_ctr = pseudo_ctrs[batch_i]
+                pseudo_rad = pseudo_rads[batch_i]
+                pseudo_prob = pseudo_prob[batch_i]
+                
                 valid_mask = (output[:, 0] != -1.0)
                 output = output[valid_mask]
+                
                 if len(output) == 0:
-                    transformed_annots.append(np.zeros((0, 10), dtype='float32'))
+                    for i in range(len(pseudo_prob)):
+                        pseudo_prob[i] = pseudo_prob[i] * args.pseudo_update_ema_alpha
                     continue
+                
                 ctrs = output[:, 2:5]
                 shapes = output[:, 5:8]
                 spacing = weak_spacings[batch_i]
+    
+                bboxes = np.stack([ctrs - shapes / 2, ctrs + shapes / 2], axis=1)
+                pseudo_bboxes = np.stack([pseudo_ctr - pseudo_rad, pseudo_ctr + pseudo_rad], axis=1)
+                ious = compute_bbox3d_iou(pseudo_bboxes, bboxes)
+                
+                # According to the iou, update the pseudo label in dataset
+                max_pseudo_iou = ious.max(axis=1)
+                max_idx = ious.argmax(axis=1)
+                for i, idx in enumerate(max_idx):
+                    if max_pseudo_iou[i] > args.pseudo_update_iou_threshold:
+                        # Update pseudo label
+                        pseudo_prob[i] = pseudo_prob[i] * args.pseudo_update_ema_alpha + output[idx, 0] * (1 - args.pseudo_update_ema_alpha)
+                        pseudo_ctrs[i] = pseudo_ctrs[i] * args.pseudo_update_ema_alpha + output[idx, 2:5] * (1 - args.pseudo_update_ema_alpha)
+                        pseudo_rads[i] = pseudo_rads[i] * args.pseudo_update_ema_alpha + output[idx, 5:8] * (1 - args.pseudo_update_ema_alpha)
+                    else: # penalize the pseudo label because of the low iou
+                        pseudo_prob[i] = pseudo_prob[i] * args.pseudo_update_ema_alpha
+                
+                # Add new pseudo label
+                max_iou = ious.max(axis=0)
+                new_psuedo_prob = []
+                new_pseudo_ctrs = []
+                new_pseudo_rads = []
+                for j, iou in enumerate(max_iou):        
+                    if iou <= args.pseudo_update_iou_threshold:
+                        new_psuedo_prob.append(output[j, 0])
+                        new_pseudo_ctrs.append(output[j, 2:5])
+                        new_pseudo_rads.append(output[j, 5:8])
+                
+                if len(new_psuedo_prob) > 0:
+                    pseudo_ctr[batch_i] = np.concatenate([pseudo_ctr[batch_i], new_pseudo_ctrs], axis=0)
+                    pseudo_rads[batch_i] = np.concatenate([pseudo_rads[batch_i], new_pseudo_rads], axis=0)
+                    pseudo_prob[batch_i] = np.concatenate([pseudo_prob[batch_i], new_psuedo_prob], axis=0) * args.pseudo_update_ema_alpha
+
+            # Get current pseudo label
+            strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
+            weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
+            transformed_annots = []
+
+            for batch_i in range(bs):
+                probs = pseudo_prob[batch_i]
+                valid_mask = probs > args.pseudo_label_threshold
+                ctrs = pseudo_ctrs[batch_i][valid_mask]
+                shapes = pseudo_rads[batch_i][valid_mask]
+                probs = probs[valid_mask]
+                spacing = weak_spacings[batch_i]
+                if len(ctrs) == 0:
+                    transformed_annots.append(np.zeros((0, 10), dtype='float32'))
+                    continue
                 
                 for transform in strong_ctr_transforms[batch_i]:
                     ctrs = transform.forward_ctr(ctrs)
@@ -322,16 +365,25 @@ def train(args,
                         'rad': shapes, 
                         'cls': np.zeros((len(ctrs), 1), dtype='int32'),
                         'spacing': spacing}
-                
+                sample_annots.append(sample.copy())
                 sample = coord_to_annot(sample)
                 transformed_annots.append(sample['annot'])
-    
+
+            # Update pseudo label of dataset
+            for batch_i in range(bs):
+                series_name = weak_series_names[batch_i]
+                crop_bb_min = crop_bb_mins[batch_i]
+                pseudo_ctr = pseudo_ctrs[batch_i]
+                pseudo_rad = pseudo_rads[batch_i]
+                pseudo_prob = pseudo_prob[batch_i]
+                
+                if len(pseudo_ctr) != 0:
+                    pseudo_ctr = pseudo_ctr + crop_bb_min
+                dataloader_u.dataset.update_pseudo_label(series_name, pseudo_ctr, pseudo_rad, pseudo_prob)    
+                
             # Pad the pseudo label
             valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
             valid_mask = (valid_mask == 1)
-            
-            avg_num_neg_patches_pseu.update(np.count_nonzero(valid_mask == 0))
-            
             max_num_annots = max(annot.shape[0] for annot in transformed_annots)
             if max_num_annots > 0:
                 transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
@@ -349,7 +401,7 @@ def train(args,
                 annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
                 if not is_valid:
                     fn += len(annot)
-                    continue 
+                    continue
                 
                 pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
                 
@@ -380,42 +432,28 @@ def train(args,
             avg_tp_pseu.update(tp)
             avg_fp_pseu.update(fp)
             avg_fn_pseu.update(fn)
-            
-            num_fg_crop = np.count_nonzero(valid_mask)
-            # Random select some bg crop
-            if num_fg_crop > 0 and select_fg_crop:
-                num_bg_crop = min(max(1, int(num_fg_crop / 4)), len(valid_mask) - num_fg_crop)
-                selected_bg_idx = np.random.choice(np.where(valid_mask == 0)[0], num_bg_crop, replace=False)
-                valid_mask[selected_bg_idx] = 1
-            
-                transformed_annots_padded = transformed_annots_padded[valid_mask]
-                strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
-            
+            # transformed_annots_padded = transformed_annots_padded[valid_mask]
+            # strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
             strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
-            background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
-            background_mask = background_mask.view(background_mask.shape[0], -1) # shape: (bs, num_points)
             
-            # Sharpen the pseudo label
-            if sharpen_cls > 0:
-                assert sharpen_cls < 1
-                cls_prob = sharpen_prob(cls_prob, t=sharpen_cls)
+            background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
+            # background_mask = background_mask[valid_mask]
             
             if mixed_precision:
                 with torch.cuda.amp.autocast():
-                    loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, cls_soft_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, cls_prob, device)
+                    loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
             else:
-                loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, cls_soft_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, cls_prob, device)
+                loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
             
-            avg_pseu_cls_loss.update(cls_pos_pseu_loss.item() + cls_neg_pseu_loss.item() + cls_soft_pseu_loss.item())
+            avg_pseu_cls_loss.update(cls_pos_pseu_loss.item() + cls_neg_pseu_loss.item())
             avg_pseu_cls_pos_loss.update(cls_pos_pseu_loss.item())
             avg_pseu_cls_neg_loss.update(cls_neg_pseu_loss.item())
-            avg_pseu_cls_soft_loss.update(cls_soft_pseu_loss.item())
             avg_pseu_shape_loss.update(shape_pseu_loss.item())
             avg_pseu_offset_loss.update(offset_pseu_loss.item())
             avg_pseu_iou_loss.update(iou_pseu_loss.item())
             avg_pseu_loss.update(loss_pseu.item())
             num_pseudo_nodules += len(strong_u_sample['annot'][strong_u_sample['annot'][..., -1] != -1])
-            del outputs_pseu, background_mask, cls_prob
+            del outputs_pseu
             ### Labeled data
             try:
                 labeled_sample = next(iter_l)
@@ -437,46 +475,37 @@ def train(args,
             avg_iou_loss.update(iou_loss.item())
             avg_loss.update(loss.item())
             
+            # Update model
             total_loss = loss + loss_pseu * args.lambda_pseu
-            # Compute gradient
-            total_loss = total_loss / iters_to_accumulate
             if mixed_precision:
                 scaler.scale(total_loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
             else:
                 total_loss.backward()
-            
-            if (iter_i + 1) % iters_to_accumulate == 0 or iter_i == num_iters - 1:
-                if mixed_precision:
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                progress_bar.set_postfix(cls_pos_l = avg_cls_pos_loss.avg,
-                                        cls_neg_l = avg_cls_neg_loss.avg,
-                                        cls_pos_u = avg_pseu_cls_pos_loss.avg,
-                                        cls_neg_u = avg_pseu_cls_neg_loss.avg,
-                                        cls_soft_u = avg_pseu_cls_soft_loss.avg,
-                                        avg_iou_pseu = avg_iou_pseu.avg,
-                                        num_u = num_pseudo_nodules,
-                                        num_neg = avg_num_neg_patches_pseu.sum,
-                                        tp = avg_tp_pseu.sum,
-                                        fp = avg_fp_pseu.sum,
-                                        fn = avg_fn_pseu.sum)
-                progress_bar.update()
-                
-                with torch.no_grad():
-                    # Update teacher model by exponential moving average
-                    for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
-                        if param.requires_grad:
-                            teacher_param.data.mul_(args.semi_ema_alpha).add_(param.data, alpha = 1 - args.semi_ema_alpha)
-                            
-                    if ema_buffer:
-                        for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
-                            if 'num_batches_tracked' in name_s:
-                                continue
-                            buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
+                optimizer.step()
             del labeled_sample, outputs, loss, loss_pseu
+            progress_bar.set_postfix(cls_pos_l = avg_cls_pos_loss.avg,
+                                    cls_neg_l = avg_cls_neg_loss.avg,
+                                    cls_pos_u = avg_pseu_cls_pos_loss.avg,
+                                    cls_neg_u = avg_pseu_cls_neg_loss.avg,
+                                    avg_iou_pseu = avg_iou_pseu.avg,
+                                    num_u = num_pseudo_nodules,
+                                    tp = avg_tp_pseu.sum,
+                                    fp = avg_fp_pseu.sum,
+                                    fn = avg_fn_pseu.sum)
+            progress_bar.update()
+            
+            with torch.no_grad():
+                # Update teacher model by exponential moving average
+                for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
+                    if param.requires_grad:
+                        teacher_param.data.mul_(args.semi_ema_alpha).add_(param.data, alpha = 1 - args.semi_ema_alpha)
+                # for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
+                #     if 'num_batches_tracked' in name_s:
+                #         continue
+                #     buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
+                    
             torch.cuda.empty_cache()
             
     recall = avg_tp_pseu.sum / max(avg_tp_pseu.sum + avg_fn_pseu.sum, 1e-3)
@@ -493,13 +522,11 @@ def train(args,
                 'cls_loss_pseu': avg_pseu_cls_loss.avg,
                 'cls_pos_loss_pseu': avg_pseu_cls_pos_loss.avg,
                 'cls_neg_loss_pseu': avg_pseu_cls_neg_loss.avg,
-                'cls_soft_loss_pseu': avg_pseu_cls_soft_loss.avg,
                 'shape_loss_pseu': avg_pseu_shape_loss.avg,
                 'offset_loss_pseu': avg_pseu_offset_loss.avg,
                 'avg_iou_pseu': avg_iou_pseu.avg,
                 'iou_loss_pseu': avg_pseu_iou_loss.avg,
                 'num_pseudo_nodules':  num_pseudo_nodules,
-                'num_neg_patches_pseu': avg_num_neg_patches_pseu.sum,
                 'pseu_recall': recall,
                 'pseu_precision': precision,
                 'pseudo_f1': f1,

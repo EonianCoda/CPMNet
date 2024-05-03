@@ -8,22 +8,22 @@ import pickle
 import numpy as np
 from typing import Tuple, List
 # Loss
-from networks.loss_semi_soft import DetectionLoss, Unsupervised_DetectionLoss
+from networks.loss_semi import DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
-from dataload.dataset_semi_tta import TrainDataset, DetDataset, UnLabeledDataset
+from dataload.dataset_semi_tta_tracking import TrainDataset, DetDataset, UnLabeledDataset
 # Build crop function
 from dataload.crop_fast import InstanceCrop
-from dataload.crop_semi_tta import InstanceCrop as InstanceCrop_semi
+from dataload.crop_semi_tta_tracking import InstanceCrop as InstanceCrop_semi
 from dataload.dataset_val_aug import DetDataset as AugDetDataset
 from dataload.utils import get_image_padding_value, ALL_LOC, ALL_RAD, ALL_CLS, ALL_PROB
-from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_tta_train_collate_fn, infer_aug_collate_fn
+from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_tta_train_tracking_collate_fn, infer_aug_collate_fn
 from dataload.split_combine import SplitComb
 from torch.utils.data import DataLoader
 import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.semi_threshold_tta_train_soft import train, burn_in_train
+from logic.semi_threshold_tta_train import train, burn_in_train
 from logic.val import val
 from logic.pseudo_label import gen_pseu_labels
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
@@ -34,7 +34,7 @@ from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml, build_class
-from logic.early_stopping_save_semi import EarlyStoppingSave
+from logic.early_stopping_save import EarlyStoppingSave
 
 from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 
@@ -131,11 +131,6 @@ def get_args():
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
     parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
-    
-    parser.add_argument('ema_buffer', action='store_true', default=False, help='use ema buffer')
-    parser.add_argument('sharpen_cls', type=float, default=-1, help='sharpen cls')
-    parser.add_argument('select_fg_crop', action='store_true', default=False, help='select fg crop')
-    
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -307,7 +302,7 @@ def prepare_training(args, device, num_training_steps):
         load_states(ckpt_path, device, model_s, optimizer, scheduler_warm, ema, model_t = model_t)
         # Resume best metric
         global early_stopping
-        early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model_s=model_s, model_t=model_t)
+        early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model_s)
         # start_epoch = start_epoch + 1
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
@@ -372,7 +367,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, use_gt_crop=args.use_gt_crop,
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
-    train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_tta_train_collate_fn, 
+    train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_tta_train_tracking_collate_fn, 
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=True)
     
     # Build unlabeled detection dataloader for generating pseudo labels
@@ -473,7 +468,7 @@ if __name__ == '__main__':
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
-        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model_s=model_s, model_t=model_t)
+        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
 
     original_psuedo_label_threshold = float(args.pseudo_label_threshold)
     final_psuedo_label_threshod = args.pseudo_label_threshold * args.semi_increase_ratio
@@ -489,12 +484,7 @@ if __name__ == '__main__':
         else:
             logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
     
-    if args.early_end_epoch > 0:
-        end_epoch = args.early_end_epoch
-    else:
-        end_epoch = args.epochs
-        
-    for epoch in range(start_epoch, end_epoch + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         # args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
         args.pseudo_label_threshold = original_psuedo_label_threshold
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
@@ -529,6 +519,7 @@ if __name__ == '__main__':
                                 detection_postprocess = semi_det_post_process,
                                 num_iters = len(train_loader_u),
                                 device = device)
+            train_loader_u.dataset.confirm_pseu_labels()
         scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
         for key, value in train_metrics.items():
@@ -578,9 +569,9 @@ if __name__ == '__main__':
     os.makedirs(test_save_dir, exist_ok=True)
     for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
         logger.info('Load best model from "{}"'.format(model_path))
-        load_states(model_path, device, model_t=model_t)
+        load_states(model_path, device, model_s)
         test_metrics = val(args = args,
-                            model = model_t, # Use teacher model to validate
+                            model = model_s,
                             detection_postprocess=test_det_postprocess,
                             val_loader = test_loader,
                             device = device,
