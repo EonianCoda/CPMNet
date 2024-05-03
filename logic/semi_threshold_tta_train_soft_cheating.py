@@ -266,16 +266,17 @@ def train(args,
             
             gt_ctrs = []
             gt_rads = []
-            for annot in weak_u_sample['annot']:
-                ctrs = []
-                rads = []
-                for a in annot:
-                    ctrs.append(a['gt_ctr'])
-                    rads.append(a['gt_rad'])
-                gt_ctrs.append(ctrs)
-                gt_rads.append(rads)
+            for annot in weak_u_sample['annot']: # each series's label
+                # ctrs = []
+                # rads = []
+                for a in annot: # each image's label
+                    gt_ctrs.append(a['gt_ctr'])
+                    gt_rads.append(a['gt_rad'])
+                # gt_ctrs.append(ctrs)
+                # gt_rads.append(rads)
             
             bs = outputs_t.shape[0]
+            
             # Calculate and transform background mask
             cls_prob = torch.cat(cls_prob, dim=0) # shape: (bs, 1, d, h, w)
             strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
@@ -286,24 +287,24 @@ def train(args,
             strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
             weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
             transformed_annots = []
+            
+            # Cheating
             for batch_i in range(bs):
-                output = outputs_t[batch_i]
-                valid_mask = (output[:, 0] != -1.0)
-                output = output[valid_mask]
-                if len(output) == 0:
+                ctrs = gt_ctrs[batch_i]
+                rads = gt_rads[batch_i]
+                spacing = weak_spacings[batch_i]
+                
+                if len(ctrs) == 0:
                     transformed_annots.append(np.zeros((0, 10), dtype='float32'))
                     continue
-                ctrs = output[:, 2:5]
-                shapes = output[:, 5:8]
-                spacing = weak_spacings[batch_i]
                 
                 for transform in strong_ctr_transforms[batch_i]:
                     ctrs = transform.forward_ctr(ctrs)
-                    shapes = transform.forward_rad(shapes)
+                    rads = transform.forward_rad(rads)
                     spacing = transform.forward_spacing(spacing)
                 
                 sample = {'ctr': ctrs, 
-                        'rad': shapes, 
+                        'rad': rads, 
                         'cls': np.zeros((len(ctrs), 1), dtype='int32'),
                         'spacing': spacing}
                 
@@ -333,7 +334,7 @@ def train(args,
                 annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
                 if not is_valid:
                     fn += len(annot)
-                    continue 
+                    continue
                 
                 pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
                 
