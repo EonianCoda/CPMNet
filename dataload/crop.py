@@ -93,8 +93,7 @@ class InstanceCrop(object):
         y_crop_centers = self.get_crop_centers(shape, 1)
         x_crop_centers = self.get_crop_centers(shape, 2)
         
-        crop_centers = [*product(z_crop_centers, y_crop_centers, x_crop_centers)]
-        crop_centers = np.array(crop_centers)
+        crop_centers = np.array([*product(z_crop_centers, y_crop_centers, x_crop_centers)])
         if self.rand_trans is not None:
             crop_centers = crop_centers + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(crop_centers), 3))
             

@@ -87,16 +87,16 @@ class InstanceCrop(object):
         
         # Generate crop centers
         crop_centers = np.array([*product(z_crop_centers, y_crop_centers, x_crop_centers)])
+        if self.rand_trans is not None:
+            crop_centers = crop_centers + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(crop_centers), 3))
+            
         if self.instance_crop and len(instance_loc) > 0:
             if self.rand_trans is not None:
-                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(instance_loc), 3))
+                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(instance_loc), 3))
             else:
                 instance_crop = instance_loc
             crop_centers = np.append(crop_centers, instance_crop, axis=0)
-
-        if self.rand_trans is not None:
-            crop_centers = crop_centers + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(crop_centers), 3))
-        
+            
         all_crop_bb_min = crop_centers - crop_size / 2
         all_crop_bb_min = np.clip(all_crop_bb_min, a_min=0, a_max=shape - crop_size)
         all_crop_bb_min = np.unique(all_crop_bb_min, axis=0)
