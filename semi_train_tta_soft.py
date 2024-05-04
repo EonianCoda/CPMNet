@@ -132,10 +132,10 @@ def get_args():
     parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
     
-    parser.add_argument('ema_buffer', action='store_true', default=False, help='use ema buffer')
-    parser.add_argument('sharpen_cls', type=float, default=-1, help='sharpen cls')
-    parser.add_argument('select_fg_crop', action='store_true', default=False, help='select fg crop')
-    parser.add_argument('combine_cand', action='store_true', default=False, help='combine cand')
+    parser.add_argument('--ema_buffer', action='store_true', default=False, help='use ema buffer')
+    parser.add_argument('--sharpen_cls', type=float, default=-1, help='sharpen cls')
+    parser.add_argument('--select_fg_crop', action='store_true', default=False, help='select fg crop')
+    parser.add_argument('--combine_cand', action='store_true', default=False, help='combine cand')
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
