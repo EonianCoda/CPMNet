@@ -10,10 +10,10 @@ from typing import Tuple, List
 # Loss
 from networks.loss_semi_soft import DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
-from dataload.dataset_semi_tta import TrainDataset, DetDataset, UnLabeledDataset
+# from dataload.dataset_semi_tta import TrainDataset, DetDataset, UnLabeledDataset
 # Build crop function
-from dataload.crop_fast import InstanceCrop
-from dataload.crop_semi_tta import InstanceCrop as InstanceCrop_semi
+from dataload.crop import InstanceCrop
+# from dataload.crop_semi_tta import InstanceCrop as InstanceCrop_semi
 from dataload.dataset_val_aug import DetDataset as AugDetDataset
 from dataload.utils import get_image_padding_value, ALL_LOC, ALL_RAD, ALL_CLS, ALL_PROB
 from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_tta_train_collate_fn, infer_aug_collate_fn
@@ -135,7 +135,7 @@ def get_args():
     parser.add_argument('ema_buffer', action='store_true', default=False, help='use ema buffer')
     parser.add_argument('sharpen_cls', type=float, default=-1, help='sharpen cls')
     parser.add_argument('select_fg_crop', action='store_true', default=False, help='select fg crop')
-    
+    parser.add_argument('combine_cand', action='store_true', default=False, help='combine cand')
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -352,8 +352,15 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     pin_memory = not args.no_pin_memory
     
+    if args.combine_cand:
+        from dataload.crop_semi_tta_combined import InstanceCrop as InstanceCrop_semi
+        from dataload.dataset_semi_tta_combined import TrainDataset, UnLabeledDataset
+        logger.info('Use combined candidate')
+    else:
+        from dataload.crop_semi_tta import InstanceCrop as InstanceCrop_semi
+        from dataload.dataset_semi_tta import TrainDataset, UnLabeledDataset
+        
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
-    
     crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                 sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
     crop_fn_train_u = InstanceCrop_semi(crop_size=crop_size, overlap_ratio=args.overlap_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
@@ -395,6 +402,11 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
+    
+    if args.combine_cand:
+        from dataload.dataset_semi_tta_combined import DetDataset
+    else:
+        from dataload.dataset_semi_tta import DetDataset
     
     # Build val dataloader
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
@@ -601,3 +613,4 @@ if __name__ == '__main__':
             for key, value in test_metrics.items():
                 f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
     writer.close()
+# %%

@@ -77,12 +77,13 @@ def gen_pseu_labels(model: nn.Module,
                 if end > data.size(0):
                     end = data.size(0)
                 input = data[i * batch_size:end] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
-                input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                 with torch.no_grad():
                     if mixed_precision:
                         with torch.cuda.amp.autocast():
+                            input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                             pred = model(input)
                     else:
+                        input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                         pred = model(input)
                 # Ensemble the augmentations
                 Cls_output = pred['Cls'] # (bs * num_aug, 1, 24, 24, 24)

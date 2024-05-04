@@ -226,14 +226,14 @@ def train(args,
                 if end > weak_images.size(0):
                     end = weak_images.size(0)
                 input = weak_images[i * TTA_BATCH_SIZE:end] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
-                input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                 
-                if args.val_mixed_precision:
-                    with torch.cuda.amp.autocast():
-                        with torch.no_grad():
+                with torch.no_grad():
+                    if args.val_mixed_precision:
+                        with torch.cuda.amp.autocast():
+                            input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                             output = model_t(input)
-                else:
-                    with torch.no_grad():
+                    else:
+                        input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                         output = model_t(input)
 
                 # Ensemble the augmentations
