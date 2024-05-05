@@ -17,7 +17,7 @@ from dataload.utils import compute_bbox3d_iou
 
 logger = logging.getLogger(__name__)
 
-TTA_BATCH_SIZE = 8
+TTA_BATCH_SIZE = 4
 
 def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
     def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, soft_prob, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -185,6 +185,7 @@ def train(args,
     avg_tp_pseu = AverageMeter()
     avg_fp_pseu = AverageMeter()
     avg_fn_pseu = AverageMeter()
+    avg_soft_target_pseu = AverageMeter()
     
     iters_to_accumulate = args.iters_to_accumulate
     # mixed precision training
@@ -197,7 +198,6 @@ def train(args,
         logger.info('Use memory format: channels_last_3d to train')
     train_one_step = train_one_step_wrapper(memory_format, detection_loss)
     unsupervised_train_one_step = unsupervised_train_one_step_wrapper(memory_format, unsupervised_detection_loss)
-    # model_predict =model_predict_wrapper(memory_format)
     
     iter_l = iter(dataloader_l)
     
@@ -392,6 +392,7 @@ def train(args,
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
             
             strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
+            avg_soft_target_pseu.update(torch.sum(torch.logical_and(cls_prob > args.pseudo_background_threshold, cls_prob < args.pseudo_label_threshold)).item())
             background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
             background_mask = background_mask.view(background_mask.shape[0], -1) # shape: (bs, num_points)
             
@@ -497,6 +498,7 @@ def train(args,
                 'shape_loss_pseu': avg_pseu_shape_loss.avg,
                 'offset_loss_pseu': avg_pseu_offset_loss.avg,
                 'avg_iou_pseu': avg_iou_pseu.avg,
+                'avg_soft_target_pseu': avg_soft_target_pseu.sum,
                 'iou_loss_pseu': avg_pseu_iou_loss.avg,
                 'num_pseudo_nodules':  num_pseudo_nodules,
                 'num_neg_patches_pseu': avg_num_neg_patches_pseu.sum,

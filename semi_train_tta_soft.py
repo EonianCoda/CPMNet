@@ -256,6 +256,13 @@ def prepare_training(args, device, num_training_steps):
                                                         crop_size = args.crop_size,
                                                         min_size = args.post_proces_min_size)
     
+    semi_pseudo_det_post_process = DetectionPostprocess(topk = args.det_topk, 
+                                                        threshold = args.val_det_threshold, 
+                                                        nms_threshold = args.det_nms_threshold,
+                                                        nms_topk = args.det_nms_topk,
+                                                        crop_size = (160, 160, 160),
+                                                        min_size = args.post_proces_min_size)
+    
     val_det_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                 threshold = args.val_det_threshold, 
                                                 nms_threshold = args.det_nms_threshold,
@@ -314,7 +321,7 @@ def prepare_training(args, device, num_training_steps):
         load_states(args.pretrained_model_path, device, model_s)
         load_states(args.pretrained_model_path, device, model_t)
         
-    return start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, val_det_postprocess, test_det_postprocess
+    return start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, semi_pseudo_det_post_process, val_det_postprocess, test_det_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
@@ -481,7 +488,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
-    start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, val_det_postprocess, test_det_postprocess = prepare_training(args, device, len(train_loader_u))
+    start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, semi_pseudo_det_post_process, val_det_postprocess, test_det_postprocess = prepare_training(args, device, len(train_loader_u))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
@@ -496,7 +503,7 @@ if __name__ == '__main__':
     if not args.use_gt_crop:
         psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
         if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '': # Update pseudo labels only at the beginning
-            updata_pseudo_label(args, model_t, det_loader_u, device, test_det_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
+            updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold, pseudo_pickle_path=args.pseudo_pickle_path)
         else:
             logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
@@ -513,7 +520,7 @@ if __name__ == '__main__':
         if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and args.pseudo_update_interval > 0 and not (epoch == 0 and args.pseudo_pickle_path != ''):
             # args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
             psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
-            updata_pseudo_label(args, model_t, det_loader_u, device, test_det_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
+            updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold)
         if epoch < args.burn_in_epochs:
             logger.info('Burn in epoch: {}'.format(epoch))
