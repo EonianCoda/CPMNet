@@ -530,6 +530,10 @@ if __name__ == '__main__':
                 logger.info('Copy weight from student model to teacher model')
                 model_t.load_state_dict(model_s.state_dict())
             logger.info('Mutual Learning epoch: {}'.format(epoch))
+            
+            if args.combine_cand:
+                train_loader_u.dataset.shuffle_batches()
+            
             train_metrics = train(args = args,
                                 model_t = model_t,
                                 model_s = model_s,
