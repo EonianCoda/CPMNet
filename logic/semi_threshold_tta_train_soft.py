@@ -186,6 +186,7 @@ def train(args,
     avg_fp_pseu = AverageMeter()
     avg_fn_pseu = AverageMeter()
     avg_soft_target_pseu = AverageMeter()
+    avg_fn_probs = AverageMeter()
     
     iters_to_accumulate = args.iters_to_accumulate
     # mixed precision training
@@ -347,13 +348,22 @@ def train(args,
             # raise ValueError('Stop')
             
             ## For analysis
+            
             # Compute iou between pseudo label and original label
             all_iou_pseu = []
             tp, fp, fn = 0, 0, 0
+            all_fn_probs = []
             for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['gt_annot'].numpy(), transformed_annots_padded, valid_mask)):
                 annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
                 if not is_valid:
                     fn += len(annot)
+                    for a in annot:
+                        ctr_z, ctr_y, ctr_x = a[:3]
+                        ctr_z = min(max(int(ctr_z // 4), 0), cls_prob.shape[2] - 1)
+                        ctr_y = min(max(int(ctr_y // 4), 0), cls_prob.shape[3] - 1)
+                        ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
+                        ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
+                        all_fn_probs.append(ctr_prob)
                     continue 
                 
                 pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
@@ -363,6 +373,13 @@ def train(args,
                     continue
                 elif len(pseudo_annot) == 0:
                     fn += len(annot)
+                    for a in annot:
+                        ctr_z, ctr_y, ctr_x = a[:3]
+                        ctr_z = min(max(int(ctr_z // 4), 0), cls_prob.shape[2] - 1)
+                        ctr_y = min(max(int(ctr_y // 4), 0), cls_prob.shape[3] - 1)
+                        ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
+                        ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
+                        all_fn_probs.append(ctr_prob)
                     continue
                 
                 bboxes = np.stack([annot[:, :3] - annot[:, 3:6] / 2, annot[:, :3] + annot[:, 3:6] / 2], axis=1)
@@ -374,8 +391,17 @@ def train(args,
                 
                 all_iou_pseu.extend(iou_pseu[iou_pseu > 1e-3].tolist())
                 tp += np.count_nonzero(iou > 1e-3)
+                fn += np.count_nonzero(iou <= 1e-3)
                 fp += np.count_nonzero(iou_pseu < 1e-3)
-
+            
+                for a in annot[iou <= 1e-3]:
+                    ctr_z, ctr_y, ctr_x = a[:3]
+                    ctr_z = min(max(int(ctr_z // 4), 0), cls_prob.shape[2] - 1)
+                    ctr_y = min(max(int(ctr_y // 4), 0), cls_prob.shape[3] - 1)
+                    ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
+                    ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
+                    all_fn_probs.append(ctr_prob)
+                        
                 # Cheating, set FP to 0
                 # for j in np.where(iou_pseu < 1e-3)[0]:
                 #     transformed_annots_padded[i, j, ...] = -1
@@ -385,6 +411,8 @@ def train(args,
             avg_tp_pseu.update(tp)
             avg_fp_pseu.update(fp)
             avg_fn_pseu.update(fn)
+            if len(all_fn_probs) > 0:
+                avg_fn_probs.update(np.mean(all_fn_probs), len(all_fn_probs))
             
             num_fg_crop = np.count_nonzero(valid_mask)
             # Random select some bg crop
@@ -469,7 +497,8 @@ def train(args,
                                         num_neg = avg_num_neg_patches_pseu.sum,
                                         tp = avg_tp_pseu.sum,
                                         fp = avg_fp_pseu.sum,
-                                        fn = avg_fn_pseu.sum)
+                                        fn = avg_fn_pseu.sum,
+                                        fn_p = avg_fn_probs.avg)
                 progress_bar.update()
                 
                 with torch.no_grad():
@@ -513,5 +542,6 @@ def train(args,
                 'pseudo_f1': f1,
                 'pseu_tp': avg_tp_pseu.sum,
                 'pseu_fp': avg_fp_pseu.sum,
-                'pseu_fn': avg_fn_pseu.sum}
+                'pseu_fn': avg_fn_pseu.sum,
+                'pseu_fn_probs': avg_fn_probs.avg}
     return metrics
