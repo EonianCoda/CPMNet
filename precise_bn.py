@@ -14,7 +14,7 @@ import transform as transform
 import torchvision
 
 from config import IMAGE_SPACING, DEFAULT_OVERLAP_RATIO
-from logic.utils import load_model, save_states
+from logic.utils import load_model, save_states, load_teacher_model
 from dataload.crop_fast import InstanceCrop
 from dataload.dataset import TrainDataset
 from torch.utils.data import DataLoader
@@ -220,6 +220,7 @@ def get_args():
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[0, 0, 0], help='random rotate')
     parser.add_argument('--use_crop', action='store_true', help='use random crop augmentation')
     
+    parser.add_argument('--load_teacher_model', action='store_true', help='load teacher model')
     parser.add_argument('--max_workers', type=int, default=4, help='max number of workers, num_workers = min(batch_size, max_workers)')
     parser.add_argument('--model_path', type=str)
     return parser.parse_args()
@@ -245,7 +246,11 @@ if __name__ == "__main__":
                               num_workers=min(args.batch_size, args.max_workers), pin_memory=True)
     
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-    model = load_model(args.model_path)
+    if args.load_teacher_model:
+        logger.info('Load teacher model')
+        model = load_teacher_model(args.model_path)
+    else:
+        model = load_model(args.model_path)
     model.detection_loss = None
     model = model.to(device)
     logger.info('Number of samples: {}'.format(len(train_dataset) * args.num_samples))

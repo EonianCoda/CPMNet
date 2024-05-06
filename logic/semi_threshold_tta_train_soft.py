@@ -292,7 +292,7 @@ def train(args,
                 gt_rads.append(rads)
             
             bs = outputs_t.shape[0]
-            # Calculate and transform background mask
+            # Transform Classification probability
             cls_prob = torch.cat(cls_prob, dim=0) # shape: (bs, 1, d, h, w)
             strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
             for batch_i in range(bs):
@@ -325,7 +325,6 @@ def train(args,
                 
                 sample = coord_to_annot(sample)
                 transformed_annots.append(sample['annot'])
-    
             # Pad the pseudo label
             valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
             valid_mask = (valid_mask == 1)
@@ -340,7 +339,13 @@ def train(args,
                         transformed_annots_padded[idx, :annot.shape[0], :] = annot
             else:
                 transformed_annots_padded = np.ones((len(transformed_annots), 1, 10), dtype='float32') * -1
-
+            
+            # np.save('output.npy', outputs_t)
+            # np.save('pseudo_label.npy', transformed_annots_padded)
+            # np.save('image.npy', strong_u_sample['image'].numpy())
+            # np.save('gt.npy', strong_u_sample['gt_annot'].numpy())
+            # raise ValueError('Stop')
+            
             ## For analysis
             # Compute iou between pseudo label and original label
             all_iou_pseu = []
@@ -367,7 +372,7 @@ def train(args,
                 iou_pseu = ious.max(axis=1)
                 iou = ious.max(axis=0)
                 
-                all_iou_pseu.extend(iou_pseu.tolist())    
+                all_iou_pseu.extend(iou_pseu[iou_pseu > 1e-3].tolist())
                 tp += np.count_nonzero(iou > 1e-3)
                 fp += np.count_nonzero(iou_pseu < 1e-3)
 
@@ -416,6 +421,7 @@ def train(args,
             avg_pseu_iou_loss.update(iou_pseu_loss.item())
             avg_pseu_loss.update(loss_pseu.item())
             num_pseudo_nodules += len(strong_u_sample['annot'][strong_u_sample['annot'][..., -1] != -1])
+            
             del outputs_pseu, background_mask, cls_prob
             ### Labeled data
             try:

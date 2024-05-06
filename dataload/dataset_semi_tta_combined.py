@@ -228,8 +228,6 @@ class UnLabeledDataset(Dataset):
         for folder, series_name in self.series_infos:
             label_path = gen_label_path(folder, series_name)
             label = load_label(label_path, self.image_spacing, min_d, min_size)
-            if label[ALL_LOC].shape[0] == 0 and not use_bg:
-                continue
             dicom_path = gen_dicom_path(folder, series_name)
             self.all_dicom_paths.append(dicom_path)
             self.all_series_names.append(series_name)

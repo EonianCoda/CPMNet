@@ -229,8 +229,6 @@ class UnLabeledDataset(Dataset):
         for folder, series_name in self.series_infos:
             label_path = gen_label_path(folder, series_name)
             label = load_label(label_path, self.image_spacing, min_d, min_size)
-            if label[ALL_LOC].shape[0] == 0 and not use_bg:
-                continue
             dicom_path = gen_dicom_path(folder, series_name)
             self.all_dicom_paths.append(dicom_path)
             self.all_series_names.append(series_name)
@@ -314,7 +312,7 @@ class UnLabeledDataset(Dataset):
         # Before cropping, we need to convert the pixel spacing to world spacing
         # If we use ground truth crop, we do not need to convert the pixel spacing to world spacing because this step is done in the `load_label` function
         if len(samples[ALL_RAD]) > 0 and not self.use_gt_crop:
-            samples[ALL_RAD] = samples[ALL_RAD] * image_spacing # d, h, w
+            samples[ALL_RAD] *= image_spacing # d, h, w
         samples['file_name'] = series_name
         samples = self.crop_fn(samples, lobe, image_spacing)
         random_samples = []

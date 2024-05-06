@@ -105,7 +105,7 @@ class InstanceCrop(object):
         # Get crop centers for instance
         if len(instance_loc) > 0:
             if self.rand_trans is not None:
-                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans * 3, high=self.rand_trans * 3, size=(len(instance_loc), 3))
+                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(instance_loc), 3))
             else:
                 instance_crop = instance_loc
             crop_centers = instance_crop
@@ -176,10 +176,6 @@ class InstanceCrop(object):
             CT_crop = np.expand_dims(image_crop, axis=0)
             resized_lobe_crop = np.expand_dims(resized_lobe_crop, axis=0)
             shape = np.array(CT_crop.shape[1:])
-            if len(rad) > 0:
-                rad = rad / image_spacing  # convert pixel coord
-            if len(gt_rad) > 0:
-                gt_rad = gt_rad / image_spacing
                 
             sample = dict()
             sample['image'] = CT_crop
