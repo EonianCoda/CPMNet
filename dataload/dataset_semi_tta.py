@@ -254,6 +254,9 @@ class UnLabeledDataset(Dataset):
         
         if self.use_gt_crop:
             self.labels = self.gt_labels
+            self.dicom_paths = self.all_dicom_paths
+            self.series_names = self.all_series_names
+            self.lobe_paths = self.all_lobe_paths
         
     def set_pseu_labels(self, labels):
         """

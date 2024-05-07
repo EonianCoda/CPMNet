@@ -133,10 +133,14 @@ class InstanceCrop(object):
         all_crop_bboxes = np.stack([all_crop_bb_min, all_crop_bb_max], axis=1) # [M, 2, 3]
         
         # Compute IoU to determine the label of the patches
-        inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes) # [M, N]
-        all_ious = inter_volumes / nodule_volumes[np.newaxis, :] # [M, N]
-        max_ious = np.max(all_ious, axis=1) # [M]
-        
+        if len(nodule_bboxes) != 0:
+            inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes) # [M, N]
+            all_ious = inter_volumes / nodule_volumes[np.newaxis, :] # [M, N]
+            max_ious = np.max(all_ious, axis=1) # [M]
+        else:
+            all_ious = np.zeros((len(all_crop_bboxes), 1))
+            max_ious = np.zeros(len(all_crop_bboxes))
+            
         if len(gt_instance_loc) > 0:
             gt_inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, gt_nodule_bboxes) # [M, N]
             gt_all_ious = gt_inter_volumes / gt_nodule_volumes[np.newaxis, :] # [M, N]
