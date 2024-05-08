@@ -20,15 +20,15 @@ logger = logging.getLogger(__name__)
 TTA_BATCH_SIZE = 8
 
 def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
-    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, soft_prob, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def train_one_step(args, model: nn.modules, sample: Dict[str, torch.Tensor], background_mask, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
         labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
         # Compute loss
         outputs = model(image)
-        cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, soft_prob, device = device)
-        cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), cls_soft_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-        loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss + cls_soft_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-        return loss, cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss, outputs
+        cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, device = device)
+        cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
+        loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        return loss, cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
 def train_one_step_wrapper(memory_format, loss_fn):
@@ -143,7 +143,7 @@ def train(args,
           detection_postprocess,
           num_iters: int,
           device: torch.device) -> Dict[str, float]:
-    model_t.eval()
+    model_t.train()
     model_s.train()
     
     avg_cls_loss = AverageMeter()
@@ -157,7 +157,6 @@ def train(args,
     avg_pseu_cls_loss = AverageMeter()
     avg_pseu_cls_pos_loss = AverageMeter()
     avg_pseu_cls_neg_loss = AverageMeter()
-    avg_pseu_cls_soft_loss = AverageMeter()
     avg_pseu_shape_loss = AverageMeter()
     avg_pseu_offset_loss = AverageMeter()
     avg_pseu_iou_loss = AverageMeter()
@@ -189,8 +188,6 @@ def train(args,
     coord_to_annot = CoordToAnnot()
     
     optimizer.zero_grad()
-    update_count = 0
-    skip_count = 0
     with get_progress_bar('Train', math.ceil(num_iters / iters_to_accumulate)) as progress_bar:
         for iter_i, sample_u in enumerate(dataloader_u): 
             ### Unlabeled data
@@ -214,11 +211,12 @@ def train(args,
                 input = weak_images[i * TTA_BATCH_SIZE:end] # (bs, num_aug, 1, crop_z, crop_y, crop_x)
                 input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
                 
-                with torch.no_grad():
-                    if args.val_mixed_precision:
-                        with torch.cuda.amp.autocast():
+                if args.val_mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        with torch.no_grad():
                             output = model_t(input)
-                    else:
+                else:
+                    with torch.no_grad():
                         output = model_t(input)
 
                 # Ensemble the augmentations
@@ -267,16 +265,13 @@ def train(args,
             
             gt_ctrs = []
             gt_rads = []
-            for annot in weak_u_sample['annot']:
-                ctrs = []
-                rads = []
-                for a in annot:
-                    ctrs.append(a['gt_ctr'])
-                    rads.append(a['gt_rad'])
-                gt_ctrs.append(ctrs)
-                gt_rads.append(rads)
+            for annot in weak_u_sample['annot']: # each series's label
+                for a in annot: # each image's label
+                    gt_ctrs.append(a['gt_ctr'])
+                    gt_rads.append(a['gt_rad'])
             
             bs = outputs_t.shape[0]
+            
             # Calculate and transform background mask
             cls_prob = torch.cat(cls_prob, dim=0) # shape: (bs, 1, d, h, w)
             strong_feat_transforms = strong_u_sample['feat_transform'] # shape = (bs,)
@@ -287,24 +282,24 @@ def train(args,
             strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
             weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
             transformed_annots = []
+            
+            # Cheating
             for batch_i in range(bs):
-                output = outputs_t[batch_i]
-                valid_mask = (output[:, -1] != -1.0)
-                output = output[valid_mask]
-                if len(output) == 0:
+                ctrs = gt_ctrs[batch_i]
+                rads = gt_rads[batch_i]
+                spacing = weak_spacings[batch_i]
+                
+                if len(ctrs) == 0:
                     transformed_annots.append(np.zeros((0, 10), dtype='float32'))
                     continue
-                ctrs = output[:, 2:5]
-                shapes = output[:, 5:8]
-                spacing = weak_spacings[batch_i]
                 
                 for transform in strong_ctr_transforms[batch_i]:
                     ctrs = transform.forward_ctr(ctrs)
-                    shapes = transform.forward_rad(shapes)
+                    rads = transform.forward_rad(rads)
                     spacing = transform.forward_spacing(spacing)
                 
                 sample = {'ctr': ctrs, 
-                        'rad': shapes, 
+                        'rad': rads, 
                         'cls': np.zeros((len(ctrs), 1), dtype='int32'),
                         'spacing': spacing}
                 
@@ -314,13 +309,7 @@ def train(args,
             # Pad the pseudo label
             valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
             valid_mask = (valid_mask == 1)
-            if np.count_nonzero(valid_mask) == 0:
-                del cls_prob
-                skip_count = skip_count + 1
-                if skip_count % iters_to_accumulate == 0:
-                    progress_bar.update()
-                    skip_count = 0
-                continue
+            
             avg_num_neg_patches_pseu.update(np.count_nonzero(valid_mask == 0))
             
             max_num_annots = max(annot.shape[0] for annot in transformed_annots)
@@ -371,35 +360,25 @@ def train(args,
             avg_tp_pseu.update(tp)
             avg_fp_pseu.update(fp)
             avg_fn_pseu.update(fn)
-            
-            num_fg_crop = np.count_nonzero(valid_mask)
-            # Random select some bg crop
-            # if num_fg_crop > 0:
-            #     num_bg_crop = min(max(1, int(num_fg_crop / 4)), len(valid_mask) - num_fg_crop)
-            #     selected_bg_idx = np.random.choice(np.where(valid_mask == 0)[0], num_bg_crop, replace=False)
-            #     valid_mask[selected_bg_idx] = 1
-                    
-            # Remove invalid samples
-            transformed_annots_padded = transformed_annots_padded[valid_mask]
-            strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
-            cls_prob = cls_prob[valid_mask] # shape: (num_valid, 1, d, h, w)
-            
+            # transformed_annots_padded = transformed_annots_padded[valid_mask]
+            # strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
             strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
+            
             background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
-            background_mask = background_mask.view(background_mask.shape[0], -1) # shape: (bs, num_points)
+            background_mask = background_mask.view(bs, -1) # shape: (bs, num_points)
+            
             ##TODO: sharpen the pseudo label
             # cls_prob = sharpen_prob(cls_prob, t=0.7)
             
             if mixed_precision:
                 with torch.cuda.amp.autocast():
-                    loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, cls_soft_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, cls_prob, device)
+                    loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
             else:
-                loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, cls_soft_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, cls_prob, device)
+                loss_pseu, cls_pos_pseu_loss, cls_neg_pseu_loss, shape_pseu_loss, offset_pseu_loss, iou_pseu_loss, outputs_pseu = unsupervised_train_one_step(args, model_s, strong_u_sample, background_mask, device)
             
-            avg_pseu_cls_loss.update(cls_pos_pseu_loss.item() + cls_neg_pseu_loss.item() + cls_soft_pseu_loss.item())
+            avg_pseu_cls_loss.update(cls_pos_pseu_loss.item() + cls_neg_pseu_loss.item())
             avg_pseu_cls_pos_loss.update(cls_pos_pseu_loss.item())
             avg_pseu_cls_neg_loss.update(cls_neg_pseu_loss.item())
-            avg_pseu_cls_soft_loss.update(cls_soft_pseu_loss.item())
             avg_pseu_shape_loss.update(shape_pseu_loss.item())
             avg_pseu_offset_loss.update(offset_pseu_loss.item())
             avg_pseu_iou_loss.update(iou_pseu_loss.item())
@@ -435,10 +414,7 @@ def train(args,
             else:
                 total_loss.backward()
             
-            update_count = update_count + 1
-            # if (iter_i + 1) % iters_to_accumulate == 0 or iter_i == num_iters - 1:
-            if update_count == iters_to_accumulate or iter_i == (num_iters - 1):
-                update_count = 0
+            if (iter_i + 1) % iters_to_accumulate == 0 or iter_i == num_iters - 1:
                 if mixed_precision:
                     scaler.step(optimizer)
                     scaler.update()
@@ -449,7 +425,6 @@ def train(args,
                                         cls_neg_l = avg_cls_neg_loss.avg,
                                         cls_pos_u = avg_pseu_cls_pos_loss.avg,
                                         cls_neg_u = avg_pseu_cls_neg_loss.avg,
-                                        cls_soft_u = avg_pseu_cls_soft_loss.avg,
                                         avg_iou_pseu = avg_iou_pseu.avg,
                                         num_u = num_pseudo_nodules,
                                         num_neg = avg_num_neg_patches_pseu.sum,
@@ -463,10 +438,10 @@ def train(args,
                     for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
                         if param.requires_grad:
                             teacher_param.data.mul_(args.semi_ema_alpha).add_(param.data, alpha = 1 - args.semi_ema_alpha)
-                    for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
-                        if 'num_batches_tracked' in name_s:
-                            continue
-                        buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
+                    # for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
+                    #     if 'num_batches_tracked' in name_s:
+                    #         continue
+                    #     buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
             del labeled_sample, outputs, loss, loss_pseu
             torch.cuda.empty_cache()
             
@@ -484,7 +459,6 @@ def train(args,
                 'cls_loss_pseu': avg_pseu_cls_loss.avg,
                 'cls_pos_loss_pseu': avg_pseu_cls_pos_loss.avg,
                 'cls_neg_loss_pseu': avg_pseu_cls_neg_loss.avg,
-                'cls_soft_loss_pseu': avg_pseu_cls_soft_loss.avg,
                 'shape_loss_pseu': avg_pseu_shape_loss.avg,
                 'offset_loss_pseu': avg_pseu_offset_loss.avg,
                 'avg_iou_pseu': avg_iou_pseu.avg,
