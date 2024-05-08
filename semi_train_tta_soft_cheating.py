@@ -10,10 +10,10 @@ from typing import Tuple, List
 # Loss
 from networks.loss_semi_soft import DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
-from dataload.dataset_semi_tta import TrainDataset, DetDataset, UnLabeledDataset
+# from dataload.dataset_semi_tta import TrainDataset, DetDataset, UnLabeledDataset
 # Build crop function
-from dataload.crop_fast import InstanceCrop
-from dataload.crop_semi_tta import InstanceCrop as InstanceCrop_semi
+from dataload.crop import InstanceCrop
+# from dataload.crop_semi_tta import InstanceCrop as InstanceCrop_semi
 from dataload.dataset_val_aug import DetDataset as AugDetDataset
 from dataload.utils import get_image_padding_value, ALL_LOC, ALL_RAD, ALL_CLS, ALL_PROB
 from dataload.collate import train_collate_fn, infer_collate_fn, unlabeled_tta_train_collate_fn, infer_aug_collate_fn
@@ -125,12 +125,17 @@ def get_args():
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.4, help='threshold of pseudo background')
-    parser.add_argument('--semi_ema_alpha', type=int, default=0.9998, help='alpha of ema')
+    parser.add_argument('--semi_ema_alpha', type=float, default=0.9998, help='alpha of ema')
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     parser.add_argument('--pseudo_update_interval', type=int, default=-1, help='pseudo label update interval')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
     parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
+    
+    parser.add_argument('--ema_buffer', action='store_true', default=False, help='use ema buffer')
+    parser.add_argument('--sharpen_cls', type=float, default=-1, help='sharpen cls')
+    parser.add_argument('--select_fg_crop', action='store_true', default=False, help='select fg crop')
+    parser.add_argument('--combine_cand', action='store_true', default=False, help='combine cand')
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -251,6 +256,13 @@ def prepare_training(args, device, num_training_steps):
                                                         crop_size = args.crop_size,
                                                         min_size = args.post_proces_min_size)
     
+    semi_pseudo_det_post_process = DetectionPostprocess(topk = args.det_topk, 
+                                                        threshold = args.val_det_threshold, 
+                                                        nms_threshold = args.det_nms_threshold,
+                                                        nms_topk = args.det_nms_topk,
+                                                        crop_size = (160, 160, 160),
+                                                        min_size = args.post_proces_min_size)
+    
     val_det_postprocess = DetectionPostprocess(topk = args.det_topk, 
                                                 threshold = args.val_det_threshold, 
                                                 nms_threshold = args.det_nms_threshold,
@@ -309,7 +321,7 @@ def prepare_training(args, device, num_training_steps):
         load_states(args.pretrained_model_path, device, model_s)
         load_states(args.pretrained_model_path, device, model_t)
         
-    return start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, val_det_postprocess, test_det_postprocess
+    return start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, semi_pseudo_det_post_process, val_det_postprocess, test_det_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: int, blank_side: int):
     rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
@@ -331,7 +343,7 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
     transform_list_train = [transform.SemiRandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.SemiRandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
+    transform_list_train.append(transform.SemiRandomRotate90(p=0.9, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.3, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
         
@@ -347,8 +359,15 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     pin_memory = not args.no_pin_memory
     
+    if args.combine_cand:
+        from dataload.crop_semi_tta_combined import InstanceCrop as InstanceCrop_semi
+        from dataload.dataset_semi_tta_combined import TrainDataset, UnLabeledDataset
+        logger.info('Use combined candidate')
+    else:
+        from dataload.crop_semi_tta import InstanceCrop as InstanceCrop_semi
+        from dataload.dataset_semi_tta import TrainDataset, UnLabeledDataset
+        
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
-    
     crop_fn_train_l = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                 sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
     crop_fn_train_u = InstanceCrop_semi(crop_size=crop_size, overlap_ratio=args.overlap_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
@@ -365,8 +384,12 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     # Build unlabeled dataloader
     strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
-    train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, use_gt_crop=args.use_gt_crop,
-                                       strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
+    if args.combine_cand:
+        train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, use_gt_crop=args.use_gt_crop,
+                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode, n_samples=args.unlabeled_num_samples)
+    else:
+        train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, use_gt_crop=args.use_gt_crop,
+                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_tta_train_collate_fn, 
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=True)
     
@@ -390,6 +413,11 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     overlap_size = (np.array(crop_size) * args.overlap_ratio).astype(np.int32).tolist()
     pad_value = get_image_padding_value(args.data_norm_method, use_water=args.pad_water)
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
+    
+    if args.combine_cand:
+        from dataload.dataset_semi_tta_combined import DetDataset
+    else:
+        from dataload.dataset_semi_tta import DetDataset
     
     # Build val dataloader
     val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method)
@@ -440,6 +468,8 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
                 label = {key: value[valid_mask] for key, value in label.items()}
             pseu_labels[series_name] = label
     updated_dataset.set_pseu_labels(pseu_labels)
+    if args.combine_cand:
+        train_loader_u.dataset.shuffle_batches()
     new_num_unlabeled = len(updated_dataset)
     logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
     
@@ -464,7 +494,7 @@ if __name__ == '__main__':
     writer = SummaryWriter(log_dir = os.path.join(exp_folder, 'tensorboard'))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader_l, train_loader_u, det_loader_u = get_train_dataloder(args)
-    start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, val_det_postprocess, test_det_postprocess = prepare_training(args, device, len(train_loader_u))
+    start_epoch, model_s, model_t, detection_loss, unsupervised_detection_loss, optimizer, scheduler_warm, ema, semi_det_post_process, semi_pseudo_det_post_process, val_det_postprocess, test_det_postprocess = prepare_training(args, device, len(train_loader_u))
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
@@ -479,7 +509,7 @@ if __name__ == '__main__':
     if not args.use_gt_crop:
         psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
         if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '': # Update pseudo labels only at the beginning
-            updata_pseudo_label(args, model_t, det_loader_u, device, test_det_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
+            updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold, pseudo_pickle_path=args.pseudo_pickle_path)
         else:
             logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
@@ -496,7 +526,7 @@ if __name__ == '__main__':
         if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and args.pseudo_update_interval > 0 and not (epoch == 0 and args.pseudo_pickle_path != ''):
             # args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
             psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
-            updata_pseudo_label(args, model_t, det_loader_u, device, test_det_postprocess, train_loader_u.dataset, psuedo_label_save_path, 
+            updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold)
         if epoch < args.burn_in_epochs:
             logger.info('Burn in epoch: {}'.format(epoch))
@@ -513,6 +543,10 @@ if __name__ == '__main__':
                 logger.info('Copy weight from student model to teacher model')
                 model_t.load_state_dict(model_s.state_dict())
             logger.info('Mutual Learning epoch: {}'.format(epoch))
+            
+            if args.combine_cand:
+                train_loader_u.dataset.shuffle_batches()
+            
             train_metrics = train(args = args,
                                 model_t = model_t,
                                 model_s = model_s,
@@ -596,3 +630,4 @@ if __name__ == '__main__':
             for key, value in test_metrics.items():
                 f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
     writer.close()
+# %%
