@@ -339,10 +339,10 @@ class UnLabeledDataset(Dataset):
                       'gt_ctr': sample['gt_ctr'].copy(),
                       'gt_rad': sample['gt_rad'].copy(),
                       'gt_cls': sample['gt_cls'].copy(),
-                      'spacing': sample['spacing'].copy()}
-            raw_annots.append(annots)
+                      'spacing': sample['spacing'].copy(),
+                      'series_name': series_name}
+            raw_annots.append(copy.deepcopy(annots))
             strong_samples.append(self.strong_aug(sample))
-        
         # Process the weak samples
         raw_images = np.stack(raw_images, axis=0) # (n, z, y, x)
         raw_lobes = np.stack(raw_lobes, axis=0) # (n, 1, z // out_stride, y // out_stride, x // out_stride)
