@@ -183,20 +183,18 @@ class SemiRandomRotate90(AbstractTransform):
         new_gt_ctr_zyx = gt_ctrs.copy()
         new_gt_shape_dhw = gt_bbox_shapes.copy()
         
+        radian = math.radians(angle)
+        cos = np.cos(radian)
+        sin = np.sin(radian)
+        img_center = np.array(image_shape) / 2
         if len(ctrs) != 0:
-            radian = math.radians(angle)
-            cos = np.cos(radian)
-            sin = np.sin(radian)
-            img_center = np.array(image_shape) / 2
-            new_ctr_zyx = ctrs.copy()
             new_ctr_zyx[:, rot_axes[0]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * cos - (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * sin + img_center[rot_axes[0]]
             new_ctr_zyx[:, rot_axes[1]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * sin + (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * cos + img_center[rot_axes[1]]
 
-            if len(gt_ctrs) != 0:
-                new_gt_ctr_zyx = gt_ctrs.copy()
-                new_gt_ctr_zyx[:, rot_axes[0]] = (gt_ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * cos - (gt_ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * sin + img_center[rot_axes[0]]
-                new_gt_ctr_zyx[:, rot_axes[1]] = (gt_ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * sin + (gt_ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * cos + img_center[rot_axes[1]]
-                
+        if len(gt_ctrs) != 0:
+            new_gt_ctr_zyx[:, rot_axes[0]] = (gt_ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * cos - (gt_ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * sin + img_center[rot_axes[0]]
+            new_gt_ctr_zyx[:, rot_axes[1]] = (gt_ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * sin + (gt_ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * cos + img_center[rot_axes[1]]
+            
         if angle == 90 or angle == 270:
             if len(bbox_shapes) != 0:
                 new_shape_dhw[:, rot_axes[0]] = bbox_shapes[:, rot_axes[1]] 
@@ -205,6 +203,8 @@ class SemiRandomRotate90(AbstractTransform):
             if len(gt_bbox_shapes) != 0:
                 new_gt_shape_dhw[:, rot_axes[0]] = gt_bbox_shapes[:, rot_axes[1]] 
                 new_gt_shape_dhw[:, rot_axes[1]] = gt_bbox_shapes[:, rot_axes[0]]
+                
+            # Swap the spacing
             new_image_spacing[rot_axes[0]] = image_spacing[rot_axes[1]]
             new_image_spacing[rot_axes[1]] = image_spacing[rot_axes[0]]
         return new_ctr_zyx, new_shape_dhw, new_gt_ctr_zyx, new_gt_shape_dhw, new_image_spacing

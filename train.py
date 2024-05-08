@@ -253,7 +253,6 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
             ema_warmup_steps = int(args.ema_warmup_epochs * num_training_steps) if args.ema_warmup_epochs > 0 else 0
         logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_momentum, ema_warmup_steps))
         ema = EMA(model, momentum = args.ema_momentum, warmup_steps = ema_warmup_steps)
-        ema.register()
 
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
@@ -275,7 +274,10 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model)
-        
+
+    if args.resume_folder == '' and ema is not None:
+        ema.register()
+    
     return start_epoch, model, optimizer, scheduler_warm, ema, val_detection_postprocess, test_detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: float, blank_side: int):

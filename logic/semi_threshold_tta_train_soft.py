@@ -305,7 +305,7 @@ def train(args,
             transformed_annots = []
             for batch_i in range(bs):
                 output = outputs_t[batch_i]
-                valid_mask = (output[:, 0] != -1.0)
+                valid_mask = (output[:, -1] != -1.0)
                 output = output[valid_mask]
                 if len(output) == 0:
                     transformed_annots.append(np.zeros((0, 10), dtype='float32'))

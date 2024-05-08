@@ -235,7 +235,7 @@ def train(args,
             
             # Add label
             # Remove the padding, -1 means invalid
-            valid_mask = (outputs_t[..., 0] != -1.0)
+            valid_mask = (outputs_t[..., -1] != -1.0)
             if torch.count_nonzero(valid_mask) != 0:
                 bs = outputs_t.shape[0]
                 # Calculate and transofmr background mask
@@ -257,7 +257,7 @@ def train(args,
                 transformed_annots = []
                 for batch_i in range(bs):
                     output = outputs_t[batch_i]
-                    valid_mask = (output[:, 0] != -1.0)
+                    valid_mask = (output[:, -1] != -1.0)
                     output = output[valid_mask]
                     if len(output) == 0:
                         transformed_annots.append(np.zeros((0, 10), dtype='float32'))

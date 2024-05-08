@@ -113,7 +113,7 @@ def gen_hard_FP(model: nn.Module,
                 
                 pred = torch.from_numpy(pred).view(-1, 8)
                 # Remove the padding
-                valid_mask = (pred[:, 0] != -1.0)
+                valid_mask = (pred[:, -1] != -1.0)
                 pred = pred[valid_mask]
                 # NMS
                 if len(pred) > 0:

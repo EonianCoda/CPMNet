@@ -163,7 +163,7 @@ def train(args,
             # => top_k (default = 60) 
             # => 8: 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
             outputs_t = detection_postprocess(feats, device=device, threshold = args.pseudo_label_threshold, is_logits=False)
-            valid_mask = (outputs_t[..., 0] != -1.0)
+            valid_mask = (outputs_t[..., -1] != -1.0)
             outputs_t = outputs_t.cpu().numpy()
             
             all_loss_pseu = []
@@ -184,7 +184,7 @@ def train(args,
                     transformed_annots = []
                     for b_i in range(bs):
                         output = outputs_t[b_i].copy()
-                        valid_mask = (output[:, 0] != -1.0)
+                        valid_mask = (output[:, -1] != -1.0)
                         output = output[valid_mask]
                         if len(output) == 0:
                             transformed_annots.append(np.zeros((0, 10), dtype='float32'))

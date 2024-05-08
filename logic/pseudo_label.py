@@ -134,7 +134,7 @@ def gen_pseu_labels(model: nn.Module,
                 pred = split_comber.combine(preds[start_idx:start_idx + n_split], nzhw, image_shape)
                 pred = torch.from_numpy(pred).view(-1, 8)
                 # Remove the padding
-                valid_mask = (pred[:, 0] != -1.0)
+                valid_mask = (pred[:, -1] != -1.0)
                 pred = pred[valid_mask]
                 # NMS
                 if len(pred) > 0:

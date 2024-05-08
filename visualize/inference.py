@@ -77,7 +77,7 @@ class Inference:
         output = np.concatenate(patch_outputs, 0)
         output = self.split_comber.combine(output, nzhw=nzhw)
         output = torch.from_numpy(output).view(-1, 8)
-        object_ids = output[:, 0] != -1.0
+        object_ids = output[:, -1] != -1.0
         output = output[object_ids]
         if len(output) > 0:
             keep = nms_3D(output[:, 1:], overlap=0.05, top_k=self.final_mns_topk)

@@ -117,7 +117,7 @@ def val(args,
                 
                 output = torch.from_numpy(output).view(-1, 8)
                 # Remove the padding
-                object_ids = output[:, 0] != -1.0
+                object_ids = output[:, -1] != -1.0
                 output = output[object_ids]
                 
                 # NMS

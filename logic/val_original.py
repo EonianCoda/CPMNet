@@ -130,7 +130,7 @@ def val(args,
                 output = split_comber.combine(outputs[start_idx:start_idx + n_split], nzhw)
                 output = torch.from_numpy(output).view(-1, 8)
                 # Remove the padding
-                object_ids = output[:, 0] != -1.0
+                object_ids = output[:, -1] != -1.0
                 output = output[object_ids]
                 
                 # NMS
