@@ -143,7 +143,23 @@ def train(args,
           detection_postprocess,
           num_iters: int,
           device: torch.device) -> Dict[str, float]:
-    model_t.train()
+    
+    ema_buffer = getattr(args, 'ema_buffer', False)
+    sharpen_cls = getattr(args, 'sharpen_cls', -1)
+    select_fg_crop = getattr(args, 'select_fg_crop', False)
+    
+    if ema_buffer:
+        logger.info('Use EMA buffer')
+    if sharpen_cls > 0:
+        logger.info('Use sharpen cls = {:.3f}'.format(sharpen_cls))
+    if select_fg_crop:
+        logger.info('Random select some bg crop')
+        
+    if not ema_buffer:
+        model_t.train()
+    else:
+        model_t.eval()
+        
     model_s.train()
     
     avg_cls_loss = AverageMeter()
@@ -438,10 +454,11 @@ def train(args,
                     for param, teacher_param in zip(model_s.parameters(), model_t.parameters()):
                         if param.requires_grad:
                             teacher_param.data.mul_(args.semi_ema_alpha).add_(param.data, alpha = 1 - args.semi_ema_alpha)
-                    # for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
-                    #     if 'num_batches_tracked' in name_s:
-                    #         continue
-                    #     buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
+                    if ema_buffer:
+                        for (name_s, buffer_s), (name_t, buffer_t) in zip(model_s.named_buffers(), model_t.named_buffers()):
+                            if 'num_batches_tracked' in name_s:
+                                continue
+                            buffer_t.data.mul_(args.semi_ema_alpha).add_(buffer_s.data, alpha = 1 - args.semi_ema_alpha)
             del labeled_sample, outputs, loss, loss_pseu
             torch.cuda.empty_cache()
             
