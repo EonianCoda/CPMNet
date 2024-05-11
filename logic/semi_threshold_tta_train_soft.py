@@ -46,7 +46,7 @@ def train_one_step_wrapper(memory_format, loss_fn):
 @torch.no_grad()
 def sharpen_prob(cls_prob, t=0.7):
     cls_prob_s = cls_prob ** (1 / t)
-    return (cls_prob_s / (cls_prob_s + (1 - cls_prob_s) ** (1 / t)))
+    return (cls_prob_s / (cls_prob_s + (1 - cls_prob) ** (1 / t)))
 
 def burn_in_train(args,
                 model: nn.modules,
@@ -258,13 +258,13 @@ def train(args,
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
                 Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
                 Cls_output = Cls_output.sigmoid()
-                ignore_offset = 1
-                Cls_output[:, :, :ignore_offset, :, :] = 0
-                Cls_output[:, :, :, :ignore_offset, :] = 0
-                Cls_output[:, :, :, :, :ignore_offset] = 0
-                Cls_output[:, :, -ignore_offset:, :, :] = 0
-                Cls_output[:, :, :, -ignore_offset:, :] = 0
-                Cls_output[:, :, :, :, -ignore_offset:] = 0
+                # ignore_offset = 1
+                # Cls_output[:, :, :ignore_offset, :, :] = 0
+                # Cls_output[:, :, :, :ignore_offset, :] = 0
+                # Cls_output[:, :, :, :, :ignore_offset] = 0
+                # Cls_output[:, :, -ignore_offset:, :, :] = 0
+                # Cls_output[:, :, :, -ignore_offset:, :] = 0
+                # Cls_output[:, :, :, :, -ignore_offset:] = 0
                 
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
@@ -423,7 +423,7 @@ def train(args,
             
                 transformed_annots_padded = transformed_annots_padded[valid_mask]
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
-            
+                cls_prob = cls_prob[valid_mask]
             strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
             avg_soft_target_pseu.update(torch.sum(torch.logical_and(cls_prob > args.pseudo_background_threshold, cls_prob < args.pseudo_label_threshold)).item())
             background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
