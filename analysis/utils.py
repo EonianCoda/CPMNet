@@ -12,6 +12,12 @@ def pred2nodulefinding(line: str) -> NoduleFinding:
     if len(pred) == 11: # no ground truth
         series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt = pred
         gt_x = None
+    elif len(pred) == 13: # has matched
+        series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, _, _ = pred
+        gt_x = None
+    elif len(pred) == 19: # has matched
+        series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, _, _, gt_x, gt_y, gt_z, gt_w, gt_h, gt_d = pred
+        gt_x = None
     else:
         series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, gt_x, gt_y, gt_z, gt_w, gt_h, gt_d = pred
     is_gt = str2bool(is_gt)

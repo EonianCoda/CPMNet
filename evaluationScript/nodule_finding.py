@@ -23,7 +23,7 @@ class NoduleFinding:
         is_gt (bool): Whether the nodule is a ground truth nodule.        
     """
     def __init__(self, series_name: str, ctr_x: float, ctr_y: float, ctr_z: float, w: float, h: float, d: float, nodule_type: str, 
-                 prob=-1, is_gt=False):
+                 prob=-1, is_gt=False, **kwargs):
         # set the variables and convert them to the correct type
         self.series_name = series_name
         self.ctr_x = to_float(ctr_x)
@@ -39,6 +39,9 @@ class NoduleFinding:
         # Matching Status
         self.match_iou = -1
         self.match_nodule_finding = None 
+        
+        for key, value in kwargs.items():
+            setattr(self, key, value)
         
     def set_match(self, match_iou: float, match_nodule_finding, force=False):
         # if the nodule is a ground truth nodule, TH match_iou is the iou between the nearest candidate and the ground truth

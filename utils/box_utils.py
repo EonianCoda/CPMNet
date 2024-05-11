@@ -48,7 +48,7 @@ def make_anchors(feat: torch.Tensor, input_size: List[float], grid_cell_offset=0
     stride_tensor = strides.repeat(d * h * w, 1)
     return anchor_points, stride_tensor
 
-def nms_3D(dets: NDArray[np.float32], overlap=0.5, top_k=200):
+def nms_3D(dets: torch.Tensor, overlap=0.5, top_k=200):
     """
     Args:
         dets: 
@@ -95,6 +95,132 @@ def nms_3D(dets: NDArray[np.float32], overlap=0.5, top_k=200):
         inds = IoU <= overlap
         idx = idx[1:][inds]
     return torch.from_numpy(np.array(keep))
+
+def nms_3D_matched(dets: torch.Tensor, overlap=0.5, top_k=200):
+    """
+    Args:
+        dets: 
+            (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
+        overlap: 
+            iou threshold
+        top_k: 
+            keep top_k results
+    """
+    # det {prob, ctr_z, ctr_y, ctr_x, d, h, w}
+    dd, hh, ww = dets[:, 4], dets[:, 5], dets[:, 6]
+    z1 = dets[:, 1] - 0.5 * dd
+    y1 = dets[:, 2] - 0.5 * hh
+    x1 = dets[:, 3] - 0.5 * ww
+    
+    z2 = dets[:, 1] + 0.5 * dd
+    y2 = dets[:, 2] + 0.5 * hh
+    x2 = dets[:, 3] + 0.5 * ww
+    
+    scores = dets[:, 0]
+    areas = dd * hh * ww
+    
+    _, idx = scores.sort(0, descending=True)
+    keep = []
+    num_matched = []
+    while idx.size(0) > 0:
+        i = idx[0]
+        keep.append(int(i.cpu().numpy()))
+        
+        if idx.size(0) == 1:
+            num_matched.append(1)
+            break
+        
+        xx1 = torch.max(x1[idx[1:]], x1[i].expand(len(idx)-1))
+        yy1 = torch.max(y1[idx[1:]], y1[i].expand(len(idx)-1))
+        zz1 = torch.max(z1[idx[1:]], z1[i].expand(len(idx)-1))
+
+        xx2 = torch.min(x2[idx[1:]], x2[i].expand(len(idx)-1))
+        yy2 = torch.min(y2[idx[1:]], y2[i].expand(len(idx)-1))
+        zz2 = torch.min(z2[idx[1:]], z2[i].expand(len(idx)-1))
+
+        w = torch.clamp(xx2 - xx1, min=0.0)
+        h = torch.clamp(yy2 - yy1, min=0.0)
+        d = torch.clamp(zz2 - zz1, min=0.0)
+
+        inter = w*h*d
+        IoU = inter / (areas[i] + areas[idx[1:]] - inter)
+        inds = IoU <= overlap
+        
+        num_matched.append(int(torch.sum(~inds).cpu().numpy()) + 1)
+        if len(keep) == top_k:
+            break
+        
+        idx = idx[1:][inds]
+    return torch.from_numpy(np.array(keep)), num_matched
+
+def nms_3D_matched_sum(dets: torch.Tensor, all_num_matched: np.ndarray, overlap=0.5, top_k=200):
+    """
+    Args:
+        dets: 
+            (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
+        overlap: 
+            iou threshold
+        top_k: 
+            keep top_k results
+    """
+    # det {prob, ctr_z, ctr_y, ctr_x, d, h, w}
+    dd, hh, ww = dets[:, 4], dets[:, 5], dets[:, 6]
+    z1 = dets[:, 1] - 0.5 * dd
+    y1 = dets[:, 2] - 0.5 * hh
+    x1 = dets[:, 3] - 0.5 * ww
+    
+    z2 = dets[:, 1] + 0.5 * dd
+    y2 = dets[:, 2] + 0.5 * hh
+    x2 = dets[:, 3] + 0.5 * ww
+    
+    scores = dets[:, 0]
+    areas = dd * hh * ww
+    
+    _, idx = scores.sort(0, descending=True)
+    all_num_matched = all_num_matched[idx.cpu().numpy()].copy()
+    keep = []
+    num_matched = []
+    num_matched_crop = []
+    while idx.size(0) > 0:
+        i = idx[0]
+        i_int = int(i.cpu().numpy())
+        keep.append(i_int)
+        
+        if idx.size(0) == 1:
+            num_matched.append(all_num_matched[0])
+            num_matched_crop.append(1)
+            break
+        
+        xx1 = torch.max(x1[idx[1:]], x1[i].expand(len(idx)-1))
+        yy1 = torch.max(y1[idx[1:]], y1[i].expand(len(idx)-1))
+        zz1 = torch.max(z1[idx[1:]], z1[i].expand(len(idx)-1))
+
+        xx2 = torch.min(x2[idx[1:]], x2[i].expand(len(idx)-1))
+        yy2 = torch.min(y2[idx[1:]], y2[i].expand(len(idx)-1))
+        zz2 = torch.min(z2[idx[1:]], z2[i].expand(len(idx)-1))
+
+        w = torch.clamp(xx2 - xx1, min=0.0)
+        h = torch.clamp(yy2 - yy1, min=0.0)
+        d = torch.clamp(zz2 - zz1, min=0.0)
+
+        inter = w*h*d
+        IoU = inter / (areas[i] + areas[idx[1:]] - inter)
+        inds = IoU <= overlap
+        
+        inds_np = inds.cpu().numpy()
+        num_matched.append(np.sum(all_num_matched[1:][~inds_np]) + all_num_matched[0])
+        num_matched_crop.append(np.sum(~inds_np) + 1)
+        if len(keep) == top_k:
+            break
+        
+        idx = idx[1:][inds]
+        all_num_matched = all_num_matched[1:][inds_np]
+    avg_num_matched = num_matched / np.array(num_matched_crop)
+    valid_mask = avg_num_matched >= 5
+    keep = np.array(keep)[valid_mask]
+    avg_num_matched = avg_num_matched[valid_mask]
+    num_matched = np.array(num_matched)[valid_mask]
+    return torch.from_numpy(np.array(keep)), num_matched, avg_num_matched
 
 def iou_3D(box1, box2):
     # need z_ctr, y_ctr, x_ctr, d
