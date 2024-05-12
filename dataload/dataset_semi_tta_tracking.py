@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-from __future__ import print_function, division
 import logging
 import copy
 import torchvision
@@ -230,8 +229,6 @@ class UnLabeledDataset(Dataset):
         for folder, series_name in self.series_infos:
             label_path = gen_label_path(folder, series_name)
             label = load_label(label_path, self.image_spacing, min_d, min_size)
-            if label[ALL_LOC].shape[0] == 0 and not use_bg:
-                continue
             dicom_path = gen_dicom_path(folder, series_name)
             self.all_dicom_paths.append(dicom_path)
             self.all_series_names.append(series_name)
@@ -309,8 +306,22 @@ class UnLabeledDataset(Dataset):
             logger.warning('No pseudo label is updated')
             return
         
-        self.labels = self.ema_updated_labels    
+        self.labels = self.ema_updated_labels
         self.ema_updated_labels = dict()
+        
+        # if keep_box_n > 0:
+        #     keep_topk_score = topk_score[keep_box_mask]
+        #     keep_topk_idx = topk_idx[keep_box_mask]
+            
+        #     # 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+        #     det = (-torch.ones((keep_box_n, 8))).to(device)
+        #     det[:, 0] = 1
+        #     det[:, 1] = keep_topk_score
+        #     det[:, 2:] = pred_bboxes[j][keep_topk_idx]
+        
+        #     keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
+        #     dets[j][:len(keep)] = det[keep.long()]
+            
         
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
@@ -384,7 +395,7 @@ class UnLabeledDataset(Dataset):
                         'ctr_transform': weak_ctr_transforms, # (tta,)
                         'feat_transform': weak_feat_transforms, # (tta,)
                         'transform_weight': self.tta_trans_weight.copy(),
-                        'series_name': [series_name] * len(weak_samples),
+                        'series_name': [series_name] * raw_images.shape[0],
                         'annots': raw_annots}
         
         # Process the final samples
