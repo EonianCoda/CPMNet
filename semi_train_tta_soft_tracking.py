@@ -34,7 +34,7 @@ from optimizer.ema import EMA
 ### postprocessing ###
 from utils.logs import setup_logging
 from utils.utils import init_seed, get_local_time_str_in_taiwan, write_yaml, load_yaml, build_class
-from logic.early_stopping_save import EarlyStoppingSave
+from logic.early_stopping_save_semi import EarlyStoppingSave
 
 from config import SAVE_ROOT, DEFAULT_OVERLAP_RATIO, IMAGE_SPACING, NODULE_TYPE_DIAMETERS
 
@@ -317,7 +317,7 @@ def prepare_training(args, device, num_training_steps):
         load_states(ckpt_path, device, model_s, optimizer, scheduler_warm, ema, model_t = model_t)
         # Resume best metric
         global early_stopping
-        early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model=model_s)
+        early_stopping = EarlyStoppingSave.load(save_dir=os.path.join(args.resume_folder, 'best'), target_metrics=args.best_metrics, model_s=model_s, model_t=model_t)
         # start_epoch = start_epoch + 1
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
@@ -483,7 +483,7 @@ if __name__ == '__main__':
     val_loader, test_loader = get_val_test_dataloder(args)
     
     if early_stopping is None:
-        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model=model_s)
+        early_stopping = EarlyStoppingSave(target_metrics=args.best_metrics, save_dir=os.path.join(exp_folder, 'best'), model_s=model_s, model_t=model_t)
 
     original_psuedo_label_threshold = float(args.pseudo_label_threshold)
     final_psuedo_label_threshod = args.pseudo_label_threshold * args.semi_increase_ratio
@@ -538,14 +538,16 @@ if __name__ == '__main__':
             
             # For analysis
             ema_update_labels_save_path = os.path.join(exp_folder, 'ema_update_labels', f'ema_updated_labels_{epoch}.pkl')
-            with open(ema_update_labels_save_path, 'wb') as f:
+            os.makedirs(ema_update_labels_save_path, exist_ok=True)
+            with open(os.path.dirname(ema_update_labels_save_path), 'wb') as f:
                 pickle.dump(train_loader_u.dataset.ema_updated_labels, f)
                 
             train_loader_u.dataset.confirm_pseudo_labels()
             
             # For analysis
             psuedo_label_save_path = os.path.join(exp_folder, 'history_psuedo_labels', f'history_psuedo_labels_{epoch}.pkl')
-            with open(psuedo_label_save_path, 'wb') as f:
+            os.makedirs(psuedo_label_save_path, exist_ok=True)
+            with open(os.path.dirname(psuedo_label_save_path), 'wb') as f:
                 pickle.dump(train_loader_u.dataset.labels, f)
                 
             new_num_unlabeled = len(train_loader_u.dataset)
@@ -601,7 +603,7 @@ if __name__ == '__main__':
         logger.info('Load best model from "{}"'.format(model_path))
         load_states(model_path, device, model_s)
         test_metrics = val(args = args,
-                            model = model_s,
+                            model = model_t, # Use teacher model to validate
                             detection_postprocess=test_det_postprocess,
                             val_loader = test_loader,
                             device = device,
