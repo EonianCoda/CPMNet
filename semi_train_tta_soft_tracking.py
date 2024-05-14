@@ -535,7 +535,19 @@ if __name__ == '__main__':
                                 num_iters = len(train_loader_u),
                                 device = device)
             original_num_unlabeled = len(train_loader_u.dataset)
+            
+            # For analysis
+            ema_update_labels_save_path = os.path.join(exp_folder, 'ema_update_labels', f'ema_updated_labels_{epoch}.pkl')
+            with open(ema_update_labels_save_path, 'wb') as f:
+                pickle.dump(train_loader_u.dataset.ema_updated_labels, f)
+                
             train_loader_u.dataset.confirm_pseudo_labels()
+            
+            # For analysis
+            psuedo_label_save_path = os.path.join(exp_folder, 'history_psuedo_labels', f'history_psuedo_labels_{epoch}.pkl')
+            with open(psuedo_label_save_path, 'wb') as f:
+                pickle.dump(train_loader_u.dataset.labels, f)
+                
             new_num_unlabeled = len(train_loader_u.dataset)
             logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
         scheduler_warm.step()

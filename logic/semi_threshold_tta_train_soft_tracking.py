@@ -306,7 +306,7 @@ def train(args,
                     history_probs.append(a['prob'])
             
             d, h, w = weak_images.shape[-3:]
-            crop_bboxes = np.array([[0, 0, 0], [d, h, w]], dtype=np.float32)
+            crop_bboxes = np.array([[[0, 0, 0], [d, h, w]]], dtype=np.float32)
             for batch_i in range(bs):
                 # Get current pseudo label
                 outputs_t_b = outputs_t[batch_i]
@@ -321,7 +321,10 @@ def train(args,
                 history_ctrs_b = history_ctrs[batch_i]
                 history_rads_b = history_rads[batch_i]
                 
-                if len(outputs_t_b) == 0: # No any pseudo label in this batch
+                if len(outputs_t_b) == 0 and len(history_ctrs_b) == 0:
+                    continue
+                elif len(outputs_t_b) == 0: # No any pseudo label in this batch
+                    history_bboxes = np.stack([history_ctrs_b - history_rads_b / 2, history_ctrs_b + history_rads_b / 2], axis=1)
                     history_valid_ious = compute_bbox3d_iou(history_bboxes, crop_bboxes)
                     history_valid_mask = (history_valid_ious.max(axis=1) > 0.5)
                     if np.count_nonzero(history_valid_mask) != 0:
