@@ -46,7 +46,7 @@ def train_one_step_wrapper(memory_format, loss_fn):
 @torch.no_grad()
 def sharpen_prob(cls_prob, t=0.7):
     cls_prob_s = cls_prob ** (1 / t)
-    return (cls_prob_s / (cls_prob_s + (1 - cls_prob_s) ** (1 / t)))
+    return (cls_prob_s / (cls_prob_s + (1 - cls_prob) ** (1 / t)))
 
 def burn_in_train(args,
                 model: nn.modules,
@@ -186,6 +186,7 @@ def train(args,
     avg_fp_pseu = AverageMeter()
     avg_fn_pseu = AverageMeter()
     avg_soft_target_pseu = AverageMeter()
+    avg_fn_probs = AverageMeter()
     
     iters_to_accumulate = args.iters_to_accumulate
     # mixed precision training
@@ -233,15 +234,15 @@ def train(args,
                     if args.val_mixed_precision:
                         with torch.cuda.amp.autocast():
                             input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
-                            output = model_t(input)
+                            outputs_t_b = model_t(input)
                     else:
                         input = input.view(-1, 1, *input.size()[3:]).to(device, non_blocking=True, memory_format=memory_format) # (bs * num_aug, 1, crop_z, crop_y, crop_x)
-                        output = model_t(input)
+                        outputs_t_b = model_t(input)
 
                 # Ensemble the augmentations
-                Cls_output = output['Cls'] # (bs * num_aug, 1, 24, 24, 24)
-                Shape_output = output['Shape'] # (bs * num_aug, 3, 24, 24, 24)
-                Offset_output = output['Offset'] # (bs * num_aug, 3, 24, 24, 24)
+                Cls_output = outputs_t_b['Cls'] # (bs * num_aug, 1, 24, 24, 24)
+                Shape_output = outputs_t_b['Shape'] # (bs * num_aug, 3, 24, 24, 24)
+                Offset_output = outputs_t_b['Offset'] # (bs * num_aug, 3, 24, 24, 24)
                 
                 _, _, d, h, w = Cls_output.size()
                 Cls_output = Cls_output.view(-1, num_aug, 1, d, h, w)
@@ -270,12 +271,12 @@ def train(args,
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 lobe = weak_lobes[i * TTA_BATCH_SIZE:end]
-                output = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
+                outputs_t_b = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
                 
-                output = detection_postprocess(output, device=device, is_logits=False, lobe_mask = lobe, threshold = args.pseudo_crop_threshold, nms_topk=args.pseudo_nms_topk) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-                outputs_t.append(output.data.cpu().numpy())
+                outputs_t_b = detection_postprocess(outputs_t_b, device=device, is_logits=False, lobe_mask = lobe, threshold = args.pseudo_crop_threshold, nms_topk=args.pseudo_nms_topk) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
+                outputs_t.append(outputs_t_b.data.cpu().numpy())
                 cls_prob.append(Cls_output)
-                del input, Shape_output, Offset_output, output
+                del input, Shape_output, Offset_output, outputs_t_b
             del weak_lobes
             
             # Add label
@@ -293,113 +294,116 @@ def train(args,
             # EMA update pseudo label
             sample_annots = []
             crop_bb_mins = []
-            pseudo_ctrs = []
-            pseudo_rads = []
-            pseudo_probs = []
+            history_ctrs = []
+            history_rads = []
+            history_probs = []
             weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
             for annot in weak_u_sample['annot']:
                 for a in annot:
                     crop_bb_mins.append(a['crop_bb_min'])
-                    pseudo_ctrs.append(a['ctr'])
-                    pseudo_rads.append(a['rad'])
-                    pseudo_probs.append(a['prob'])
+                    history_ctrs.append(a['ctr'])
+                    history_rads.append(a['rad'])
+                    history_probs.append(a['prob'])
                     
             for batch_i in range(bs):
-                output = outputs_t[batch_i]
-                pseudo_ctr = pseudo_ctrs[batch_i]
-                pseudo_rad = pseudo_rads[batch_i]
+                # Get current pseudo label
+                outputs_t_b = outputs_t[batch_i]
+                valid_mask = (outputs_t_b[:, -1] != -1.0)
+                outputs_t_b = outputs_t_b[valid_mask]
                 
-                valid_mask = (output[:, -1] != -1.0)
-                output = output[valid_mask]
+                new_probs_b = outputs_t_b[:, 1]
+                new_ctrs_b = outputs_t_b[:, 2:5]
+                new_rads_b = outputs_t_b[:, 5:8]
                 
-                if len(output) == 0:
-                    pseudo_probs[batch_i] *= args.pseudo_update_ema_alpha
+                # Get history pseudo label
+                history_ctrs_b = history_ctrs[batch_i]
+                history_rads_b = history_rads[batch_i]
+                
+                if len(outputs_t_b) == 0: # No any pseudo label in this batch
+                    history_probs[batch_i] *= args.pseudo_update_ema_alpha
                     continue
-                elif len(pseudo_ctr) == 0:
-                    new_psuedo_prob = output[:, 1]
-                    new_pseudo_ctrs = output[:, 2:5]
-                    new_pseudo_rads = output[:, 5:8]
-                    
-                    pseudo_ctrs[batch_i] = new_pseudo_ctrs
-                    pseudo_rads[batch_i] = new_pseudo_rads
-                    pseudo_probs[batch_i] = new_psuedo_prob * args.pseudo_update_ema_alpha
+                elif len(history_ctrs_b) == 0: # No any pseudo label in history
+                    history_ctrs[batch_i] = new_ctrs_b
+                    history_rads[batch_i] = new_rads_b
+                    history_probs[batch_i] = new_probs_b * args.pseudo_update_ema_alpha
                     continue
                     
-                ctrs = output[:, 2:5]
-                shapes = output[:, 5:8]
-                spacing = weak_spacings[batch_i]
-    
-                bboxes = np.stack([ctrs - shapes / 2, ctrs + shapes / 2], axis=1)
-                
-                pseudo_bboxes = np.stack([pseudo_ctr - pseudo_rad, pseudo_ctr + pseudo_rad], axis=1)
-                ious = compute_bbox3d_iou(pseudo_bboxes, bboxes)
+                # Compute iou between history pseudo label and new pseudo label
+                new_bboxes = np.stack([new_ctrs_b - new_rads_b / 2, new_ctrs_b + new_rads_b / 2], axis=1)
+                history_bboxes = np.stack([history_ctrs_b - history_rads_b, history_ctrs_b + history_rads_b], axis=1)
+                ious = compute_bbox3d_iou(history_bboxes, new_bboxes)
                 
                 # According to the iou, update the pseudo label in dataset
-                matched_ious = ious.max(axis=1)
+                history_matched_ious = ious.max(axis=1)
                 matched_indices = ious.argmax(axis=1)
-                for i, (matched_iou, match_idx) in enumerate(zip(matched_ious, matched_indices)):
+                for i, (matched_iou, matched_idx) in enumerate(zip(history_matched_ious, matched_indices)):
                     if matched_iou > args.pseudo_update_iou_threshold:
                         # Update pseudo label
-                        pseudo_probs[batch_i][i] = pseudo_probs[batch_i][i] * args.pseudo_update_ema_alpha + output[match_idx, 1] * (1 - args.pseudo_update_ema_alpha)
-                        pseudo_ctrs[batch_i][i] = pseudo_ctrs[batch_i][i] * args.pseudo_update_ema_alpha + output[match_idx, 2:5] * (1 - args.pseudo_update_ema_alpha)
-                        pseudo_rads[batch_i][i] = pseudo_rads[batch_i][i] * args.pseudo_update_ema_alpha + output[match_idx, 5:8] * (1 - args.pseudo_update_ema_alpha)
+                        history_probs[batch_i][i] = history_probs[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 1] * (1 - args.pseudo_update_ema_alpha)
+                        history_ctrs[batch_i][i] = history_ctrs[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 2:5] * (1 - args.pseudo_update_ema_alpha)
+                        history_rads[batch_i][i] = history_rads[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 5:8] * (1 - args.pseudo_update_ema_alpha)
                     else: # penalize the pseudo label because of the low iou
-                        pseudo_probs[batch_i][i] *= args.pseudo_update_ema_alpha
+                        history_probs[batch_i][i] *= args.pseudo_update_ema_alpha
                 
                 # Add new pseudo label
-                max_iou = ious.max(axis=0)
-                new_psuedo_prob = []
-                new_pseudo_ctrs = []
-                new_pseudo_rads = []
-                for j, iou in enumerate(max_iou):        
-                    if iou <= args.pseudo_update_iou_threshold:
-                        new_psuedo_prob.append(output[j, 1])
-                        new_pseudo_ctrs.append(output[j, 2:5])
-                        new_pseudo_rads.append(output[j, 5:8])
+                new_matched_ious = ious.max(axis=0)
+                new_probs_b = []
+                new_ctrs_b = []
+                new_rads_b = []
+                for i, matched_iou in enumerate(new_matched_ious):        
+                    if matched_iou <= args.pseudo_update_iou_threshold:
+                        new_probs_b.append(outputs_t_b[i, 1])
+                        new_ctrs_b.append(outputs_t_b[i, 2:5])
+                        new_rads_b.append(outputs_t_b[i, 5:8])
                 
-                if len(new_psuedo_prob) > 0:
-                    pseudo_ctrs[batch_i] = np.concatenate([pseudo_ctrs[batch_i], new_pseudo_ctrs], axis=0)
-                    pseudo_rads[batch_i] = np.concatenate([pseudo_rads[batch_i], new_pseudo_rads], axis=0)
-                    pseudo_probs[batch_i] = np.concatenate([pseudo_probs[batch_i], new_psuedo_prob], axis=0) * args.pseudo_update_ema_alpha
-            # Get current pseudo label
+                if len(new_probs_b) > 0:
+                    history_ctrs[batch_i] = np.concatenate([history_ctrs[batch_i], new_ctrs_b], axis=0)
+                    history_rads[batch_i] = np.concatenate([history_rads[batch_i], new_rads_b], axis=0)
+                    history_probs[batch_i] = np.concatenate([history_probs[batch_i], new_probs_b], axis=0) * args.pseudo_update_ema_alpha
+            
+            # Generate pseudo label
             strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
             weak_spacings = weak_u_sample['spacing'] # shape = (bs,)
             transformed_annots = []
 
             for batch_i in range(bs):
-                probs = pseudo_probs[batch_i]
-                valid_mask = probs > args.pseudo_label_threshold
-                ctrs = pseudo_ctrs[batch_i][valid_mask]
-                shapes = pseudo_rads[batch_i][valid_mask]
-                probs = probs[valid_mask]
-                spacing = weak_spacings[batch_i]
-                if len(ctrs) == 0:
+                # According prob to generate pseudo label
+                probs_b = history_probs[batch_i]
+                valid_mask = (probs_b > args.pseudo_label_threshold)
+                
+                if np.count_nonzero(valid_mask) == 0:
                     transformed_annots.append(np.zeros((0, 10), dtype='float32'))
                     continue
+                ctrs_b = history_ctrs[batch_i][valid_mask].copy()
+                rads_b = history_rads[batch_i][valid_mask].copy()
+                spacing = weak_spacings[batch_i]
                 
+                # Transform pseudo label
                 for transform in strong_ctr_transforms[batch_i]:
-                    ctrs = transform.forward_ctr(ctrs)
-                    shapes = transform.forward_rad(shapes)
+                    ctrs_b = transform.forward_ctr(ctrs_b)
+                    rads_b = transform.forward_rad(rads_b)
                     spacing = transform.forward_spacing(spacing)
                 
-                sample = {'ctr': ctrs, 
-                        'rad': shapes, 
-                        'cls': np.zeros((len(ctrs), 1), dtype='int32'),
-                        'spacing': spacing}
-                sample_annots.append(sample.copy())
-                sample = coord_to_annot(sample)
-                transformed_annots.append(sample['annot'])
+                sample_dict = {'ctr': ctrs_b, 
+                                'rad': rads_b, 
+                                'cls': np.zeros((len(ctrs_b), 1), dtype=np.int32),
+                                'spacing': spacing}
+                sample_annots.append(sample_dict)
+                
+                # Transform to annot
+                transformed_annots.append(coord_to_annot(sample_dict)['annot'])
+                
             # Update pseudo label of dataset
             for batch_i in range(bs):
                 series_name = weak_series_names[batch_i]
                 crop_bb_min = crop_bb_mins[batch_i]
-                pseudo_ctr = pseudo_ctrs[batch_i]
-                pseudo_rad = pseudo_rads[batch_i]
-                pseudo_prob = pseudo_probs[batch_i]
+                history_ctrs_b = history_ctrs[batch_i]
+                history_rads_b = history_rads[batch_i]
+                history_probs_b = history_probs[batch_i]
                 
-                if len(pseudo_ctr) != 0:
-                    pseudo_ctr = pseudo_ctr + crop_bb_min
-                    dataloader_u.dataset.update_pseudo_label(series_name, pseudo_ctr, pseudo_rad, pseudo_prob)    
+                if len(history_ctrs_b) != 0:
+                    history_ctrs_b = history_ctrs_b + crop_bb_min
+                    dataloader_u.dataset.update_pseudo_label(series_name, history_ctrs_b, history_rads_b, history_probs_b)
                 
             # Pad the pseudo label
             valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
@@ -417,10 +421,18 @@ def train(args,
             # Compute iou between pseudo label and original label
             all_iou_pseu = []
             tp, fp, fn = 0, 0, 0
+            all_fn_probs = []
             for i, (annot, pseudo_annot, is_valid) in enumerate(zip(strong_u_sample['gt_annot'].numpy(), transformed_annots_padded, valid_mask)):
                 annot = annot[annot[:, -1] != -1] # (ctr_z, ctr_y, ctr_x, d, h, w, space_z, space_y, space_x)
                 if not is_valid:
                     fn += len(annot)
+                    for a in annot:
+                        ctr_z, ctr_y, ctr_x = a[:3]
+                        ctr_z = min(max(int(ctr_z // 4), 0), cls_prob.shape[2] - 1)
+                        ctr_y = min(max(int(ctr_y // 4), 0), cls_prob.shape[3] - 1)
+                        ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
+                        ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
+                        all_fn_probs.append(ctr_prob)
                     continue 
                 
                 pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
@@ -430,6 +442,13 @@ def train(args,
                     continue
                 elif len(pseudo_annot) == 0:
                     fn += len(annot)
+                    for a in annot:
+                        ctr_z, ctr_y, ctr_x = a[:3]
+                        ctr_z = min(max(int(ctr_z // 4), 0), cls_prob.shape[2] - 1)
+                        ctr_y = min(max(int(ctr_y // 4), 0), cls_prob.shape[3] - 1)
+                        ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
+                        ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
+                        all_fn_probs.append(ctr_prob)
                     continue
                 
                 bboxes = np.stack([annot[:, :3] - annot[:, 3:6] / 2, annot[:, :3] + annot[:, 3:6] / 2], axis=1)
@@ -439,10 +458,19 @@ def train(args,
                 iou_pseu = ious.max(axis=1)
                 iou = ious.max(axis=0)
                 
-                all_iou_pseu.extend(iou_pseu.tolist())    
+                all_iou_pseu.extend(iou_pseu[iou_pseu > 1e-3].tolist())
                 tp += np.count_nonzero(iou > 1e-3)
+                fn += np.count_nonzero(iou <= 1e-3)
                 fp += np.count_nonzero(iou_pseu < 1e-3)
-
+            
+                for a in annot[iou <= 1e-3]:
+                    ctr_z, ctr_y, ctr_x = a[:3]
+                    ctr_z = min(max(int(ctr_z // 4), 0), cls_prob.shape[2] - 1)
+                    ctr_y = min(max(int(ctr_y // 4), 0), cls_prob.shape[3] - 1)
+                    ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
+                    ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
+                    all_fn_probs.append(ctr_prob)
+                        
                 # Cheating, set FP to 0
                 # for j in np.where(iou_pseu < 1e-3)[0]:
                 #     transformed_annots_padded[i, j, ...] = -1
@@ -452,6 +480,8 @@ def train(args,
             avg_tp_pseu.update(tp)
             avg_fp_pseu.update(fp)
             avg_fn_pseu.update(fn)
+            if len(all_fn_probs) > 0:
+                avg_fn_probs.update(np.mean(all_fn_probs), len(all_fn_probs))
             
             num_fg_crop = np.count_nonzero(valid_mask)
             # Random select some bg crop
@@ -462,7 +492,7 @@ def train(args,
             
                 transformed_annots_padded = transformed_annots_padded[valid_mask]
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
-                
+                cls_prob = cls_prob[valid_mask]
             strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
             avg_soft_target_pseu.update(torch.sum(torch.logical_and(cls_prob > args.pseudo_background_threshold, cls_prob < args.pseudo_label_threshold)).item())
             background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
@@ -488,6 +518,7 @@ def train(args,
             avg_pseu_iou_loss.update(iou_pseu_loss.item())
             avg_pseu_loss.update(loss_pseu.item())
             num_pseudo_nodules += len(strong_u_sample['annot'][strong_u_sample['annot'][..., -1] != -1])
+            
             del outputs_pseu, background_mask, cls_prob
             ### Labeled data
             try:
@@ -512,7 +543,7 @@ def train(args,
             
             # Update model
             total_loss = loss + loss_pseu * args.lambda_pseu
-                        # Compute gradient
+            # Compute gradient
             total_loss = total_loss / iters_to_accumulate
             if mixed_precision:
                 scaler.scale(total_loss).backward()
@@ -536,7 +567,8 @@ def train(args,
                                         num_neg = avg_num_neg_patches_pseu.sum,
                                         tp = avg_tp_pseu.sum,
                                         fp = avg_fp_pseu.sum,
-                                        fn = avg_fn_pseu.sum)
+                                        fn = avg_fn_pseu.sum,
+                                        fn_p = avg_fn_probs.avg)
                 progress_bar.update()
                 
                 with torch.no_grad():
@@ -580,5 +612,6 @@ def train(args,
                 'pseudo_f1': f1,
                 'pseu_tp': avg_tp_pseu.sum,
                 'pseu_fp': avg_fp_pseu.sum,
-                'pseu_fn': avg_fn_pseu.sum}
+                'pseu_fn': avg_fn_pseu.sum,
+                'pseu_fn_probs': avg_fn_probs.avg}
     return metrics

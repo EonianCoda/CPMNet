@@ -348,7 +348,6 @@ def train(args,
             # raise ValueError('Stop')
             
             ## For analysis
-            
             # Compute iou between pseudo label and original label
             all_iou_pseu = []
             tp, fp, fn = 0, 0, 0
