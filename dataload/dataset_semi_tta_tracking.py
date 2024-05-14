@@ -314,10 +314,15 @@ class UnLabeledDataset(Dataset):
         
         labels = dict()
         for series_name in self.labels.keys():
-            new_label = self.ema_updated_labels[series_name]
-            new_ctrs = new_label[ALL_LOC]
-            new_rads = new_label[ALL_RAD]
-            new_probs = new_label[ALL_PROB]
+            if series_name in self.ema_updated_labels:
+                new_label = self.ema_updated_labels[series_name]
+                new_ctrs = new_label[ALL_LOC]
+                new_rads = new_label[ALL_RAD]
+                new_probs = new_label[ALL_PROB]
+            else:
+                new_ctrs = np.zeros((0, 3), dtype=np.float32)
+                new_rads = np.zeros((0, 3), dtype=np.float32)
+                new_probs = np.zeros((0,), dtype=np.float32)
             
             history_label = self.labels[series_name]
             history_ctrs = history_label[ALL_LOC]
