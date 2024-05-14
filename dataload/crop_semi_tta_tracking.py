@@ -134,13 +134,18 @@ class InstanceCrop(object):
         all_crop_bboxes = np.stack([all_crop_bb_min, all_crop_bb_max], axis=1) # [M, 2, 3]
         
         # Compute IoU to determine the label of the patches
-        inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes) # [M, N]
-        all_ious = inter_volumes / nodule_volumes[np.newaxis, :] # [M, N]
-        max_ious = np.max(all_ious, axis=1) # [M]
-        
-        gt_inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, gt_nodule_bboxes) # [M, N]
-        gt_all_ious = gt_inter_volumes / gt_nodule_volumes[np.newaxis, :] # [M, N]
-        gt_max_ious = np.max(gt_all_ious, axis=1) # [M]
+        if len(nodule_bboxes) != 0:
+            inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, nodule_bboxes) # [M, N]
+            all_ious = inter_volumes / nodule_volumes[np.newaxis, :] # [M, N]
+            max_ious = np.max(all_ious, axis=1) # [M]
+        else:
+            all_ious = np.zeros((len(all_crop_bboxes), 1))
+            max_ious = np.zeros(len(all_crop_bboxes))
+            
+        if len(gt_instance_loc) > 0:
+            gt_inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, gt_nodule_bboxes) # [M, N]
+            gt_all_ious = gt_inter_volumes / gt_nodule_volumes[np.newaxis, :] # [M, N]
+            gt_max_ious = np.max(gt_all_ious, axis=1) # [M]
         
         tp_indices = max_ious > 0
         neg_indices = ~tp_indices
@@ -187,8 +192,12 @@ class InstanceCrop(object):
                 cls = np.array([])
                 prob = np.array([])
             
-            gt_ious = gt_all_ious[sample_i] # [N]
-            in_idx_gt = np.where(gt_ious > 0)[0]
+            if len(gt_instance_loc) > 0:
+                gt_ious = gt_all_ious[sample_i] # [N]
+                in_idx_gt = np.where(gt_ious > 0)[0]
+            else:
+                in_idx_gt = np.array([])
+                
             if in_idx_gt.size > 0:
                 # Compute new ctr and rad because of the crop
                 gt_all_nodule_bb_min_crop = gt_all_nodule_bb_min - crop_bb_min
@@ -208,10 +217,6 @@ class InstanceCrop(object):
             CT_crop = np.expand_dims(image_crop, axis=0)
             resized_lobe_crop = np.expand_dims(resized_lobe_crop, axis=0)
             shape = np.array(CT_crop.shape[1:])
-            if len(rad) > 0:
-                rad = rad / image_spacing  # convert pixel coord
-            if len(gt_rad) > 0:
-                gt_rad = gt_rad / image_spacing
                 
             sample = dict()
             sample['image'] = CT_crop

@@ -302,8 +302,7 @@ class UnLabeledDataset(Dataset):
             self.ema_updated_labels[series_name][ALL_PROB] = np.concatenate([self.ema_updated_labels[series_name][ALL_PROB], label[ALL_PROB]], axis=0)
         else:
             self.ema_updated_labels[series_name] = label
-    
-    def comfirm_pseudo_labels(self):
+    def confirm_pseudo_labels(self):
         if len(self.ema_updated_labels) == 0:
             logger.warning('No pseudo label is updated')
             return
@@ -321,19 +320,22 @@ class UnLabeledDataset(Dataset):
             dets = torch.from_numpy(dets)
             
             # NMS
-            dets = nms_3D(dets, overlap=0.05, top_k=20)
+            keep = nms_3D(dets, overlap=0.05, top_k=20)
+            dets = dets[keep.long()]
             dets = dets.numpy()
-            probs = dets[:, :1]
+            probs = dets[:, 0]
             ctrs = dets[:, 1:4]
             rads = dets[:, 4:7]
             
             labels[series_name] = {ALL_LOC: ctrs, 
                                    ALL_RAD: rads, 
-                                   ALL_PROB: probs}
+                                   ALL_PROB: probs,
+                                   ALL_CLS: np.zeros((len(ctrs),), dtype=np.float64)}
         
         self.set_pseu_labels(labels)
         # Reset the updated labels
         self.ema_updated_labels = dict()
+        
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
         lobe_path = self.lobe_paths[idx]

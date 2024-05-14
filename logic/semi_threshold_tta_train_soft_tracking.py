@@ -408,6 +408,9 @@ def train(args,
             # Pad the pseudo label
             valid_mask = np.array([len(annot) > 0 for annot in transformed_annots], dtype=np.int32)
             valid_mask = (valid_mask == 1)
+            
+            avg_num_neg_patches_pseu.update(np.count_nonzero(valid_mask == 0))
+            
             max_num_annots = max(annot.shape[0] for annot in transformed_annots)
             if max_num_annots > 0:
                 transformed_annots_padded = np.ones((len(transformed_annots), max_num_annots, 10), dtype='float32') * -1
