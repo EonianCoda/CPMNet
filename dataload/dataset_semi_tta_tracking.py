@@ -5,7 +5,8 @@ import torchvision
 import numpy as np
 from typing import List
 from .utils import load_series_list, load_image, load_label, load_lobe, ALL_RAD, ALL_LOC, ALL_CLS, ALL_PROB, \
-                    gen_dicom_path, gen_label_path, gen_lobe_path, normalize_processed_image, normalize_raw_image
+                    gen_dicom_path, gen_label_path, gen_lobe_path, normalize_processed_image, normalize_raw_image, \
+                    compute_bbox3d_iou
 from torch.utils.data import Dataset
 from transform.ctr_transform import OffsetMinusCTR
 from transform.feat_transform import FlipFeatTransform
@@ -312,7 +313,7 @@ class UnLabeledDataset(Dataset):
             return
         
         labels = dict()
-        for series_name in self.ema_updated_labels.keys():
+        for series_name in self.labels.keys():
             new_label = self.ema_updated_labels[series_name]
             new_ctrs = new_label[ALL_LOC]
             new_rads = new_label[ALL_RAD]
@@ -322,13 +323,24 @@ class UnLabeledDataset(Dataset):
             history_ctrs = history_label[ALL_LOC]
             history_rads = history_label[ALL_RAD]
             history_probs = history_label[ALL_PROB]
+            if len(history_ctrs) > 0:
+                history_bbxes = np.stack([history_ctrs - history_rads / 2, history_ctrs + history_rads / 2], axis=-1)
+            else:
+                history_bbxes = np.zeros((0, 2, 3), dtype=np.float32)
             
             if len(new_ctrs) == 0 and len(history_ctrs) == 0:
                 continue
             # Construct the pseudo labels
             # (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
             if len(new_ctrs) > 0:
-                history_probs *= self.pseudo_update_ema_alpha # Penalize the history labels
+                if len(history_bbxes) != 0:
+                    new_bboxes = np.stack([new_ctrs - new_rads / 2, new_ctrs + new_rads / 2], axis=-1)
+                    matched_ious = compute_bbox3d_iou(history_bbxes, new_bboxes)
+                    history_matched_ious = np.max(matched_ious, axis=1)
+                    valid_mask = history_matched_ious >= 0.05
+                    if np.count_nonzero(valid_mask) > 0:
+                        history_probs[valid_mask] *= self.pseudo_update_ema_alpha # Penalize the history labels
+                    
                 new_dets = np.concatenate([new_probs.reshape(-1, 1), new_ctrs.reshape(-1, 3), new_rads.reshape(-1, 3)], axis=1).astype('float32')
             else:
                 new_dets = np.zeros((0, 7), dtype=np.float32)

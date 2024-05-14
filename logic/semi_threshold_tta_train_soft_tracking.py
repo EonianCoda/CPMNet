@@ -326,7 +326,7 @@ def train(args,
                 elif len(outputs_t_b) == 0: # No any pseudo label in this batch
                     history_bboxes = np.stack([history_ctrs_b - history_rads_b / 2, history_ctrs_b + history_rads_b / 2], axis=1)
                     history_valid_ious = compute_bbox3d_iou(history_bboxes, crop_bboxes)
-                    history_valid_mask = (history_valid_ious.max(axis=1) > 0.6)
+                    history_valid_mask = (history_valid_ious.max(axis=1) >= 0.5)
                     if np.count_nonzero(history_valid_mask) != 0:
                         history_probs[batch_i][history_valid_mask] *= args.pseudo_update_ema_alpha
                     continue
@@ -341,7 +341,7 @@ def train(args,
                 history_bboxes = np.stack([history_ctrs_b - history_rads_b / 2, history_ctrs_b + history_rads_b / 2], axis=1)
                 
                 history_valid_ious = compute_bbox3d_iou(history_bboxes, crop_bboxes)
-                history_valid_mask = (history_valid_ious.max(axis=1) > 0.5)
+                history_valid_mask = (history_valid_ious.max(axis=1) >= 0.5)
                 
                 ious = compute_bbox3d_iou(history_bboxes, new_bboxes)
                 # According to the iou, update the pseudo label in dataset
