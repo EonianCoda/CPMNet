@@ -142,6 +142,7 @@ def get_args():
     # Semi tracking
     parser.add_argument('--pseudo_update_ema_alpha', type=int, default=0.9, help='tracking interval')
     parser.add_argument('--pseudo_update_iou_threshold', type=float, default=0.05, help='iou threshold for tracking')
+    parser.add_argument('--pseudo_tracking_warmup_epochs', type=int, default=5, help='tracking warmup epochs')
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -545,7 +546,14 @@ if __name__ == '__main__':
             os.makedirs(os.path.dirname(ema_update_labels_save_path), exist_ok=True)
             with open(ema_update_labels_save_path, 'wb') as f:
                 pickle.dump(train_loader_u.dataset.ema_updated_labels, f)
+            
+            if epoch <= args.pseudo_tracking_warmup_epochs:
+                pseudo_update_ema_alpha = (1 - args.pseudo_update_ema_alpha) * (epoch / args.pseudo_tracking_warmup_epochs) + args.pseudo_update_ema_alpha
+                logger.info('Tracking warmup epoch: {} pseudo update ema alpha: {:.4f}'.format(epoch, pseudo_update_ema_alpha))
+            else:
+                pseudo_update_ema_alpha = args.pseudo_update_ema_alpha
                 
+            train_loader_u.dataset.pseudo_update_ema_alpha = pseudo_update_ema_alpha
             train_loader_u.dataset.confirm_pseudo_labels()
             
             # For analysis

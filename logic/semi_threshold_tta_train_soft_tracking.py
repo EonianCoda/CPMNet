@@ -372,7 +372,7 @@ def train(args,
                 new_ctrs_b = []
                 new_rads_b = []
                 for i, matched_iou in enumerate(new_matched_ious):        
-                    if matched_iou <= args.pseudo_update_iou_threshold:
+                    if matched_iou < args.pseudo_update_iou_threshold:
                         new_probs_b.append(outputs_t_b[i, 1])
                         new_ctrs_b.append(outputs_t_b[i, 2:5])
                         new_rads_b.append(outputs_t_b[i, 5:8])
@@ -407,7 +407,7 @@ def train(args,
                 
                 sample_dict = {'ctr': ctrs_b, 
                                 'rad': rads_b, 
-                                'cls': np.zeros((len(ctrs_b), 1), dtype=np.int32),
+                                'cls': np.zeros((len(ctrs_b), ), dtype=np.int32),
                                 'spacing': spacing}
                 sample_annots.append(sample_dict)
                 
