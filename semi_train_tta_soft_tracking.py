@@ -125,7 +125,7 @@ def get_args():
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.4, help='threshold of pseudo background')
-    parser.add_argument('--semi_ema_alpha', type=int, default=0.9998, help='alpha of ema')
+    parser.add_argument('--semi_ema_alpha', type=float, default=0.9998, help='alpha of ema')
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     parser.add_argument('--pseudo_update_interval', type=int, default=-1, help='pseudo label update interval')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
@@ -137,7 +137,7 @@ def get_args():
     parser.add_argument('--select_fg_crop', action='store_true', default=False, help='select fg crop')
     parser.add_argument('--combine_cand', action='store_true', default=False, help='combine cand')
     # Semi tracking
-    parser.add_argument('--pseudo_update_ema_alpha', type=int, default=0.8, help='tracking interval')
+    parser.add_argument('--pseudo_update_ema_alpha', type=int, default=0.9, help='tracking interval')
     parser.add_argument('--pseudo_update_iou_threshold', type=float, default=0.05, help='iou threshold for tracking')
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
@@ -534,7 +534,10 @@ if __name__ == '__main__':
                                 detection_postprocess = semi_det_post_process,
                                 num_iters = len(train_loader_u),
                                 device = device)
+            original_num_unlabeled = len(train_loader_u.dataset)
             train_loader_u.dataset.confirm_pseudo_labels()
+            new_num_unlabeled = len(train_loader_u.dataset)
+            logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
         scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
         for key, value in train_metrics.items():

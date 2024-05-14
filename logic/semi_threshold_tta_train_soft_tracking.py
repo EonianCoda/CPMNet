@@ -260,13 +260,13 @@ def train(args,
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
                 Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
                 Cls_output = Cls_output.sigmoid()
-                ignore_offset = 1
-                Cls_output[:, :, :ignore_offset, :, :] = 0
-                Cls_output[:, :, :, :ignore_offset, :] = 0
-                Cls_output[:, :, :, :, :ignore_offset] = 0
-                Cls_output[:, :, -ignore_offset:, :, :] = 0
-                Cls_output[:, :, :, -ignore_offset:, :] = 0
-                Cls_output[:, :, :, :, -ignore_offset:] = 0
+                # ignore_offset = 1
+                # Cls_output[:, :, :ignore_offset, :, :] = 0
+                # Cls_output[:, :, :, :ignore_offset, :] = 0
+                # Cls_output[:, :, :, :, :ignore_offset] = 0
+                # Cls_output[:, :, -ignore_offset:, :, :] = 0
+                # Cls_output[:, :, :, -ignore_offset:, :] = 0
+                # Cls_output[:, :, :, :, -ignore_offset:] = 0
                 
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
@@ -304,7 +304,9 @@ def train(args,
                     history_ctrs.append(a['ctr'])
                     history_rads.append(a['rad'])
                     history_probs.append(a['prob'])
-                    
+            
+            d, h, w = weak_images.shape[-3:]
+            crop_bboxes = np.array([[0, 0, 0], [d, h, w]], dtype=np.float32)
             for batch_i in range(bs):
                 # Get current pseudo label
                 outputs_t_b = outputs_t[batch_i]
@@ -320,7 +322,10 @@ def train(args,
                 history_rads_b = history_rads[batch_i]
                 
                 if len(outputs_t_b) == 0: # No any pseudo label in this batch
-                    history_probs[batch_i] *= args.pseudo_update_ema_alpha
+                    history_valid_ious = compute_bbox3d_iou(history_bboxes, crop_bboxes)
+                    history_valid_mask = (history_valid_ious.max(axis=1) > 0.5)
+                    if np.count_nonzero(history_valid_mask) != 0:
+                        history_probs[batch_i][history_valid_mask] *= args.pseudo_update_ema_alpha
                     continue
                 elif len(history_ctrs_b) == 0: # No any pseudo label in history
                     history_ctrs[batch_i] = new_ctrs_b
@@ -330,9 +335,12 @@ def train(args,
                     
                 # Compute iou between history pseudo label and new pseudo label
                 new_bboxes = np.stack([new_ctrs_b - new_rads_b / 2, new_ctrs_b + new_rads_b / 2], axis=1)
-                history_bboxes = np.stack([history_ctrs_b - history_rads_b, history_ctrs_b + history_rads_b], axis=1)
-                ious = compute_bbox3d_iou(history_bboxes, new_bboxes)
+                history_bboxes = np.stack([history_ctrs_b - history_rads_b / 2, history_ctrs_b + history_rads_b / 2], axis=1)
                 
+                history_valid_ious = compute_bbox3d_iou(history_bboxes, crop_bboxes)
+                history_valid_mask = (history_valid_ious.max(axis=1) > 0.5)
+                
+                ious = compute_bbox3d_iou(history_bboxes, new_bboxes)
                 # According to the iou, update the pseudo label in dataset
                 history_matched_ious = ious.max(axis=1)
                 matched_indices = ious.argmax(axis=1)
@@ -342,7 +350,17 @@ def train(args,
                         history_probs[batch_i][i] = history_probs[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 1] * (1 - args.pseudo_update_ema_alpha)
                         history_ctrs[batch_i][i] = history_ctrs[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 2:5] * (1 - args.pseudo_update_ema_alpha)
                         history_rads[batch_i][i] = history_rads[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 5:8] * (1 - args.pseudo_update_ema_alpha)
-                    else: # penalize the pseudo label because of the low iou
+                    elif history_valid_mask[i] == True: # penalize the pseudo label because of the low iou
+                        # print('Low iou')
+                        # print('New bboxes = ', new_bboxes)
+                        # print('Low Iou bboxes = ', history_bboxes[i])
+                        # print('History bboxes = ', history_bboxes)
+                        # print('Ious = {}, his prob = {}, out prob = {}'.format(matched_iou, history_probs[batch_i][i], outputs_t_b[matched_idx, 1]))
+                        # if history_probs[batch_i][i] > 0.65:
+                        #     np.save('image.npy', weak_images[batch_i].cpu().numpy())
+                        #     np.save('new_bboxes.npy', new_bboxes)
+                        #     np.save('history_bboxes.npy', history_bboxes[i])
+                        #     raise ValueError('Low iou')
                         history_probs[batch_i][i] *= args.pseudo_update_ema_alpha
                 
                 # Add new pseudo label
