@@ -327,6 +327,13 @@ class UnLabeledDataset(Dataset):
             ctrs = dets[:, 1:4]
             rads = dets[:, 4:7]
             
+            valid_mask = probs >= 0.4
+            if np.count_nonzero(valid_mask) == 0:
+                continue
+            
+            probs = probs[valid_mask]
+            ctrs = ctrs[valid_mask]
+            rads = rads[valid_mask]
             labels[series_name] = {ALL_LOC: ctrs, 
                                    ALL_RAD: rads, 
                                    ALL_PROB: probs,
