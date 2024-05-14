@@ -9,6 +9,8 @@ from .utils import load_series_list, load_image, load_label, load_lobe, ALL_RAD,
 from torch.utils.data import Dataset
 from transform.ctr_transform import OffsetMinusCTR
 from transform.feat_transform import FlipFeatTransform
+from utils.box_utils import nms_3D
+import torch
 
 logger = logging.getLogger(__name__)
 
@@ -306,23 +308,32 @@ class UnLabeledDataset(Dataset):
             logger.warning('No pseudo label is updated')
             return
         
-        self.labels = self.ema_updated_labels
+        labels = dict()
+        for series_name, label in self.ema_updated_labels.items():
+            ctrs = label[ALL_LOC]
+            rads = label[ALL_RAD]
+            probs = label[ALL_PROB]
+            if len(ctrs) == 0:
+                continue
+            # Construct the pseudo labels
+            # (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
+            dets = np.concatenate([probs.reshape(-1, 1), ctrs.reshape(-1, 3), rads.reshape(-1, 3)], axis=1).astype('float32')
+            dets = torch.from_numpy(dets)
+            
+            # NMS
+            dets = nms_3D(dets, overlap=0.05, top_k=20)
+            dets = dets.numpy()
+            probs = dets[:, :1]
+            ctrs = dets[:, 1:4]
+            rads = dets[:, 4:7]
+            
+            labels[series_name] = {ALL_LOC: ctrs, 
+                                   ALL_RAD: rads, 
+                                   ALL_PROB: probs}
+        
+        self.set_pseu_labels(labels)
+        # Reset the updated labels
         self.ema_updated_labels = dict()
-        
-        # if keep_box_n > 0:
-        #     keep_topk_score = topk_score[keep_box_mask]
-        #     keep_topk_idx = topk_idx[keep_box_mask]
-            
-        #     # 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-        #     det = (-torch.ones((keep_box_n, 8))).to(device)
-        #     det[:, 0] = 1
-        #     det[:, 1] = keep_topk_score
-        #     det[:, 2:] = pred_bboxes[j][keep_topk_idx]
-        
-        #     keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
-        #     dets[j][:len(keep)] = det[keep.long()]
-            
-        
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
         lobe_path = self.lobe_paths[idx]
