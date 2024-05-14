@@ -199,12 +199,15 @@ class FlipTransform():
 
 class UnLabeledDataset(Dataset):
     def __init__(self, series_list_path: str, image_spacing: List[float], strong_aug = None, crop_fn=None, use_bg=False, 
-                 min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None, use_gt_crop=True):
+                 min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None, use_gt_crop=True, pseudo_remove_threshold=0.4,
+                 pseudo_update_ema_alpha = 0.9):
         self.series_list_path = series_list_path
         self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
         self.min_d = int(min_d)
         self.min_size = int(min_size)
+        self.psuedo_remove_threshold = pseudo_remove_threshold
+        self.pseudo_update_ema_alpha = pseudo_update_ema_alpha
         
         if self.min_d > 0:
             logger.info('When training, ignore nodules with depth less than {}'.format(min_d))
@@ -302,21 +305,40 @@ class UnLabeledDataset(Dataset):
             self.ema_updated_labels[series_name][ALL_PROB] = np.concatenate([self.ema_updated_labels[series_name][ALL_PROB], label[ALL_PROB]], axis=0)
         else:
             self.ema_updated_labels[series_name] = label
+            
     def confirm_pseudo_labels(self):
         if len(self.ema_updated_labels) == 0:
             logger.warning('No pseudo label is updated')
             return
         
         labels = dict()
-        for series_name, label in self.ema_updated_labels.items():
-            ctrs = label[ALL_LOC]
-            rads = label[ALL_RAD]
-            probs = label[ALL_PROB]
-            if len(ctrs) == 0:
+        for series_name in self.ema_updated_labels.keys():
+            new_label = self.ema_updated_labels[series_name]
+            new_ctrs = new_label[ALL_LOC]
+            new_rads = new_label[ALL_RAD]
+            new_probs = new_label[ALL_PROB]
+            
+            history_label = self.labels[series_name]
+            history_ctrs = history_label[ALL_LOC]
+            history_rads = history_label[ALL_RAD]
+            history_probs = history_label[ALL_PROB]
+            
+            if len(new_ctrs) == 0 and len(history_ctrs) == 0:
                 continue
             # Construct the pseudo labels
             # (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
-            dets = np.concatenate([probs.reshape(-1, 1), ctrs.reshape(-1, 3), rads.reshape(-1, 3)], axis=1).astype('float32')
+            if len(new_ctrs) > 0:
+                history_probs *= self.pseudo_update_ema_alpha # Penalize the history labels
+                new_dets = np.concatenate([new_probs.reshape(-1, 1), new_ctrs.reshape(-1, 3), new_rads.reshape(-1, 3)], axis=1).astype('float32')
+            else:
+                new_dets = np.zeros((0, 7), dtype=np.float32)
+                
+            if len(history_ctrs) > 0:
+                history_dets = np.concatenate([history_probs.reshape(-1, 1), history_ctrs.reshape(-1, 3), history_rads.reshape(-1, 3)], axis=1).astype('float32')
+            else:
+                history_dets = np.zeros((0, 7), dtype=np.float32)
+        
+            dets = np.concatenate([new_dets, history_dets], axis=0)          
             dets = torch.from_numpy(dets)
             
             # NMS
@@ -327,7 +349,7 @@ class UnLabeledDataset(Dataset):
             ctrs = dets[:, 1:4]
             rads = dets[:, 4:7]
             
-            valid_mask = probs >= 0.4
+            valid_mask = (probs >= self.psuedo_remove_threshold)
             if np.count_nonzero(valid_mask) == 0:
                 continue
             

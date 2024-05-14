@@ -630,4 +630,3 @@ if __name__ == '__main__':
             for key, value in test_metrics.items():
                 f.write('{}: {:.4f}\n'.format(key.ljust(max_length), value))
     writer.close()
-# %%

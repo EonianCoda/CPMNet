@@ -123,14 +123,17 @@ def get_args():
     # Semi hyper-parameters
     parser.add_argument('--burn_in_epochs', type=int, default=20, help='burn in epochs')
     parser.add_argument('--pos_target_topk_pseu', type=int, default=7, help='topk grids assigned as positives')
+    parser.add_argument('--semi_ema_alpha', type=float, default=0.998, help='alpha of ema')
+    parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
+    
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.4, help='threshold of pseudo background')
-    parser.add_argument('--semi_ema_alpha', type=float, default=0.9998, help='alpha of ema')
-    parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
-    parser.add_argument('--pseudo_update_interval', type=int, default=-1, help='pseudo label update interval')
-    parser.add_argument('--pseudo_crop_threshold', type=float, default=0.4, help='threshold of pseudo crop')
-    parser.add_argument('--pseudo_nms_topk', type=int, default=5, help='topk of pseudo nms')
+    parser.add_argument('--pseudo_crop_threshold', type=float, default=0.5, help='threshold of pseudo crop')
+    parser.add_argument('--pseudo_remove_threshold', type=float, default=0.4, help='threshold of pseudo remove')
+    
+    parser.add_argument('--pseudo_nms_topk', type=int, default=10, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
+    parser.add_argument('--pseudo_update_interval', type=int, default=-1, help='pseudo label update interval')
     
     parser.add_argument('--ema_buffer', action='store_true', default=False, help='use ema buffer')
     parser.add_argument('--sharpen_cls', type=float, default=-1, help='sharpen cls')
@@ -381,7 +384,8 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     # Build unlabeled dataloader
     strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, use_gt_crop=args.use_gt_crop,
-                                       strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
+                                       strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode, 
+                                       pseudo_remove_threshold = args.pseudo_remove_threshold, pseudo_update_ema_alpha=args.pseudo_update_ema_alpha)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_tta_train_tracking_collate_fn, 
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=True)
     
@@ -538,16 +542,16 @@ if __name__ == '__main__':
             
             # For analysis
             ema_update_labels_save_path = os.path.join(exp_folder, 'ema_update_labels', f'ema_updated_labels_{epoch}.pkl')
-            os.makedirs(ema_update_labels_save_path, exist_ok=True)
-            with open(os.path.dirname(ema_update_labels_save_path), 'wb') as f:
+            os.makedirs(os.path.dirname(ema_update_labels_save_path), exist_ok=True)
+            with open(ema_update_labels_save_path, 'wb') as f:
                 pickle.dump(train_loader_u.dataset.ema_updated_labels, f)
                 
             train_loader_u.dataset.confirm_pseudo_labels()
             
             # For analysis
             psuedo_label_save_path = os.path.join(exp_folder, 'history_psuedo_labels', f'history_psuedo_labels_{epoch}.pkl')
-            os.makedirs(psuedo_label_save_path, exist_ok=True)
-            with open(os.path.dirname(psuedo_label_save_path), 'wb') as f:
+            os.makedirs(os.path.dirname(psuedo_label_save_path), exist_ok=True)
+            with open(psuedo_label_save_path, 'wb') as f:
                 pickle.dump(train_loader_u.dataset.labels, f)
                 
             new_num_unlabeled = len(train_loader_u.dataset)
