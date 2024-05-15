@@ -21,7 +21,7 @@ class InstanceCrop(object):
         sample_cls (list[int], optional): The list of classes to sample patches from. Defaults to [0].
     """
 
-    def __init__(self, crop_size, overlap_ratio: float = 0.25, rand_trans=None, rand_rot=None, sample_num=2, blank_side=0, sample_cls=[0], out_stride = 4):
+    def __init__(self, crop_size, overlap_ratio: float = 0.25, rand_trans=None, rand_rot=None, sample_num=2, blank_side=0, sample_cls=[0], out_stride = 4, tp_ratio=0.75):
         """This is crop function with spatial augmentation for training Lesion Detection.
 
         Arguments:
@@ -56,7 +56,7 @@ class InstanceCrop(object):
         else:
             self.rand_rot = np.array(rand_rot)
 
-        self.tp_ratio = 0.75
+        self.tp_ratio = tp_ratio
         
     def get_crop_centers(self, shape, dim: int):
         crop = self.crop_size[dim]

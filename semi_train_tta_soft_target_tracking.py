@@ -8,7 +8,7 @@ import pickle
 import numpy as np
 from typing import Tuple, List
 # Loss
-from networks.loss_semi_soft import DetectionLoss, Unsupervised_DetectionLoss
+from networks.loss_semi_soft_target import DetectionLoss, Unsupervised_DetectionLoss
 ### data ###
 from dataload.dataset_semi_tta_tracking import TrainDataset, DetDataset, UnLabeledDataset
 # Build crop function
@@ -23,7 +23,7 @@ import transform as transform
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
-from logic.semi_threshold_tta_train_soft_tracking import train, burn_in_train
+from logic.semi_threshold_tta_train_soft_target_tracking import train, burn_in_train
 from logic.val import val
 from logic.pseudo_label import gen_pseu_labels
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
@@ -126,10 +126,10 @@ def get_args():
     parser.add_argument('--semi_ema_alpha', type=float, default=0.998, help='alpha of ema')
     parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
     
-    parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
-    parser.add_argument('--pseudo_background_threshold', type=float, default=0.4, help='threshold of pseudo background')
+    parser.add_argument('--pseudo_label_threshold', type=float, default=0.65, help='threshold of pseudo label')
     parser.add_argument('--pseudo_crop_threshold', type=float, default=0.5, help='threshold of pseudo crop')
-    parser.add_argument('--pseudo_remove_threshold', type=float, default=0.4, help='threshold of pseudo remove')
+    parser.add_argument('--pseudo_background_threshold', type=float, default=0.25, help='threshold of pseudo background')
+    parser.add_argument('--pseudo_soft_threshold', type=float, default=0.4, help='threshold of pseudo background')
     
     parser.add_argument('--pseudo_nms_topk', type=int, default=10, help='topk of pseudo nms')
     parser.add_argument('--pseudo_pickle_path', type=str, default='', help='pseudo pickle path')
@@ -139,6 +139,7 @@ def get_args():
     parser.add_argument('--ema_buffer', action='store_true', default=False, help='use ema buffer')
     parser.add_argument('--sharpen_cls', type=float, default=-1, help='sharpen cls')
     parser.add_argument('--select_fg_crop', action='store_true', default=False, help='select fg crop')
+    parser.add_argument('--select_more_soft_fg_crop', action='store_true', default=False, help='select more soft fg crop')
     parser.add_argument('--combine_cand', action='store_true', default=False, help='combine cand')
     
     # Semi tracking
@@ -146,6 +147,12 @@ def get_args():
     parser.add_argument('--pseudo_update_iou_threshold', type=float, default=0.05, help='iou threshold for tracking')
     parser.add_argument('--pseudo_tracking_warmup_epochs', type=int, default=5, help='tracking warmup epochs')
     
+    # Semi tracking soft target
+    parser.add_argument('--pseudo_cls_soft_focal_alpha', type=float, default=0.9, help='focal alpha')
+    parser.add_argument('--pseudo_cls_soft_focal_gamma', type=float, default=1.5, help='focal gamma')
+    
+    parser.add_argument('--soft_post_target_topk', type=int, default=5, help='topk grids assigned as positives')
+    parser.add_argument('--soft_pos_ignore_ratio', type=int, default=2)
     # Val hyper-parameters
     parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
@@ -248,11 +255,15 @@ def prepare_training(args, device, num_training_steps):
     unsupervised_detection_loss = Unsupervised_DetectionLoss(crop_size = args.crop_size,
                                                             pos_target_topk = args.pos_target_topk_pseu, 
                                                             pos_ignore_ratio = args.unlabeled_pos_ignore_ratio,
+                                                            soft_pos_target_topk = args.soft_post_target_topk,
+                                                            soft_pos_ignore_ratio = args.soft_pos_ignore_ratio,
                                                             cls_num_neg = args.cls_num_neg,
                                                             cls_neg_pos_ratio = args.cls_neg_pos_ratio,
                                                             cls_num_hard = args.cls_num_hard,
                                                             cls_fn_weight = args.cls_fn_weight,
-                                                            cls_fn_threshold = args.cls_fn_threshold)
+                                                            cls_fn_threshold = args.cls_fn_threshold,
+                                                            cls_soft_focal_alpha=args.pseudo_cls_soft_focal_alpha,
+                                                            cls_soft_focal_gamma=args.pseudo_cls_soft_focal_gamma)
 
     logger.info('Build post process "{}" for validation and testing'.format(args.det_post_process_class))
     
@@ -389,7 +400,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, use_gt_crop=args.use_gt_crop,
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode, 
-                                       pseudo_remove_threshold = args.pseudo_remove_threshold, pseudo_update_ema_alpha=args.pseudo_update_ema_alpha)
+                                       pseudo_remove_threshold = args.pseudo_soft_threshold, pseudo_update_ema_alpha=args.pseudo_update_ema_alpha)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_tta_train_tracking_collate_fn, 
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=True)
     
