@@ -621,7 +621,7 @@ if __name__ == '__main__':
     os.makedirs(test_save_dir, exist_ok=True)
     for (target_metric, model_path), best_epoch in zip(early_stopping.get_best_model_paths().items(), early_stopping.best_epoch):
         logger.info('Load best model from "{}"'.format(model_path))
-        load_states(model_path, device, model_s)
+        load_states(model_path, device, model_t)
         test_metrics = val(args = args,
                             model = model_t, # Use teacher model to validate
                             detection_postprocess=test_det_postprocess,
