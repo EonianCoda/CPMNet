@@ -220,7 +220,6 @@ class UnLabeledDataset(Dataset):
         elif self.norm_method == 'none':
             logger.info('Normalize image to have value ranged from 0 to 1')
         
-        
         self.all_dicom_paths = []
         self.all_series_names = []
         self.all_lobe_paths = []
@@ -233,13 +232,13 @@ class UnLabeledDataset(Dataset):
         self.series_infos = load_series_list(series_list_path)
         
         for folder, series_name in self.series_infos:
-            label_path = gen_label_path(folder, series_name)
-            label = load_label(label_path, self.image_spacing, min_d, min_size)
+            gt_label_path = gen_label_path(folder, series_name)
+            gt_label = load_label(gt_label_path, self.image_spacing, min_d, min_size)
             dicom_path = gen_dicom_path(folder, series_name)
             self.all_dicom_paths.append(dicom_path)
             self.all_series_names.append(series_name)
             self.all_lobe_paths.append(gen_lobe_path(folder, series_name))
-            self.gt_labels[series_name] = label
+            self.gt_labels[series_name] = gt_label
         
         self.dicom_paths = copy.deepcopy(self.all_dicom_paths)
         self.series_names = copy.deepcopy(self.all_series_names)

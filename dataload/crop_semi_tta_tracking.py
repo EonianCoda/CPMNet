@@ -145,7 +145,6 @@ class InstanceCrop(object):
         if len(gt_instance_loc) > 0:
             gt_inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, gt_nodule_bboxes) # [M, N]
             gt_all_ious = gt_inter_volumes / gt_nodule_volumes[np.newaxis, :] # [M, N]
-            gt_max_ious = np.max(gt_all_ious, axis=1) # [M]
         
         tp_indices = max_ious > 0
         neg_indices = ~tp_indices
