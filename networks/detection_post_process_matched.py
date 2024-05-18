@@ -69,7 +69,7 @@ class DetectionPostprocess(nn.Module):
                 all_num_matched.append([])
 
         if self.min_size > 0:
-            dets_volumes = dets[:, :, 4] * dets[:, :, 5] * dets[:, :, 6]
+            dets_volumes = dets[:, :, 5] * dets[:, :, 6] * dets[:, :, 7]
             dets[dets_volumes < self.min_size] = -1
                 
         return dets, all_num_matched

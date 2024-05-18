@@ -70,7 +70,7 @@ class DetectionPostprocess(nn.Module):
                 dets[j][:len(keep)] = det[keep.long()]
 
         if self.min_size > 0:
-            dets_volumes = dets[:, :, 4] * dets[:, :, 5] * dets[:, :, 6]
+            dets_volumes = dets[:, :, 5] * dets[:, :, 6] * dets[:, :, 7]
             dets[dets_volumes < self.min_size] = -1
                 
         return dets
