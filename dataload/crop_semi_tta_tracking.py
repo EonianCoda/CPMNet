@@ -127,10 +127,10 @@ class InstanceCrop(object):
             crop_centers = np.append(crop_centers, instance_crop, axis=0)
         elif len(gt_instance_loc) > 0 and use_gt_crop:
             if self.rand_trans is not None:
-                instance_crop = gt_instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(instance_loc), 3))
+                gt_instance_crop = gt_instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(gt_instance_loc), 3))
             else:
-                instance_crop = gt_instance_loc
-            crop_centers = np.append(crop_centers, instance_crop, axis=0)
+                gt_instance_crop = gt_instance_loc
+            crop_centers = np.append(crop_centers, gt_instance_crop, axis=0)
                 
         all_crop_bb_min = crop_centers - crop_size / 2
         all_crop_bb_min = np.clip(all_crop_bb_min, a_min=0, a_max=shape - crop_size)

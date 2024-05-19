@@ -261,9 +261,6 @@ class UnLabeledDataset(Dataset):
         """
         the shape in labels is pixel spacing, and the order is [z, y, x]
         """
-        if self.use_gt_crop:
-            raise ValueError('Cannot set pseudo labels when using ground truth crop')
-            
         new_labels = {}
         keep_indices = []
         for i, series_name in enumerate(self.all_series_names):
