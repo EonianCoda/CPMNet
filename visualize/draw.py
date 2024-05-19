@@ -24,7 +24,7 @@ def draw_bbox(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0)) -> np.
     return image
 
 def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0), half_image = True, axis_off = True, 
-                       save_path = None, extra_sup_title = None, show = False, offset = 0, bbox_offset = 0) -> None:
+                       save_path = None, extra_sup_title = None, show = False, offset = 0, bbox_offset = 0, z_offset = 0) -> None:
     """
     Args:
         image: a 3D image with shape [Z, Y, X, 3]
@@ -53,7 +53,21 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             expaned_bbox[1:3] = np.maximum(0, expaned_bbox[1:3] - bbox_offset)
             expaned_bbox[4:6] = np.minimum([max_y, max_x], expaned_bbox[4:6] + bbox_offset)
         bboxed_image = draw_bbox(image.copy(), expaned_bbox[np.newaxis, ...], color)
-        
+        if z_offset > 0:
+            z0 = max(0, z1 - z_offset)
+            z3 = min(max_z, z2 + z_offset)
+            z_expanded_bbox = expaned_bbox.copy()
+            z_expanded_bbox[0] = z0
+            z_expanded_bbox[3] = z1
+            if color == (255, 0, 0):
+                z_color = (0, 255, 0)
+            else:
+                z_color = (0, 0, 255)
+            bboxed_image = draw_bbox(bboxed_image, z_expanded_bbox[np.newaxis, ...], z_color)
+            
+            z_expanded_bbox[0] = z2
+            z_expanded_bbox[3] = z3
+            bboxed_image = draw_bbox(bboxed_image, z_expanded_bbox[np.newaxis, ...], z_color)
         # Crop image to save drawing time and space
         if half_image:
             if center_x < image.shape[2] / 2: # left

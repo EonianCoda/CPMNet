@@ -29,8 +29,9 @@ def get_args():
     parser.add_argument('--pred_path', type=str, required=True)
     parser.add_argument('--save_folder', type=str, required=True)
    
-    parser.add_argument('--offset', type=int, default=0)
-    parser.add_argument('--bbox_offset', type=int, default=0)
+    parser.add_argument('--offset', type=int, default=3)
+    parser.add_argument('--bbox_offset', type=int, default=3)
+    parser.add_argument('--z_offset', type=int, default=0)
     
     parser.add_argument('--no_fp', action='store_true', default=False)
     parser.add_argument('--tp', action='store_true', default=False)
@@ -38,11 +39,15 @@ def get_args():
     
     parser.add_argument('--hard_FP_thresh', type=float, default=0.7)
     parser.add_argument('--half_image', action='store_true', default=False)
+    
+    parser.add_argument('--single_series', type=str, default=None)
     args = parser.parse_args()
     return args
 
 if __name__ == '__main__':
     args = get_args()
+    if args.single_series != None:
+        args.save_folder = os.path.join(args.save_folder, args.single_series)
     hard_FP_save_folder = os.path.join(args.save_folder, 'hard_FP')
     TP_save_folder = os.path.join(args.save_folder, 'TP')
     FN_save_folder = os.path.join(args.save_folder, 'FN')
@@ -60,6 +65,44 @@ if __name__ == '__main__':
     with open(args.pred_path, 'r') as f:
         lines = f.readlines()[1:] # skip header
     nodules = [pred2nodulefinding(line) for line in lines]
+    
+    if args.single_series != None:
+        single_series_nodules = [n for n in nodules if n.series_name == args.single_series]
+        fp_nodules = [n for n in single_series_nodules if n.is_gt == False]
+        
+        FP_save_folder = os.path.join(args.save_folder, 'FP')
+        os.makedirs(FP_save_folder, exist_ok=True)
+        with get_progress_bar('Visualizing FP', len(fp_nodules)) as pbar:
+            for i, n in enumerate(fp_nodules):
+                img_path = gen_dicom_path(series_names_to_folder[n.series_name], n.series_name)
+                image = (load_image(img_path) * 255).astype(np.uint8)
+                bboxes = noduleFinding2cude([n], image.shape)
+                prob = n.prob
+                extra_sup_title = '{}, Prob: {:.2f}'.format(n.series_name, prob)
+                save_path = os.path.join(FP_save_folder, f'{n.series_name}_{i}.png')
+                draw_bbox_on_image(image, bboxes, (255, 0, 0), half_image=args.half_image, save_path=save_path, extra_sup_title=extra_sup_title, offset=args.offset, bbox_offset=args.bbox_offset, z_offset=args.z_offset)
+                pbar.update(1)
+        tp_nodules = [n for n in single_series_nodules if n.is_gt == True and n.prob > 0]
+        with get_progress_bar('Visualizing TP', len(tp_nodules)) as pbar:
+            for i, n in enumerate(tp_nodules):
+                img_path = gen_dicom_path(series_names_to_folder[n.series_name], n.series_name)
+                image = (load_image(img_path) * 255).astype(np.uint8)
+                pred_bboxes, gt_bboxes = gtNoduleFinding2cube([n], image.shape)
+                save_path = os.path.join(TP_save_folder, f'{n.series_name}_{i}.png')
+                extra_sup_title = '{}, Prob: {:.2f}'.format(n.series_name, n.prob)
+                draw_pseu_bbox_and_label_on_image(image, gt_bboxes, pred_bboxes, save_path = save_path, half_image=args.half_image, extra_sup_title=extra_sup_title)
+                pbar.update(1)
+        fn_nodules = [n for n in single_series_nodules if n.is_gt == True and n.prob == -1]
+        with get_progress_bar('Visualizing FN', len(fn_nodules)) as pbar:
+            for i, n in enumerate(fn_nodules):
+                img_path = gen_dicom_path(series_names_to_folder[n.series_name], n.series_name)
+                image = (load_image(img_path) * 255).astype(np.uint8)
+                bboxes = noduleFinding2cude([n], image.shape)
+                save_path = os.path.join(FN_save_folder, f'{n.series_name}_{i}.png')
+                draw_bbox_on_image(image, bboxes, (0, 255, 0), half_image=args.half_image, save_path = save_path, extra_sup_title=n.series_name, offset=args.offset, bbox_offset=args.bbox_offset, z_offset=args.z_offset)
+                pbar.update(1)
+        # Draw fp nodules
+        exit(0)
     
     # Draw hard false positive nodules
     if not args.no_fp:
