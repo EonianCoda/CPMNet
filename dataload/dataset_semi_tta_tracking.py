@@ -257,9 +257,6 @@ class UnLabeledDataset(Dataset):
         self.mmap_mode = mmap_mode
         self.use_gt_crop = use_gt_crop
         
-        if self.use_gt_crop:
-            self.labels = self.gt_labels
-        
     def set_pseu_labels(self, labels):
         """
         the shape in labels is pixel spacing, and the order is [z, y, x]

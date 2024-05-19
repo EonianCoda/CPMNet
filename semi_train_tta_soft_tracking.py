@@ -490,13 +490,12 @@ if __name__ == '__main__':
     
     original_psuedo_update_ema_alpha = float(args.pseudo_update_ema_alpha)
     
-    if not args.use_gt_crop:
-        psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
-        if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '': # Update pseudo labels only at the beginning
-            updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
-                                prob_threshold=args.pseudo_crop_threshold, pseudo_pickle_path=args.pseudo_pickle_path)
-        else:
-            logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
+    psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_0.pkl')
+    if args.pseudo_update_interval <= 0 or args.pseudo_pickle_path != '': # Update pseudo labels only at the beginning
+        updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
+                            prob_threshold=args.pseudo_crop_threshold, pseudo_pickle_path=args.pseudo_pickle_path)
+    else:
+        logger.info('Update pseudo labels every {} epochs with threshold'.format(args.pseudo_update_interval))
     
     if args.early_end_epoch > 0:
         end_epoch = args.early_end_epoch
@@ -507,7 +506,7 @@ if __name__ == '__main__':
         # args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
         args.pseudo_label_threshold = original_psuedo_label_threshold
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
-        if not args.use_gt_crop and epoch % args.pseudo_update_interval == 0 and args.pseudo_update_interval > 0 and not (epoch == 0 and args.pseudo_pickle_path != ''):
+        if epoch % args.pseudo_update_interval == 0 and args.pseudo_update_interval > 0 and not (epoch == 0 and args.pseudo_pickle_path != ''):
             # args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
             psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
             updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
