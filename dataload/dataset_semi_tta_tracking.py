@@ -410,7 +410,7 @@ class UnLabeledDataset(Dataset):
         if len(samples[ALL_RAD]) > 0 and not self.use_gt_crop:
             samples[ALL_RAD] = samples[ALL_RAD] * image_spacing # d, h, w
         samples['file_name'] = series_name
-        samples = self.crop_fn(samples, lobe, image_spacing)
+        samples = self.crop_fn(samples, lobe, image_spacing, self.use_gt_crop)
         random_samples = []
 
         raw_images = []

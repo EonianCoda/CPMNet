@@ -73,7 +73,7 @@ class InstanceCrop(object):
         
         return crop_centers
     
-    def __call__(self, sample, lobe, image_spacing: np.ndarray):
+    def __call__(self, sample, lobe, image_spacing: np.ndarray, use_gt_crop=False):
         image = sample['image'].astype('float32')
         all_loc = sample['all_loc']
         all_rad = sample['all_rad']
@@ -119,13 +119,19 @@ class InstanceCrop(object):
             crop_centers = crop_centers + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(crop_centers), 3))
             
         # Get crop centers for instance
-        if len(instance_loc) > 0:
+        if len(instance_loc) > 0 and not use_gt_crop:
             if self.rand_trans is not None:
                 instance_crop = instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(instance_loc), 3))
             else:
                 instance_crop = instance_loc
             crop_centers = np.append(crop_centers, instance_crop, axis=0)
-
+        elif len(gt_instance_loc) > 0 and use_gt_crop:
+            if self.rand_trans is not None:
+                instance_crop = gt_instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(instance_loc), 3))
+            else:
+                instance_crop = gt_instance_loc
+            crop_centers = np.append(crop_centers, instance_crop, axis=0)
+                
         all_crop_bb_min = crop_centers - crop_size / 2
         all_crop_bb_min = np.clip(all_crop_bb_min, a_min=0, a_max=shape - crop_size)
         all_crop_bb_min = np.unique(all_crop_bb_min, axis=0)
@@ -145,8 +151,15 @@ class InstanceCrop(object):
         if len(gt_instance_loc) > 0:
             gt_inter_volumes = compute_bbox3d_intersection_volume(all_crop_bboxes, gt_nodule_bboxes) # [M, N]
             gt_all_ious = gt_inter_volumes / gt_nodule_volumes[np.newaxis, :] # [M, N]
+            gt_max_ious = np.max(gt_all_ious, axis=1) # [M]
+        else:
+            gt_all_ious = np.zeros((len(all_crop_bboxes), 1))
+            gt_max_ious = np.zeros(len(all_crop_bboxes))    
         
-        tp_indices = max_ious > 0
+        if not use_gt_crop:
+            tp_indices = max_ious > 0
+        else:
+            tp_indices = gt_max_ious > 0
         neg_indices = ~tp_indices
 
         # Sample patches
