@@ -15,10 +15,10 @@ class NLLoss(nn.Module):
         mean = input
         # sigma = input_std.sigmoid()
         sigma = F.relu(input_std) + 1e-4
-        sigma_sq = torch.square(sigma)
-
-        loss = (torch.abs(target - mean) - 0.5) / sigma_sq + 0.5 * torch.log(sigma_sq)
-        loss = loss.sum(dim=1)
+        loss1 = torch.exp(-sigma) * (torch.abs(target - mean) - 0.5) + 0.5 * sigma
+        loss2 = 0.5 * torch.exp(-sigma) * ((target - mean) ** 2) + 0.5 * sigma
+        loss = torch.where(torch.abs(target - mean) > 1, loss1, loss2)
+        loss = loss.sum(dim=1).mean()
         return loss.mean()
 
         # smooth l1 ?

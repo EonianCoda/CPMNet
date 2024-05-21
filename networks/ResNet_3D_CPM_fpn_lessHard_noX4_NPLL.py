@@ -186,7 +186,7 @@ class ClsRegHead(nn.Module):
         
         self.cls_output = nn.Conv3d(feature_size, 1, kernel_size=3, padding=1)
         self.shape_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
-        self.shape_std_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1, bias=False)
+        self.shape_std_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
         self.offset_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
         
     def forward(self, x):
@@ -332,4 +332,6 @@ class Resnet18(nn.Module):
         nn.init.constant_(self.head.offset_output.weight, 0)
         nn.init.constant_(self.head.offset_output.bias, 0.05)
         
-        nn.init.normal_(self.head.shape_std_output.weight, 0, 0.0001)
+        # nn.init.normal_(self.head.shape_std_output.weight, 0, 0.0001) 
+        nn.init.constant_(self.head.shape_std_output.weight, 0)
+        nn.init.constant_(self.head.shape_std_output.bias, 0.5)
