@@ -7,7 +7,6 @@ import logging
 import numpy as np
 from typing import Tuple, Any
 ### data ###
-from dataload.dataset import TrainDataset, DetDataset
 from dataload.utils import get_image_padding_value
 from dataload.collate import train_collate_fn, infer_collate_fn
 from dataload.split_combine import SplitComb
@@ -49,6 +48,7 @@ def get_args():
     parser.add_argument('--resume_folder', type=str, default='', help='resume folder')
     parser.add_argument('--pretrained_model_path', type=str, default='')
     # Data
+    parser.add_argument('--data_set_class', type=str, default='dataload.dataset', help='data set class')
     parser.add_argument('--train_set', type=str, help='train_list')
     parser.add_argument('--val_set', type=str, help='val_list')
     parser.add_argument('--test_set', type=str, help='test_list')
@@ -65,8 +65,9 @@ def get_args():
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
-    parser.add_argument('--not_use_itk_rotate', action='store_true', default=False, help='not use itk rotate')
-    parser.add_argument('--my_rot', action='store_true', default=False, help='not use itk rotate')
+    parser.add_argument('--use_itk_rotate', action='store_true', default=False, help='use itk rotate')
+    parser.add_argument('--my_rot', action='store_true', default=False, help='use our rotate')
+    parser.add_argument('--crop_designed', action='store_true', default=False, help='use designed crop')
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
     parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
     parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
@@ -79,9 +80,9 @@ def get_args():
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
     # EMA
-    parser.add_argument('--apply_ema', action='store_true', default=False, help='apply ema')
+    parser.add_argument('--not_apply_ema', action='store_true', default=False, help='apply ema')
     parser.add_argument('--ema_momentum', type=float, default=0.998, help='ema decay')
-    parser.add_argument('--ema_warmup_epochs', type=int, default=150, help='warmup epochs for ema')
+    parser.add_argument('--ema_warmup_epochs', type=int, default=-1, help='warmup epochs for ema')
     # Loss hyper-parameters
     parser.add_argument('--loss_class', type=str, default='networks.loss_NPLL', help='loss class')
     
@@ -91,11 +92,12 @@ def get_args():
     parser.add_argument('--iters_to_accumulate', type=int, default=1, help='number of batches to wait before updating the weights')
     parser.add_argument('--cls_num_neg', type=int, default=10000, help='number of negatives (-1 means all)')
     parser.add_argument('--cls_neg_pos_ratio', type=int, default=100, help='ratio of negatives to positives in positive samples')
-    parser.add_argument('--cls_num_hard', type=int, default=100, help='number of hard negatives in negtative samples(-1 means all)')
+    parser.add_argument('--cls_num_hard', type=int, default=200, help='number of hard negatives in negtative samples(-1 means all)')
     parser.add_argument('--cls_fn_weight', type=float, default=4.0, help='weights of cls_fn')
     parser.add_argument('--cls_fn_threshold', type=float, default=0.8, help='threshold of cls_fn')
     
     parser.add_argument('--cls_focal_alpha', type=float, default=0.75, help='alpha of focal loss')
+    parser.add_argument('--cls_focal_gamma', type=float, default=2.0, help='gamma of focal loss')
     
     parser.add_argument('--cls_hard_fp_thrs1', type=float, default=0.5, help='threshold of cls_hard_fp1')
     parser.add_argument('--cls_hard_fp_thrs2', type=float, default=0.7, help='threshold of cls_hard_fp2')
@@ -112,10 +114,10 @@ def get_args():
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')
-    parser.add_argument('--val_iou_threshold', type=float, default=0.1, help='iou threshold for validation')
+    parser.add_argument('--val_iou_threshold', type=float, default=0.2, help='iou threshold for validation')
     parser.add_argument('--val_fixed_prob_threshold', type=float, default=0.65, help='fixed probability threshold for validation')
-    parser.add_argument('--val_det_threshold', type=float, default=0.2, help='detection threshold')
-    parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.2, 0.5, 0.7], help='froc det thresholds')
+    parser.add_argument('--val_det_threshold', type=float, default=0.4, help='detection threshold')
+    parser.add_argument('--froc_det_thresholds', nargs='+', type=float, default=[0.4, 0.5, 0.7], help='froc det thresholds')
     # Val technical settings
     parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
     # Test hyper-parameters
@@ -197,7 +199,8 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
                                    cls_hard_fp_thrs2 = args.cls_hard_fp_thrs2,
                                    cls_hard_fp_w1 = args.cls_hard_fp_w1,
                                    cls_hard_fp_w2 = args.cls_hard_fp_w2,
-                                   cls_focal_alpha = args.cls_focal_alpha)
+                                   cls_focal_alpha = args.cls_focal_alpha,
+                                   cls_focal_gamma = args.cls_focal_gamma)
                                         
     model = Resnet18(norm_type = args.norm_type,
                      head_norm = args.head_norm, 
@@ -242,13 +245,15 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
     logger.info('Warmup learning rate from {:.1e} to {:.1e} for {} epochs and then reduce learning rate from {:.1e} to {:.1e} by cosine annealing with {} cycles'.format(args.lr * args.warmup_gamma, args.lr, args.warmup_epochs, args.lr, args.lr * args.decay_gamma, args.decay_cycle))
 
     # Build EMA
-    if args.apply_ema:
-        ema_warmup_steps = int(args.ema_warmup_epochs * num_training_steps) if args.ema_warmup_epochs > 0 else 0
+    if args.not_apply_ema:
+        ema = None
+    else:
+        if args.ema_warmup_epochs == -1:
+            ema_warmup_steps = int((args.start_val_epoch + 20) * num_training_steps)
+        else:
+            ema_warmup_steps = int(args.ema_warmup_epochs * num_training_steps) if args.ema_warmup_epochs > 0 else 0
         logger.info('Apply EMA with decay: {:.4f}, warmup steps: {}'.format(args.ema_momentum, ema_warmup_steps))
         ema = EMA(model, momentum = args.ema_momentum, warmup_steps = ema_warmup_steps)
-        ema.register()
-    else:
-        ema = None
 
     if args.resume_folder != '':
         logger.info('Resume experiment "{}"'.format(os.path.dirname(args.resume_folder)))
@@ -270,7 +275,10 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
     elif args.pretrained_model_path != '':
         logger.info('Load model from "{}"'.format(args.pretrained_model_path))
         load_states(args.pretrained_model_path, device, model)
-        
+
+    if args.resume_folder == '' and ema is not None:
+        ema.register()
+    
     return start_epoch, model, optimizer, scheduler_warm, ema, val_detection_postprocess, test_detection_postprocess
 
 def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: float, blank_side: int):
@@ -296,12 +304,13 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     
     logger.info('Crop size: {}, overlap size: {}, rand_trans: {}, pad value: {}, tp_ratio: {:.3f}'.format(crop_size, overlap_size, rand_trans, pad_value, args.tp_ratio))
     
-    if args.not_use_itk_rotate:
-        from dataload.crop_fast import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+    if args.use_itk_rotate:
+        from dataload.crop import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
         mmap_mode = None
-        logger.info('Not use itk rotate')
+        logger.info('Use itk rotate {}'.format(args.rand_rot))
     elif args.use_rand_spacing:
         from dataload.crop_rand_spacing import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
@@ -316,19 +325,27 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         logger.info('Use itk rotate {} and crop partial with iou threshold {}'.format(args.rand_rot, args.crop_tp_iou))
     elif args.my_rot:
         from dataload.crop_fast_rot import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=[15, 0, 0],
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = None
         logger.info('Use my rotate')
-    else:
-        from dataload.crop import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+    elif args.crop_designed:
+        from dataload.crop_fast_designed import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
         mmap_mode = None
-        logger.info('Use itk rotate {}'.format(args.rand_rot))
-
-    train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
-    train_dataset = TrainDataset(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
+        logger.info('Use crop designed')
+    else:
+        from dataload.crop_fast import InstanceCrop
+        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
+                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
+        train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
+        mmap_mode = None
+        logger.info('Not use itk rotate')
+    
+    train_set_class = build_class('{}.TrainDataset'.format(args.data_set_class))
+    train_dataset = train_set_class(series_list_path = args.train_set, crop_fn = crop_fn_train, image_spacing=IMAGE_SPACING, transform_post = train_transform, 
                                  min_d=args.min_d, min_size = args.min_size, use_bg = args.use_bg, norm_method=args.data_norm_method, mmap_mode=mmap_mode)
     
     train_loader = DataLoader(train_dataset, 
@@ -349,10 +366,11 @@ def get_val_test_dataloder(args) -> Tuple[DataLoader, DataLoader]:
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
-    val_dataset = DetDataset(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
+    det_set_class = build_class('{}.DetDataset'.format(args.data_set_class))
+    val_dataset = det_set_class(series_list_path = args.val_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     val_loader = DataLoader(val_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
 
-    test_dataset = DetDataset(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
+    test_dataset = det_set_class(series_list_path = args.test_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     test_loader = DataLoader(test_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     
     logger.info("There are {} validation samples and {} batches in '{}'".format(len(val_loader.dataset), len(val_loader), args.val_set))
@@ -366,7 +384,8 @@ def get_train_infer_dataloader(args) -> DataLoader:
     
     split_comber = SplitComb(crop_size=crop_size, overlap_size=overlap_size, pad_value=pad_value, do_padding=False)
     
-    train_infer_dataset = DetDataset(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
+    det_set_class = build_class('{}.DetDataset'.format(args.data_set_class))
+    train_infer_dataset = det_set_class(series_list_path = args.train_set, SplitComb=split_comber, image_spacing=IMAGE_SPACING, norm_method=args.data_norm_method, apply_lobe=args.apply_lobe, out_stride=args.out_stride)
     train_infer_loader = DataLoader(train_infer_dataset, batch_size=args.val_batch_size, shuffle=False, num_workers=min(args.val_batch_size, args.max_workers), pin_memory=True, drop_last=False, collate_fn=infer_collate_fn)
     return train_infer_loader
 

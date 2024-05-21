@@ -186,7 +186,7 @@ class ClsRegHead(nn.Module):
         
         self.cls_output = nn.Conv3d(feature_size, 1, kernel_size=3, padding=1)
         self.shape_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
-        self.shape_std_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
+        self.shape_std_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1, bias=False)
         self.offset_output = nn.Conv3d(feature_size, 3, kernel_size=3, padding=1)
         
     def forward(self, x):
@@ -312,8 +312,7 @@ class Resnet18(nn.Module):
         "decode"
         out = self.head(feats)
         if self.training and self.detection_loss != None:
-            cls_pos_loss, cls_neg_loss, reg_loss, reg_std_loss, offset_loss, iou_loss = self.detection_loss(out, labels, device=self.device)
-            return cls_pos_loss, cls_neg_loss, reg_loss, reg_std_loss, offset_loss, iou_loss
+            return self.detection_loss(out, labels, device=self.device)
         return out
 
     def _init_weight(self):
@@ -333,5 +332,4 @@ class Resnet18(nn.Module):
         nn.init.constant_(self.head.offset_output.weight, 0)
         nn.init.constant_(self.head.offset_output.bias, 0.05)
         
-        nn.init.constant_(self.head.shape_std_output.weight, 0)
-        nn.init.constant_(self.head.shape_std_output.bias, 0.5)
+        nn.init.normal_(self.head.shape_std_output.weight, 0, 0.0001)

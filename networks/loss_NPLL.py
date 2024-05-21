@@ -11,18 +11,23 @@ class NLLoss(nn.Module):
     def __init__(self, device):
         super(NLLoss, self).__init__()
         self.device = device
-    def forward(self, input, input_std, target, iou_weight=None):
+    def forward(self, input, input_std, target):
         mean = input
-        sigma = input_std.sigmoid()
+        # sigma = input_std.sigmoid()
+        sigma = F.relu(input_std) + 1e-4
         sigma_sq = torch.square(sigma)
+
+        loss = (torch.abs(target - mean) - 0.5) / sigma_sq + 0.5 * torch.log(sigma_sq)
+        loss = loss.sum(dim=1)
+        return loss.mean()
 
         # smooth l1 ?
         # Gradient explosion and predict log(2*sigma) instead?
-        first_term = torch.square(target - mean) / (2 * sigma_sq) # Shape = (b * num_points, 3), 3 = z, y, x
-        second_term = 0.5 * torch.log(sigma_sq)
-        sum_before_iou = (first_term + second_term).sum(dim=1) + 2 * torch.log(2 * torch.Tensor([math.pi]).to(self.device))
-        loss_mean = (sum_before_iou * iou_weight).mean()
-        return loss_mean
+        # first_term = torch.square(target - mean) / (2 * sigma_sq) # Shape = (b * num_points, 3), 3 = z, y, x
+        # second_term = 0.5 * torch.log(sigma_sq)
+        # sum_before_iou = (first_term + second_term).sum(dim=1) + 2 * torch.log(2 * torch.Tensor([math.pi]).to(self.device))
+        # loss_mean = (sum_before_iou * iou_weight).mean()
+        # return loss_mean
 
 class DetectionLoss(nn.Module):
     def __init__(self, 
@@ -38,7 +43,8 @@ class DetectionLoss(nn.Module):
                  cls_hard_fp_thrs2 = 0.7,
                  cls_hard_fp_w1 = 1.5,
                  cls_hard_fp_w2 = 2.0,
-                 cls_focal_alpha = 0.75):
+                 cls_focal_alpha = 0.75,
+                 cls_focal_gamma = 2.0):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -57,6 +63,7 @@ class DetectionLoss(nn.Module):
         self.cls_hard_fp_w2 = cls_hard_fp_w2
         
         self.cls_focal_alpha = cls_focal_alpha
+        self.cls_focal_gamma = cls_focal_gamma
         self.nll_loss = NLLoss(device=torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu'))
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, 
@@ -166,6 +173,7 @@ class DetectionLoss(nn.Module):
     def target_proprocess(annotations: torch.Tensor, 
                           device, 
                           input_size: List[int],
+                          stride: List[int],
                           mask_ignore: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Preprocess the annotations to generate the targets for the network.
         In this function, we remove some annotations that the area of nodule is too small in the crop box. (Probably cropped by the edge of the image)
@@ -217,7 +225,13 @@ class DetectionLoss(nn.Module):
                     bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
                     bbox_annotation_target.append(bbox.view(1, 10))
                 else:
-                    mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
+                    z1 = int(torch.floor(z1 / stride[0]))
+                    z2 = min(int(torch.ceil(z2 / stride[0])), mask_ignore.size(2))
+                    y1 = int(torch.floor(y1 / stride[1]))
+                    y2 = min(int(torch.ceil(y2 / stride[1])), mask_ignore.size(3))
+                    x1 = int(torch.floor(x1 / stride[2]))
+                    x2 = min(int(torch.ceil(x2 / stride[2])), mask_ignore.size(4))
+                    mask_ignore[sample_i, 0, z1 : z2, y1 : y2, x1 : x2] = -1
             if len(bbox_annotation_target) > 0:
                 bbox_annotation_target = torch.cat(bbox_annotation_target, 0)
                 annotations_new[sample_i, :len(bbox_annotation_target)] = bbox_annotation_target
@@ -350,7 +364,8 @@ class DetectionLoss(nn.Module):
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         pred_shape_std = pred_shape_std.permute(0, 2, 1).contiguous()
         # process annotations
-        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, target_mask_ignore)
+        stride_list = [self.crop_size[0] / Cls.size()[2], self.crop_size[1] / Cls.size()[3], self.crop_size[2] / Cls.size()[4]]
+        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, stride_list, target_mask_ignore)
         target_mask_ignore = target_mask_ignore.view(batch_size, 1,  -1)
         target_mask_ignore = target_mask_ignore.permute(0, 2, 1).contiguous()
         # generate center points. Only support single scale feature
@@ -378,7 +393,8 @@ class DetectionLoss(nn.Module):
                                                    hard_fp_thrs2=self.cls_hard_fp_thrs2,
                                                     hard_fp_w1=self.cls_hard_fp_w1,
                                                     hard_fp_w2=self.cls_hard_fp_w2,
-                                                    alpha=self.cls_focal_alpha)
+                                                    alpha=self.cls_focal_alpha,
+                                                    gamma=self.cls_focal_gamma)
         
         # Only calculate the loss of positive samples                                 
         fg_mask = target_scores.squeeze(-1).bool()
@@ -393,8 +409,7 @@ class DetectionLoss(nn.Module):
             reg_loss = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             reg_std_loss = self.nll_loss(input = pred_shapes[fg_mask], 
                                         input_std = pred_shape_std[fg_mask], 
-                                        target = target_shape[fg_mask],
-                                        iou_weight = iou)
+                                        target = target_shape[fg_mask])
             
             offset_loss = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
         
