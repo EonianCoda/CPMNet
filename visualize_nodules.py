@@ -119,7 +119,7 @@ if __name__ == '__main__':
                     bboxes = noduleFinding2cude([nodule], image.shape)
                     prob = nodule.prob
                     extra_sup_title = '{}, Prob: {:.2f}'.format(series_name, prob)
-                    draw_bbox_on_image(image, bboxes, (255, 0, 0), half_image=args.half_image, save_path=save_path, extra_sup_title=extra_sup_title, offset=args.offset, bbox_offset=args.bbox_offset)
+                    draw_bbox_on_image(image, bboxes, (255, 0, 0), half_image=args.half_image, save_path=save_path, extra_sup_title=extra_sup_title, offset=args.offset, bbox_offset=args.bbox_offset, z_offset=args.z_offset)
                 pbar.update(1)
         write_csv(hard_FP_nodules, os.path.join(hard_FP_save_folder, 'hard_FP.csv'))
             
@@ -157,5 +157,5 @@ if __name__ == '__main__':
                 for i, nodule in enumerate(nodule_findings):
                     save_path = os.path.join(FN_save_folder, f'{series_name}_{i}.png')
                     bboxes = noduleFinding2cude([nodule], image.shape)
-                    draw_bbox_on_image(image, bboxes, (0, 255, 0), half_image=args.half_image, save_path=save_path, extra_sup_title=series_name, offset=args.offset, bbox_offset=args.bbox_offset)
+                    draw_bbox_on_image(image, bboxes, (0, 255, 0), half_image=args.half_image, save_path=save_path, extra_sup_title=series_name, offset=args.offset, bbox_offset=args.bbox_offset, z_offset=args.z_offset)
                 pbar.update(1)
