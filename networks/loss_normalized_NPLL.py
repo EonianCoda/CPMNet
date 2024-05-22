@@ -26,10 +26,28 @@ def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_sh
     center_zyx = (anchor_points + pred_offsets * 2) * stride_tensor
     return torch.cat((center_zyx, pred_shapes * MAX_LENGTH), dim)  # zyxdhw bbox
 
+import math
 class NLLoss(nn.Module):
-    def __init__(self, device):
+    def __init__(self, device, beta=0.05):
         super(NLLoss, self).__init__()
         self.device = device
+        self.beta = beta
+        
+    def forward(self, input, input_std, target, iou_weight=None):
+        mean = input
+        n = torch.abs(target - mean)
+        cond = n < self.beta
+        l1_smooth = torch.where(cond, 0.5 * n**2 / self.beta, n - 0.5 * self.beta)
+        loss = torch.exp(-input_std) * l1_smooth + 0.5 * input_std
+        loss = loss.sum(dim=1)
+        
+        if iou_weight is None:
+            return loss.mean()
+        else:
+            iou_weight = iou_weight.squeeze(dim=1)
+            loss = loss * iou_weight
+            return loss.mean()
+
     def forward(self, input, input_std, target, iou_weight=None):
         mean = input
         sigma = input_std.sigmoid()
@@ -50,8 +68,9 @@ class NLLoss(nn.Module):
         first_term = torch.square(target - mean) / (2 * sigma_sq) # Shape = (b * num_points, 3), 3 = z, y, x
         second_term = 0.5 * torch.log(sigma_sq)
         sum_before_iou = (first_term + second_term).sum(dim=1)
-        
+        sum_before_iou += 2 * torch.log(2 * torch.Tensor([math.pi])).to(self.device)
         if iou_weight is not None:
+            iou_weight = iou_weight.squeeze(dim=1)
             loss_mean = (sum_before_iou * iou_weight)
         else:
             loss_mean = sum_before_iou
@@ -441,12 +460,13 @@ class DetectionLoss(nn.Module):
             offset_loss = torch.tensor(0.0, device=device)
             iou_loss = torch.tensor(0.0, device=device)
         else:
-            reg_loss = torch.nn.SmoothL1Loss(reduction='none', beta=0.05)(pred_shapes[fg_mask], target_shape[fg_mask]).mean()
+            # reg_loss = torch.nn.SmoothL1Loss(reduction='none', beta=0.05)(pred_shapes[fg_mask], target_shape[fg_mask]).mean()
+            reg_loss = torch.tensor(0.0, device=device)
             offset_loss = torch.nn.SmoothL1Loss(reduction='none', beta=0.05)(pred_offsets[fg_mask], target_offset[fg_mask]).mean()
             iou_loss, iou = self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])
             reg_std_loss = self.nll_loss(input = pred_shapes[fg_mask], 
                                         input_std = pred_shape_std[fg_mask], 
-                                        target = target_shape[fg_mask])
-                                        # iou_weight = iou)
+                                        target = target_shape[fg_mask],
+                                        iou_weight = iou.detach())
         
         return cls_pos_loss, cls_neg_loss, reg_loss, reg_std_loss, offset_loss, iou_loss

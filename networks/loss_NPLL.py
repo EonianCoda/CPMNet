@@ -11,15 +11,20 @@ class NLLoss(nn.Module):
     def __init__(self, device):
         super(NLLoss, self).__init__()
         self.device = device
-    def forward(self, input, input_std, target):
+    def forward(self, input, input_std, target, iou_weight=None):
         mean = input
         # sigma = input_std.sigmoid()
         sigma = F.relu(input_std) + 1e-4
         loss1 = torch.exp(-sigma) * (torch.abs(target - mean) - 0.5) + 0.5 * sigma
         loss2 = 0.5 * torch.exp(-sigma) * ((target - mean) ** 2) + 0.5 * sigma
         loss = torch.where(torch.abs(target - mean) > 1, loss1, loss2)
-        loss = loss.sum(dim=1).mean()
-        return loss.mean()
+        loss = loss.sum(dim=1)
+        if iou_weight is None:
+            return loss.mean()
+        else:
+            iou_weight = iou_weight.squeeze(dim=1)
+            loss = loss * iou_weight
+            return loss.mean()
 
         # smooth l1 ?
         # Gradient explosion and predict log(2*sigma) instead?
@@ -409,7 +414,8 @@ class DetectionLoss(nn.Module):
             reg_loss = torch.abs(pred_shapes[fg_mask] - target_shape[fg_mask]).mean()
             reg_std_loss = self.nll_loss(input = pred_shapes[fg_mask], 
                                         input_std = pred_shape_std[fg_mask], 
-                                        target = target_shape[fg_mask])
+                                        target = target_shape[fg_mask],
+                                        iou_weight = iou)
             
             offset_loss = torch.abs(pred_offsets[fg_mask] - target_offset[fg_mask]).mean()
         

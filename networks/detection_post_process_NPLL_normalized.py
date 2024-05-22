@@ -37,6 +37,8 @@ class DetectionPostprocess(nn.Module):
         Cls = output['Cls']
         Shape = output['Shape']
         Offset = output['Offset']
+        Shape_std = output['Shape_std']
+        Shape_std = torch.sqrt(torch.exp(Shape_std))
         batch_size = Cls.size()[0]
         anchor_points, stride_tensor = make_anchors(Cls, self.crop_size, 0)
         
@@ -46,16 +48,19 @@ class DetectionPostprocess(nn.Module):
                 Cls[lobe_mask == 0] = -20 # ignore the lobe 0, -20 indicates the background, sigmoid(-20) is close to 0
             else:
                 Cls[lobe_mask == 0] = 1e-4
+        
         # view shape
         pred_scores = Cls.view(batch_size, 1, -1)
         pred_shapes = Shape.view(batch_size, 3, -1)
         pred_offsets = Offset.view(batch_size, 3, -1)
-
+        pred_shapes_std = Shape_std.view(batch_size, 3, -1)
+        
         pred_scores = pred_scores.permute(0, 2, 1).contiguous()
         if is_logits:
             pred_scores = pred_scores.sigmoid()
         pred_shapes = pred_shapes.permute(0, 2, 1).contiguous()
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
+        pred_shapes_std = pred_shapes_std.permute(0, 2, 1).contiguous()
         
         # recale to input_size
         input_size = torch.tensor(self.crop_size).to(device)
@@ -63,7 +68,7 @@ class DetectionPostprocess(nn.Module):
         # Get the topk scores and indices
         topk_scores, topk_indices = torch.topk(pred_scores.squeeze(dim=2), self.topk, dim=-1, largest=True)
         
-        dets = (-torch.ones((batch_size, self.topk, 8))).to(device)
+        dets = (-torch.ones((batch_size, self.topk, 11))).to(device)
         for j in range(batch_size):
             # Get indices of scores greater than threshold
             topk_score = topk_scores[j]
@@ -75,13 +80,14 @@ class DetectionPostprocess(nn.Module):
                 keep_topk_score = topk_score[keep_box_mask]
                 keep_topk_idx = topk_idx[keep_box_mask]
                 
-                # 1, prob, ctr_z, ctr_y, ctr_x, d, h, w
-                det = (-torch.ones((keep_box_n, 8))).to(device)
+                # 1, prob, ctr_z, ctr_y, ctr_x, d, h, w, d_std, h_std, w_std
+                det = (-torch.ones((keep_box_n, 11))).to(device)
                 det[:, 0] = 1
                 det[:, 1] = keep_topk_score
-                det[:, 2:] = pred_bboxes[j][keep_topk_idx]
+                det[:, 2:8] = pred_bboxes[j][keep_topk_idx]
+                det[:, 8:] = pred_shapes_std[j][keep_topk_idx]
             
-                keep = nms_3D(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
+                keep = nms_3D(det[:, 1:8], overlap=self.nms_threshold, top_k=self.nms_topk)
                 dets[j][:len(keep)] = det[keep.long()]
 
         if self.min_size > 0:

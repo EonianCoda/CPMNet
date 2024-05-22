@@ -16,7 +16,7 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 ### logic ###
 from logic.train_NPLL import train
-from logic.val import val
+from logic.val_NPLL import val
 from logic.utils import write_metrics, save_states, load_states, get_memory_format
 ### optimzer ###
 from optimizer.optim import AdamW
@@ -110,7 +110,7 @@ def get_args():
     parser.add_argument('--lambda_shape_std', type=float, default=1.0, help='weights of reg')
     parser.add_argument('--lambda_iou', type=float, default=1.0, help='weights of iou loss')
     # Val hyper-parameters
-    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process')
+    parser.add_argument('--det_post_process_class', type=str, default='networks.detection_post_process_NPLL_normalized')
     parser.add_argument('--det_topk', type=int, default=60, help='topk detections')
     parser.add_argument('--det_nms_threshold', type=float, default=0.05, help='detection nms threshold')
     parser.add_argument('--det_nms_topk', type=int, default=20, help='detection nms topk')

@@ -327,11 +327,10 @@ class Resnet18(nn.Module):
         nn.init.constant_(self.head.cls_output.bias, -math.log((1.0 - prior) / prior))
 
         nn.init.constant_(self.head.shape_output.weight, 0)
-        nn.init.constant_(self.head.shape_output.bias, 0.5)
+        nn.init.constant_(self.head.shape_output.bias, 0.25)
 
         nn.init.constant_(self.head.offset_output.weight, 0)
         nn.init.constant_(self.head.offset_output.bias, 0.05)
         
-        # nn.init.normal_(self.head.shape_std_output.weight, 0, 0.0001) 
         nn.init.constant_(self.head.shape_std_output.weight, 0)
-        nn.init.constant_(self.head.shape_std_output.bias, 0.5)
+        nn.init.constant_(self.head.shape_std_output.bias, 0.05)

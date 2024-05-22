@@ -6,6 +6,8 @@ import torch.nn.functional as F
 import numpy as np
 from utils.box_utils import make_anchors, zyxdhw2zyxzyx
 
+MAX_LENGTH = 32
+
 def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_shapes: torch.Tensor, stride_tensor: torch.Tensor, input_size: torch.Tensor, dim=-1) -> torch.Tensor:
     """Apply the predicted offsets and shapes to the anchor points to get the predicted bounding boxes.
     anchor_points is the center of the anchor boxes, after applying the stride, new_center = (center + pred_offsets) * stride_tensor
@@ -22,7 +24,7 @@ def bbox_decode(anchor_points: torch.Tensor, pred_offsets: torch.Tensor, pred_sh
         A tensor of shape (bs, num_anchors, 6) containing the predicted bounding boxes in the format (z, y, x, d, h, w).
     """
     center_zyx = (anchor_points + pred_offsets * 2) * stride_tensor
-    return torch.cat((center_zyx, 2 * pred_shapes * input_size), dim)  # zyxdhw bbox
+    return torch.cat((center_zyx, pred_shapes * MAX_LENGTH), dim)  # zyxdhw bbox
 
 class DetectionLoss(nn.Module):
     def __init__(self, 
@@ -290,8 +292,9 @@ class DetectionLoss(nn.Module):
         # The coordinates in annotations is on original image, we need to convert it to the coordinates on the feature map.
         ctr_gt_boxes = annotations[:, :, :3] / stride # ctr_z, ctr_y, ctr_x
         
-        shape = annotations[:, :, 3:6] / 2 # half of d, h, w
-        normalized_shape = shape / input_size # normalized to [0, 1] 
+        shape = annotations[:, :, 3:6] # d, h, w
+        # normalized_shape = shape / input_size # normalized to [0, 1] 
+        normalized_shape = torch.clamp(shape / MAX_LENGTH, max=1.0)
         
         sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
         sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
@@ -323,6 +326,7 @@ class DetectionLoss(nn.Module):
         
         # Generate the target bboxes
         target_bboxes = annotations[:, :, :6].view(-1, 6)[gt_idx] # zyxdhw
+        target_bboxes[..., 3:] = torch.clamp(target_bboxes[..., 3:], max=MAX_LENGTH)
         target_scores, _ = torch.max(mask_pos, 1) # shape = (b, num_of_points), the value is 1 or 0, 1 means the point is assigned to positive
         mask_ignore, _ = torch.min(mask_ignore, 1) # shape = (b, num_of_points), the value is -1 or 0, -1 means the point is ignored
         del target_ctr, distance, mask_topk
@@ -397,8 +401,8 @@ class DetectionLoss(nn.Module):
             offset_loss = torch.tensor(0.0, device=device)
             iou_loss = torch.tensor(0.0, device=device)
         else:
-            reg_loss = torch.nn.SmoothL1Loss(reduction='none', beta=1/9.)(pred_shapes[fg_mask], target_shape[fg_mask]).mean()
-            offset_loss = torch.nn.SmoothL1Loss(reduction='none', beta=1/9.)(pred_offsets[fg_mask], target_offset[fg_mask]).mean()
+            reg_loss = torch.nn.SmoothL1Loss(reduction='none', beta=0.05)(pred_shapes[fg_mask], target_shape[fg_mask]).mean()
+            offset_loss = torch.nn.SmoothL1Loss(reduction='none', beta=0.05)(pred_offsets[fg_mask], target_offset[fg_mask]).mean()
             iou_loss = 1 - (self.bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask])).mean()
-        
+            
         return cls_pos_loss, cls_neg_loss, reg_loss, offset_loss, iou_loss
