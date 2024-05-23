@@ -368,7 +368,7 @@ class DetectionLoss(nn.Module):
                                                     alpha=self.cls_focal_alpha,
                                                     gamma=self.cls_focal_gamma)
         
-        # Only calculate the loss of positive samples                                 
+        # Only calculate the loss of positive samples                               
         fg_mask = target_scores.squeeze(-1).bool()
         if fg_mask.sum() == 0:
             reg_loss = torch.tensor(0.0, device=device)
