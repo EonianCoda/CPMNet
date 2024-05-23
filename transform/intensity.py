@@ -104,7 +104,6 @@ class RandomBlurNodule(AbstractTransform):
                 box[3:] = np.minimum(np.ceil(box[3:] + self.offset), image.shape[1:])
                 box = box.astype(np.int32)
                 z1, y1, x1, z2, y2, x2 = box
-                print(box)
                 image[0, z1:z2, y1:y2, x1:x2] = ndimage.gaussian_filter(image[0, z1:z2, y1:y2, x1:x2], sigma)    
 
         return sample
