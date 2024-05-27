@@ -401,7 +401,7 @@ class UnLabeledDataset(Dataset):
         
         # Before cropping, we need to convert the pixel spacing to world spacing
         # If we use ground truth crop, we do not need to convert the pixel spacing to world spacing because this step is done in the `load_label` function
-        if len(samples[ALL_RAD]) > 0 and not self.use_gt_crop:
+        if len(samples[ALL_RAD]) > 0:
             samples[ALL_RAD] = samples[ALL_RAD] * image_spacing # d, h, w
         samples['file_name'] = series_name
         samples = self.crop_fn(samples, lobe, image_spacing, self.use_gt_crop)
