@@ -184,7 +184,7 @@ class InstanceCrop(object):
             sample['ctr'] = ctr
             sample['rad'] = rad
             sample['cls'] = cls
-            sample['spacing'] = image_spacing
+            sample['spacing'] = image_spacing.copy()
             samples.append(sample)
         return samples
 

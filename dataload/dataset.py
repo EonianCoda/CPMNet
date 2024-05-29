@@ -37,6 +37,8 @@ class TrainDataset(Dataset):
                  use_bg=False, min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None):
         self.labels = []
         self.dicom_paths = []
+        self.series_names = []
+        self.series_folders = []
         self.series_list_path = series_list_path
         self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
@@ -67,6 +69,8 @@ class TrainDataset(Dataset):
             if label[ALL_LOC].shape[0] == 0 and not use_bg:
                 continue
             
+            self.series_folders.append(folder)
+            self.series_names.append(series_name)
             self.dicom_paths.append(dicom_path)
             self.labels.append(label)
 
@@ -88,8 +92,8 @@ class TrainDataset(Dataset):
     
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
-        series_folder = self.series_infos[idx][0]
-        series_name = self.series_infos[idx][1]
+        series_folder = self.series_folders[idx]
+        series_name = self.series_names[idx]
         label = self.labels[idx]
 
         image_spacing = self.image_spacing.copy() # z, y, x
