@@ -6,7 +6,7 @@ from scipy import ndimage
 from skimage.util import random_noise
 import random
 import numpy as np
-
+import cv2
 
 class RandomBlur(AbstractTransform):
     """
@@ -53,6 +53,81 @@ class RandomBlur(AbstractTransform):
                 image_t = ndimage.gaussian_filter(image[0], sigma)
                 sample['image'][0] = image_t
 
+        return sample
+
+class RandomSharpen(AbstractTransform):
+    def __init__(self, p=0.5, sigma_range=(0.4, 0.8), alpha_range=(1.5, 2.0)):
+        self.p = p
+        self.sigma_range = sigma_range
+        self.alpha_range = alpha_range
+        
+    def __call__(self, sample):
+        if random.random() < self.p:
+            image = sample['image']
+            sigma = np.random.uniform(self.sigma_range[0], self.sigma_range[1])
+            alpha = np.random.uniform(self.alpha_range[0], self.alpha_range[1])
+            if len(sample['image'].shape) == 3:
+                image = image * 255
+                image = image.astype(np.uint8)
+                blur_img = cv2.GaussianBlur(image, (3, 3), sigma)
+                image = cv2.addWeighted(image, alpha, blur_img, 1 - alpha, 0)
+                image = image.astype(np.float32) / 255
+                sample['image'] = image
+                
+        return sample
+
+class RandomSharpenNodule(AbstractTransform):
+    def __init__(self, p=0.5, sigma_range=(0.4, 0.8), alpha_range=(1.5, 2.0), offset = 1):
+        self.p = p
+        self.sigma_range = sigma_range
+        self.alpha_range = alpha_range
+        
+    def __call__(self, sample):
+        if random.random() < self.p and len(sample['ctr']) > 0:
+            image = sample['image']
+            ctr = sample['ctr'] # shape: [n, 3]
+            rad = sample['rad'] # shape: [n, 3]
+            sigma = np.random.uniform(self.sigma_range[0], self.sigma_range[1])
+            alpha = np.random.uniform(self.alpha_range[0], self.alpha_range[1])
+            
+            # [z1, y1, x1, z2, y2, x2] = [ctr - rad / 2, ctr + rad / 2
+            bboxes = np.array([ctr - rad / 2, ctr + rad / 2]).transpose(1, 0, 2).reshape(-1, 6)
+            for box in bboxes:
+                sigma = np.random.uniform(self.sigma_range[0], self.sigma_range[1])
+                box[:3] = np.maximum(np.floor(box[:3] - self.offset), 0)
+                box[3:] = np.minimum(np.ceil(box[3:] + self.offset), image.shape[1:])
+                box = box.astype(np.int32)
+                z1, y1, x1, z2, y2, x2 = box
+                image_t = image[int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)]
+                image_t = image_t * 255
+                image_t = image_t.astype(np.uint8)
+                blur_img = cv2.GaussianBlur(image_t, (3, 3), sigma)
+                image_t = cv2.addWeighted(image_t, alpha, blur_img, 1 - alpha, 0)
+                image_t = image_t.astype(np.float32) / 255
+                image[int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)] = image_t
+            sample['image'] = image
+        return sample
+
+class RandomNoiseNodule(AbstractTransform):
+    def __init__(self, p=0.5, hu_offset = 15 / 1400, offset = 1):
+        self.p = p
+        self.hu_offset = hu_offset
+        self.offset = offset
+    def __call__(self, sample):
+        if random.random() < self.p and len(sample['ctr']) > 0:
+            image = sample['image']
+            ctr = sample['ctr'] # shape: [n, 3]
+            rad = sample['rad']
+            bboxes = np.array([ctr - rad / 2, ctr + rad / 2]).transpose(1, 0, 2).reshape(-1, 6)
+            for box in bboxes:
+                box[:3] = np.maximum(np.floor(box[:3] - self.offset), 0)
+                box[3:] = np.minimum(np.ceil(box[3:] + self.offset), image.shape[1:])
+                box = box.astype(np.int32)
+                z1, y1, x1, z2, y2, x2 = box
+                image_t = image[int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)]
+                noise = np.random.uniform(-self.hu_offset, self.hu_offset, image_t.shape)
+                image_t = image_t + noise
+                image[int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)] = image_t
         return sample
     
 class RandomBlurNodule(AbstractTransform):
