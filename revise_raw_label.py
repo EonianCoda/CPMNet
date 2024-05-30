@@ -31,7 +31,7 @@ def convert_true_nodule_type(true_nodule_type: str) -> str:
         raise ValueError(f'Unknown true nodule type: {true_nodule_type}')
 
 save_folder = './data/patch_jsons'
-pred_path = './hard_FP_client_test.csv'
+pred_path = './hard_FP_client_prob06_07.csv'
 
 if __name__ == '__main__':
     with open(pred_path, 'r') as f:
@@ -87,6 +87,15 @@ if __name__ == '__main__':
                         NODULE_START_SLICE_IDS: nodule_start_slice_ids.tolist()}
         
         save_path = os.path.join(save_folder, f'{series_name}.json')
+        
+        if os.path.exists(save_path):
+            old_nodule_count = json.load(open(save_path, 'r'))
+            nodule_count = {LAST_MODIFIED_TIME: cur_time,
+                            NODULE_SIZE: old_nodule_count[NODULE_SIZE] + nodule_sizes.tolist(),
+                            BBOXES: old_nodule_count[BBOXES] + bboxes.tolist(),
+                            TRUE_NODULE_TYPE: old_nodule_count[TRUE_NODULE_TYPE] + true_nodule_types,
+                            NODULE_START_SLICE_IDS: old_nodule_count[NODULE_START_SLICE_IDS] + nodule_start_slice_ids.tolist()}
+        
         with open(save_path, 'w') as f:
             json.dump(nodule_count, f)
             

@@ -489,7 +489,7 @@ class Unsupervised_DetectionLoss(nn.Module):
                 cls_neg_losses.append(Negative_loss)
             
             # Soft loss (bg_threshold < prob < fg_threshold)
-            soft_mask = soft_mask & torch.eq(mask_ignore_b, 0)
+            soft_mask = torch.logical_and(soft_mask, torch.eq(mask_ignore_b, 0))
             if torch.sum(soft_mask) > 0:
                 soft_prob_b = soft_prob[j]
                 # [a1 + y(a1-a0)] * |y-p| ** gamma * CE(p, y)

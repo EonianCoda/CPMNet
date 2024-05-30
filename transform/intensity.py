@@ -200,28 +200,31 @@ class RandomAugmentNodule(AbstractTransform):
             # [z1, y1, x1, z2, y2, x2] = [ctr - rad / 2, ctr + rad / 2
             bboxes = np.array([ctr - rad / 2, ctr + rad / 2]).transpose(1, 0, 2).reshape(-1, 6)
             for box in bboxes:
-                aug_type = random.choice(['blur', 'noise', 'sharpen'])
                 box[:3] = np.maximum(np.floor(box[:3] - self.offset), 0)
                 box[3:] = np.minimum(np.ceil(box[3:] + self.offset), image.shape[1:])
-                
+                box = box.astype(np.int32)
+                z1, y1, x1, z2, y2, x2 = box
+                d, h, w = z2 - z1, y2 - y1, x2 - x1
+                if d * h * w == 0:
+                    continue
+                if d == 1 or h == 1 or w == 1:
+                    aug_type = 'blur'
+                else:
+                    aug_type = random.choice(['blur', 'sharpen'])
                 sigma = np.random.uniform(self.sigma_range[0], self.sigma_range[1])
                 
                 if aug_type == 'blur':
-                    box = box.astype(np.int32)
-                    z1, y1, x1, z2, y2, x2 = box
                     image[0, z1:z2, y1:y2, x1:x2] = ndimage.gaussian_filter(image[0, z1:z2, y1:y2, x1:x2], sigma)
-                elif aug_type == 'noise':
-                    box = box.astype(np.int32)
-                    z1, y1, x1, z2, y2, x2 = box
-                    noise = np.random.uniform(-self.hu_offset, self.hu_offset, (z2 - z1, y2 - y1, x2 - x1))
-                    image[0, z1:z2, y1:y2, x1:x2] = image[0, z1:z2, y1:y2, x1:x2] + noise
+                # elif aug_type == 'noise':
+                #     box = box.astype(np.int32)
+                #     z1, y1, x1, z2, y2, x2 = box
+                #     noise = np.random.uniform(-self.hu_offset, self.hu_offset, (z2 - z1, y2 - y1, x2 - x1))
+                #     image[0, z1:z2, y1:y2, x1:x2] = image[0, z1:z2, y1:y2, x1:x2] + noise
                 elif aug_type == 'sharpen':
                     alpha = np.random.uniform(self.alpha_range[0], self.alpha_range[1])
-                    box = box.astype(np.int32)
-                    z1, y1, x1, z2, y2, x2 = box
                     image_t = image[0, z1:z2, y1:y2, x1:x2] * 255
                     image_t = image_t.astype(np.uint8)
-                    blur_img = cv2.GaussianBlur(image_t, (3, 3), sigma)
+                    blur_img = cv2.GaussianBlur(image_t, (0, 0), sigma)
                     image_t = cv2.addWeighted(image_t, alpha, blur_img, 1 - alpha, 0)
                     image_t = image_t.astype(np.float32) / 255
                     image[0, z1:z2, y1:y2, x1:x2] = image_t
