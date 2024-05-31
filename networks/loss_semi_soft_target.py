@@ -152,6 +152,7 @@ class DetectionLoss(nn.Module):
     def target_proprocess(annotations: torch.Tensor, 
                           device, 
                           input_size: List[int],
+                          stride: List[int],
                           mask_ignore: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Preprocess the annotations to generate the targets for the network.
         In this function, we remove some annotations that the area of nodule is too small in the crop box. (Probably cropped by the edge of the image)
@@ -203,7 +204,13 @@ class DetectionLoss(nn.Module):
                     bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
                     bbox_annotation_target.append(bbox.view(1, 10))
                 else:
-                    mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
+                    z1 = int(torch.floor(z1 / stride[0]))
+                    z2 = min(int(torch.ceil(z2 / stride[0])), mask_ignore.size(2))
+                    y1 = int(torch.floor(y1 / stride[1]))
+                    y2 = min(int(torch.ceil(y2 / stride[1])), mask_ignore.size(3))
+                    x1 = int(torch.floor(x1 / stride[2]))
+                    x2 = min(int(torch.ceil(x2 / stride[2])), mask_ignore.size(4))
+                    mask_ignore[sample_i, 0, z1 : z2, y1 : y2, x1 : x2] = -1
             if len(bbox_annotation_target) > 0:
                 bbox_annotation_target = torch.cat(bbox_annotation_target, 0)
                 annotations_new[sample_i, :len(bbox_annotation_target)] = bbox_annotation_target
@@ -270,12 +277,9 @@ class DetectionLoss(nn.Module):
         sp = annotations[:, :, 6:9] # spacing, shape = (b, num_annotations, 3)
         sp = sp.unsqueeze(-2) # shape = (b, num_annotations, 1, 3)
         
-        # distance (b, n_max_object, anchors)
-        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1))
+        distance = -(((ctr_gt_boxes.unsqueeze(2) - anchor_points.unsqueeze(0)) * sp).pow(2).sum(-1)) # (b, num_annotation, num_of_points)
         _, topk_inds = torch.topk(distance, (ignore_ratio + 1) * pos_target_topk, dim=-1, largest=True, sorted=True)
         
-        # mask_topk = F.one_hot(topk_inds[:, :, :pos_target_topk], distance.size()[-1]).sum(-2) # (b, num_annotation, num_of_points), the value is 1 or 0
-        # mask_ignore = -1 * F.one_hot(topk_inds[:, :, pos_target_topk:], distance.size()[-1]).sum(-2) # the value is -1 or 0
         mask_topk = torch.zeros_like(distance, device=distance.device).scatter_(-1, topk_inds[:, :, :pos_target_topk], 1) # (b, num_annotation, num_of_points)
         mask_ignore = torch.zeros_like(distance, device=distance.device).scatter_(-1, topk_inds[:, :, pos_target_topk:], -1) # (b, num_annotation, num_of_points)
         
@@ -331,7 +335,8 @@ class DetectionLoss(nn.Module):
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         
         # process annotations
-        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, target_mask_ignore)
+        stride_list = [self.crop_size[0] / Cls.size()[2], self.crop_size[1] / Cls.size()[3], self.crop_size[2] / Cls.size()[4]]
+        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, stride_list, target_mask_ignore)
         target_mask_ignore = target_mask_ignore.view(batch_size, 1,  -1)
         target_mask_ignore = target_mask_ignore.permute(0, 2, 1).contiguous()
         # generate center points. Only support single scale feature
@@ -535,6 +540,7 @@ class Unsupervised_DetectionLoss(nn.Module):
     def target_proprocess(annotations: torch.Tensor, 
                           device, 
                           input_size: List[int],
+                          stride: List[int],
                           mask_ignore: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Preprocess the annotations to generate the targets for the network.
         In this function, we remove some annotations that the area of nodule is too small in the crop box. (Probably cropped by the edge of the image)
@@ -583,10 +589,16 @@ class Unsupervised_DetectionLoss(nn.Module):
                 percent = nw * nh * nd / (each_label[3] * each_label[4] * each_label[5])
                 if (percent > 0.1) and (nw*nh*nd >= 15):
                     spacing_z, spacing_y, spacing_x = each_label[6:9]
-                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), float(each_label[9])])).to(device)
+                    bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
                     bbox_annotation_target.append(bbox.view(1, 10))
                 else:
-                    mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
+                    z1 = int(torch.floor(z1 / stride[0]))
+                    z2 = min(int(torch.ceil(z2 / stride[0])), mask_ignore.size(2))
+                    y1 = int(torch.floor(y1 / stride[1]))
+                    y2 = min(int(torch.ceil(y2 / stride[1])), mask_ignore.size(3))
+                    x1 = int(torch.floor(x1 / stride[2]))
+                    x2 = min(int(torch.ceil(x2 / stride[2])), mask_ignore.size(4))
+                    mask_ignore[sample_i, 0, z1 : z2, y1 : y2, x1 : x2] = -1
             if len(bbox_annotation_target) > 0:
                 bbox_annotation_target = torch.cat(bbox_annotation_target, 0)
                 annotations_new[sample_i, :len(bbox_annotation_target)] = bbox_annotation_target
@@ -771,12 +783,13 @@ class Unsupervised_DetectionLoss(nn.Module):
         soft_prob = soft_prob.permute(0, 2, 1).contiguous()
         
         # process annotations
-        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, target_mask_ignore)
+        stride_list = [self.crop_size[0] / Cls.size()[2], self.crop_size[1] / Cls.size()[3], self.crop_size[2] / Cls.size()[4]]
+        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, stride_list, target_mask_ignore)
         target_mask_ignore = target_mask_ignore.view(batch_size, 1,  -1)
         target_mask_ignore = target_mask_ignore.permute(0, 2, 1).contiguous()
         
         # process soft annotations
-        process_soft_annotations, soft_target_mask_ignore = self.target_proprocess(soft_annotation, device, self.crop_size, soft_target_mask_ignore)
+        process_soft_annotations, soft_target_mask_ignore = self.target_proprocess(soft_annotation, device, self.crop_size, stride_list, soft_target_mask_ignore)
         soft_target_mask_ignore = soft_target_mask_ignore.view(batch_size, 1,  -1)
         soft_target_mask_ignore = soft_target_mask_ignore.permute(0, 2, 1).contiguous()
         # generate center points. Only support single scale feature

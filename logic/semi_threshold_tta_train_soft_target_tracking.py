@@ -360,16 +360,6 @@ def train(args,
                         history_ctrs[batch_i][i] = history_ctrs[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 2:5] * (1 - args.pseudo_update_ema_alpha)
                         history_rads[batch_i][i] = history_rads[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 5:8] * (1 - args.pseudo_update_ema_alpha)
                     elif history_valid_mask[i] == True: # penalize the pseudo label because of the low iou
-                        # print('Low iou')
-                        # print('New bboxes = ', new_bboxes)
-                        # print('Low Iou bboxes = ', history_bboxes[i])
-                        # print('History bboxes = ', history_bboxes)
-                        # print('Ious = {}, his prob = {}, out prob = {}'.format(matched_iou, history_probs[batch_i][i], outputs_t_b[matched_idx, 1]))
-                        # if history_probs[batch_i][i] > 0.65:
-                        #     np.save('image.npy', weak_images[batch_i].cpu().numpy())
-                        #     np.save('new_bboxes.npy', new_bboxes)
-                        #     np.save('history_bboxes.npy', history_bboxes[i])
-                        #     raise ValueError('Low iou')
                         history_probs[batch_i][i] *= args.pseudo_update_ema_alpha
                 
                 # Add new pseudo label
@@ -501,9 +491,10 @@ def train(args,
                     continue 
                 
                 pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
-                
                 if len(annot) == 0:
                     fp += len(pseudo_annot)
+                    # Cheating, set FP to 0
+                    # transformed_annots_padded[i, ...] = -1
                     continue
                 elif len(pseudo_annot) == 0:
                     fn += len(annot)
@@ -535,7 +526,12 @@ def train(args,
                     ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
                     ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
                     all_fn_probs.append(ctr_prob)
-                        
+                    
+                # Cheating, set TP to real coordinate
+                # matched_indices = ious.argmax(axis=1)
+                # for j in np.where(iou_pseu > 1e-3)[0]:
+                #     transformed_annots_padded[i, j, ...] = annot[matched_indices[j]].copy()
+                    
                 # Cheating, set FP to 0
                 # for j in np.where(iou_pseu < 1e-3)[0]:
                 #     transformed_annots_padded[i, j, ...] = -1
@@ -550,10 +546,9 @@ def train(args,
             
             num_fg_crop = np.count_nonzero(valid_mask)
             
-            select_more_soft_fg_crop
             # Random select some bg crop
             if num_fg_crop > 0 and select_fg_crop:
-                num_bg_crop = min(max(1, int(num_fg_crop / 4)), len(valid_mask) - num_fg_crop)
+                num_bg_crop = min(max(1, int(num_fg_crop / 3)), len(valid_mask) - num_fg_crop)
                 if not select_more_soft_fg_crop:
                     selected_bg_idx = np.random.choice(np.where(valid_mask == 0)[0], num_bg_crop, replace=False)
                 else: # Get more bg crop with more soft pseudo label
@@ -569,12 +564,12 @@ def train(args,
                     selected_bg_idx = bg_indices[:num_bg_crop]
                     
                 valid_mask[selected_bg_idx] = 1
-                
+            
                 transformed_annots_padded = transformed_annots_padded[valid_mask]
                 transformed_annots_padded_soft = transformed_annots_padded_soft[valid_mask]
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
                 cls_prob = cls_prob[valid_mask]
-                
+                strong_u_sample['gt_annot'] = strong_u_sample['gt_annot'][valid_mask]
             strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
             strong_u_sample['annot_soft'] = torch.from_numpy(transformed_annots_padded_soft)
             avg_soft_target_pseu.update(torch.sum(strong_u_sample['annot_soft'][..., -1] != -1).item())
