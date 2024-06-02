@@ -7,9 +7,11 @@ from .utils import load_series_list, load_image, load_label, load_lobe, ALL_RAD,
                     gen_lobe_path, normalize_processed_image, normalize_raw_image
 from torch.utils.data import Dataset
 import itertools
+import scipy
+import copy
 logger = logging.getLogger(__name__)
 
-def get_mixup_weight() -> float:
+def get_random_mixup_weight() -> float:
     resolution = 0.01
     values = np.arange(0.8, 1.01, resolution)
     probs = np.exp(-(values - 0.9)**2 / (2 * 0.01**2))
@@ -107,6 +109,8 @@ class TrainDataset(Dataset):
         self.group_indices = []
         for i in range(0, len(indices), 2):
             idx1 = indices[i]
+            if i + 1 >= len(indices):
+                break
             idx2 = indices[i+1]
             self.group_indices.append([idx1, idx2])
     
@@ -147,14 +151,14 @@ class TrainDataset(Dataset):
         bg_samples = []
         for i in range(len(samples1)):
             sample = samples1[i]
-            if len(sample['all_cls']) == 0:
+            if len(sample['cls']) == 0:
                 bg_samples.append(sample)
             else:
                 fg_samples1.append(sample)
         
         for i in range(len(samples2)):
             sample = samples2[i]
-            if len(sample['all_cls']) == 0:
+            if len(sample['cls']) == 0:
                 bg_samples.append(sample)
             else:
                 fg_samples2.append(sample)
@@ -164,31 +168,81 @@ class TrainDataset(Dataset):
         indcies1 = np.arange(len(fg_samples1))
         indcies2 = np.arange(len(fg_samples2))
         k = 2
-        if len(indcies1) != 0 and len(indcies2) == 0:
+        offset = np.array([0, 1, 1])
+        new_samples = []
+        if len(indcies1) != 0 and len(indcies2) != 0:
             # Combimnation
             combs = list(itertools.product(indcies1, indcies2))
             combs = combs[:k]
             for idx1, idx2 in combs:
                 sample1 = fg_samples1[idx1]
                 sample2 = fg_samples2[idx2]
-                mixup_weight = get_mixup_weight()
                 
-                # bg_samples.append(sample1)
-            
-        
+                ctr1 = sample1['ctr']
+                ctr2 = sample2['ctr']
+                rad1 = sample1['rad']
+                rad2 = sample2['rad']
                 
-        # random_samples = []
-        # for i in range(len(samples)):
-        #     sample = samples[i]
-        #     sample['image'] = normalize_raw_image(sample['image'])
-        #     sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
-        #     if self.transform_post:
-        #         sample['ctr_transform'] = []
-        #         sample['feat_transform'] = []
-        #         sample = self.transform_post(sample)
-        #     random_samples.append(sample)
+                bboxes1 = np.array([ctr1 - rad1 / 2 - offset, ctr1 + rad1 / 2 + offset]).transpose(1, 0, 2) # [N, 2, 3]
+                bboxes2 = np.array([ctr2 - rad2 / 2 - offset, ctr2 + rad2 / 2 + offset]).transpose(1, 0, 2) # [N, 2, 3]
+                
+                bboxes_idx1 = np.random.randint(0, len(bboxes1), size=1)[0]
+                bboxes_idx2 = np.random.randint(0, len(bboxes2), size=1)[0]
+                # Clip bboxes
+                bboxes1 = np.clip(bboxes1, 0, 95)
+                bbox1 = bboxes1[bboxes_idx1]
+                bboxes2 = np.clip(bboxes2, 0, 95)
+                bbox2 = bboxes2[bboxes_idx2]
+                
+                mixup_weight = get_random_mixup_weight()
+                # Mixup
+                nodule_img1 = sample1['image'][0,
+                                               int(bbox1[0, 0]):int(bbox1[1, 0]), 
+                                               int(bbox1[0, 1]):int(bbox1[1, 1]), 
+                                               int(bbox1[0, 2]):int(bbox1[1, 2])]
+                nodule_volume1 = np.prod(nodule_img1.shape)
+                
+                nodule_img2 = sample2['image'][0,
+                                                int(bbox2[0, 0]):int(bbox2[1, 0]),
+                                                int(bbox2[0, 1]):int(bbox2[1, 1]),
+                                                int(bbox2[0, 2]):int(bbox2[1, 2])]
+                nodule_volume2 = np.prod(nodule_img2.shape)
+                
+                # Resize larger nodule to fit smaller nodule
+                if nodule_volume1 > nodule_volume2:
+                    nodule_img = scipy.ndimage.zoom(nodule_img1, (nodule_img2.shape[0] / nodule_img1.shape[0],
+                                                                    nodule_img2.shape[1] / nodule_img1.shape[1],
+                                                                    nodule_img2.shape[2] / nodule_img1.shape[2]))
+                    new_sample = copy.deepcopy(sample2)
+                    
+                    z1, y1, x1 = bbox2[0]
+                    z2, y2, x2 = bbox2[1]
+                    new_sample['image'][0, int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)] *= (1 - mixup_weight)
+                    new_sample['image'][0, int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)] += nodule_img * mixup_weight
+                else:
+                    nodule_img = scipy.ndimage.zoom(nodule_img2, (nodule_img1.shape[0] / nodule_img2.shape[0],
+                                                                    nodule_img1.shape[1] / nodule_img2.shape[1],
+                                                                    nodule_img1.shape[2] / nodule_img2.shape[2]))
+                    new_sample = copy.deepcopy(sample1)
+                    z1, y1, x1 = bbox1[0]
+                    z2, y2, x2 = bbox1[1]
+                    new_sample['image'][0, int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)] *= (1 - mixup_weight)
+                    new_sample['image'][0, int(z1):int(z2), int(y1):int(y2), int(x1):int(x2)] += nodule_img * mixup_weight
+                
+                new_samples.append(new_sample)
+        samples = bg_samples + fg_samples1 + fg_samples2 + new_samples
+        random_samples = []
+        for i in range(len(samples)):
+            sample = samples[i]
+            sample['image'] = normalize_raw_image(sample['image'])
+            sample['image'] = normalize_processed_image(sample['image'], self.norm_method)
+            if self.transform_post:
+                sample['ctr_transform'] = []
+                sample['feat_transform'] = []
+                sample = self.transform_post(sample)
+            random_samples.append(sample)
 
-        # return random_samples
+        return random_samples
 
 class DetDataset(Dataset):
     """Detection dataset for inference
