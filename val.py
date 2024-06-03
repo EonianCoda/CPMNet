@@ -182,6 +182,9 @@ if __name__ == '__main__':
         if args.patch_label_type != 'none':
             save_folder_name += '_PT{}'.format(args.patch_label_type)
         
+        if args.load_teacher_model:
+            save_folder_name += '_teacher'
+        
         metrics = val(args = args,
                     model = model,
                     detection_postprocess=detection_postprocess,
