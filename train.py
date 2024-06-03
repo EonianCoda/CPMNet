@@ -431,6 +431,8 @@ if __name__ == '__main__':
         # elif args.resume_folder != '' and epoch == args.warmup_epochs:
         #     logger.info('Unfreeze the first 3 layers')
         #     model = unfreeze_model(model)
+        if getattr(train_loader.dataset, 'shuffle_group', None) is not None:
+            train_loader.dataset.shuffle_group()
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,
