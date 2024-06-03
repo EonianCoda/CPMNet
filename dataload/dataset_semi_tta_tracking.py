@@ -322,7 +322,7 @@ class UnLabeledDataset(Dataset):
             history_rads = history_label[ALL_RAD]
             history_probs = history_label[ALL_PROB]
             if len(history_ctrs) > 0:
-                history_bbxes = np.stack([history_ctrs - history_rads / 2, history_ctrs + history_rads / 2], axis=-1)
+                history_bbxes = np.stack([history_ctrs - history_rads / 2, history_ctrs + history_rads / 2], axis=1)
             else:
                 history_bbxes = np.zeros((0, 2, 3), dtype=np.float32)
             
@@ -332,7 +332,7 @@ class UnLabeledDataset(Dataset):
             # (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
             if len(new_ctrs) > 0:
                 if len(history_bbxes) != 0:
-                    new_bboxes = np.stack([new_ctrs - new_rads / 2, new_ctrs + new_rads / 2], axis=-1)
+                    new_bboxes = np.stack([new_ctrs - new_rads / 2, new_ctrs + new_rads / 2], axis=1)
                     matched_ious = compute_bbox3d_iou(history_bbxes, new_bboxes)
                     history_matched_ious = np.max(matched_ious, axis=1)
                     valid_mask = history_matched_ious >= 0.05
