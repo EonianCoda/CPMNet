@@ -28,6 +28,7 @@ def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
         cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, soft_prob, device = device)
         cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), cls_soft_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
         loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss + cls_soft_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        # loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
         return loss, cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
@@ -146,14 +147,14 @@ def train(args,
     
     ema_buffer = getattr(args, 'ema_buffer', False)
     sharpen_cls = getattr(args, 'sharpen_cls', -1)
-    select_fg_crop = getattr(args, 'select_fg_crop', False)
+    select_bg_crop = getattr(args, 'select_bg_crop', 0)
     
     if ema_buffer:
         logger.info('Use EMA buffer')
     if sharpen_cls > 0:
         logger.info('Use sharpen cls = {:.3f}'.format(sharpen_cls))
-    if select_fg_crop:
-        logger.info('Random select some bg crop')
+    if select_bg_crop > 0:
+        logger.info('Random select bg crop = 1 / {} fg crop'.format(select_bg_crop))
         
     if not ema_buffer:
         model_t.train()
@@ -260,17 +261,13 @@ def train(args,
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
                 Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
                 Cls_output = Cls_output.sigmoid()
-                # ignore_offset = 1
-                # Cls_output[:, :, :ignore_offset, :, :] = 0
-                # Cls_output[:, :, :, :ignore_offset, :] = 0
-                # Cls_output[:, :, :, :, :ignore_offset] = 0
-                # Cls_output[:, :, -ignore_offset:, :, :] = 0
-                # Cls_output[:, :, :, -ignore_offset:, :] = 0
-                # Cls_output[:, :, :, :, -ignore_offset:] = 0
                 
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 lobe = weak_lobes[i * TTA_BATCH_SIZE:end]
+                if sharpen_cls > 0:
+                    assert sharpen_cls < 1
+                    Cls_output = sharpen_prob(Cls_output, t=sharpen_cls)
                 outputs_t_b = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
                 
                 outputs_t_b = detection_postprocess(outputs_t_b, device=device, is_logits=False, lobe_mask = lobe, threshold = args.pseudo_crop_threshold, nms_topk=args.pseudo_nms_topk) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
@@ -354,16 +351,6 @@ def train(args,
                         history_ctrs[batch_i][i] = history_ctrs[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 2:5] * (1 - args.pseudo_update_ema_alpha)
                         history_rads[batch_i][i] = history_rads[batch_i][i] * args.pseudo_update_ema_alpha + outputs_t_b[matched_idx, 5:8] * (1 - args.pseudo_update_ema_alpha)
                     elif history_valid_mask[i] == True: # penalize the pseudo label because of the low iou
-                        # print('Low iou')
-                        # print('New bboxes = ', new_bboxes)
-                        # print('Low Iou bboxes = ', history_bboxes[i])
-                        # print('History bboxes = ', history_bboxes)
-                        # print('Ious = {}, his prob = {}, out prob = {}'.format(matched_iou, history_probs[batch_i][i], outputs_t_b[matched_idx, 1]))
-                        # if history_probs[batch_i][i] > 0.65:
-                        #     np.save('image.npy', weak_images[batch_i].cpu().numpy())
-                        #     np.save('new_bboxes.npy', new_bboxes)
-                        #     np.save('history_bboxes.npy', history_bboxes[i])
-                        #     raise ValueError('Low iou')
                         history_probs[batch_i][i] *= args.pseudo_update_ema_alpha
                 
                 # Add new pseudo label
@@ -460,9 +447,10 @@ def train(args,
                     continue 
                 
                 pseudo_annot = pseudo_annot[pseudo_annot[:, -1] != -1]
-                
                 if len(annot) == 0:
                     fp += len(pseudo_annot)
+                    # Cheating, set FP to 0
+                    # transformed_annots_padded[i, ...] = -1
                     continue
                 elif len(pseudo_annot) == 0:
                     fn += len(annot)
@@ -494,7 +482,12 @@ def train(args,
                     ctr_x = min(max(int(ctr_x // 4), 0), cls_prob.shape[4] - 1)
                     ctr_prob = cls_prob[i, 0, ctr_z, ctr_y, ctr_x].item()
                     all_fn_probs.append(ctr_prob)
-                        
+                    
+                # Cheating, set TP to real coordinate
+                # matched_indices = ious.argmax(axis=1)
+                # for j in np.where(iou_pseu > 1e-3)[0]:
+                #     transformed_annots_padded[i, j, ...] = annot[matched_indices[j]].copy()
+                    
                 # Cheating, set FP to 0
                 # for j in np.where(iou_pseu < 1e-3)[0]:
                 #     transformed_annots_padded[i, j, ...] = -1
@@ -509,23 +502,21 @@ def train(args,
             
             num_fg_crop = np.count_nonzero(valid_mask)
             # Random select some bg crop
-            if num_fg_crop > 0 and select_fg_crop:
-                num_bg_crop = min(max(1, int(num_fg_crop / 4)), len(valid_mask) - num_fg_crop)
+            if num_fg_crop > 0 and select_bg_crop > 0:
+                num_bg_crop = min(max(1, int(num_fg_crop / select_bg_crop)), len(valid_mask) - num_fg_crop)
                 selected_bg_idx = np.random.choice(np.where(valid_mask == 0)[0], num_bg_crop, replace=False)
                 valid_mask[selected_bg_idx] = 1
             
                 transformed_annots_padded = transformed_annots_padded[valid_mask]
                 strong_u_sample['image'] = strong_u_sample['image'][valid_mask]
                 cls_prob = cls_prob[valid_mask]
+                strong_u_sample['gt_annot'] = strong_u_sample['gt_annot'][valid_mask]
             strong_u_sample['annot'] = torch.from_numpy(transformed_annots_padded)
+            # Cheating, set pseudo label to real label
+            # strong_u_sample['annot'] = strong_u_sample['gt_annot']
             avg_soft_target_pseu.update(torch.sum(torch.logical_and(cls_prob > args.pseudo_background_threshold, cls_prob < args.pseudo_label_threshold)).item())
             background_mask = (cls_prob < args.pseudo_background_threshold) # shape: (bs, 1, d, h, w)
             background_mask = background_mask.view(background_mask.shape[0], -1) # shape: (bs, num_points)
-            
-            # Sharpen the pseudo label
-            if sharpen_cls > 0:
-                assert sharpen_cls < 1
-                cls_prob = sharpen_prob(cls_prob, t=sharpen_cls)
             
             if mixed_precision:
                 with torch.cuda.amp.autocast():

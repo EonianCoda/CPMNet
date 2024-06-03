@@ -133,7 +133,7 @@ def get_args():
     
     parser.add_argument('--ema_buffer', action='store_true', default=False, help='use ema buffer')
     parser.add_argument('--sharpen_cls', type=float, default=-1, help='sharpen cls')
-    parser.add_argument('--select_fg_crop', action='store_true', default=False, help='select fg crop')
+    parser.add_argument('--select_bg_crop', type=int, default=0, help='select fg crop')
     parser.add_argument('--combine_cand', action='store_true', default=False, help='combine cand')
     
     # Semi tracking
