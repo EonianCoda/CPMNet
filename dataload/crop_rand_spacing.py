@@ -35,7 +35,6 @@ class InstanceCrop(object):
             tp_ratio: sampling rate for a patch containing at least one leision
             sample_num: patch number per CT
             blank_side:  labels within blank_side pixels near patch border is set to ignored.
-
         """
         self.sample_cls = sample_cls
         self.crop_size = np.array(crop_size, dtype=np.int32)
@@ -84,11 +83,13 @@ class InstanceCrop(object):
         all_rad = sample['all_rad']
         all_cls = sample['all_cls']
         
-        all_rad_pixel = all_rad / image_spacing
-        nodule_bb_min = all_loc - all_rad_pixel / 2
-        nodule_bb_max = all_loc + all_rad_pixel / 2
-        instance_loc = all_loc[np.sum([all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
-
+        if len(all_loc) != 0:
+            all_rad_pixel = all_rad / image_spacing
+            nodule_bb_min = all_loc - all_rad_pixel / 2
+            nodule_bb_max = all_loc + all_rad_pixel / 2
+            instance_loc = all_loc[np.sum([all_cls == cls for cls in self.sample_cls], axis=0, dtype='bool')]
+        else:
+            instance_loc = []
         image_itk = sitk.GetImageFromArray(image)
         shape = image.shape
         crop_size = np.array(self.crop_size)
@@ -97,12 +98,13 @@ class InstanceCrop(object):
         y_crop_centers = self.get_crop_centers(shape, 1)
         x_crop_centers = self.get_crop_centers(shape, 2)
         
-        crop_centers = [*product(z_crop_centers, y_crop_centers, x_crop_centers)]
-        crop_centers = np.array(crop_centers)
-        
+        crop_centers = np.array([*product(z_crop_centers, y_crop_centers, x_crop_centers)])
+        if self.rand_trans is not None:
+            crop_centers = crop_centers + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(crop_centers), 3))
+            
         if self.instance_crop and len(instance_loc) > 0:
             if self.rand_trans is not None:
-                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=(len(instance_loc), 3))
+                instance_crop = instance_loc + np.random.randint(low=-self.rand_trans * 2, high=self.rand_trans * 2, size=(len(instance_loc), 3))
             else:
                 instance_crop = instance_loc
             crop_centers = np.append(crop_centers, instance_crop, axis=0)
@@ -111,8 +113,6 @@ class InstanceCrop(object):
         tp_nums = []
         for i in range(len(crop_centers)):
             C = crop_centers[i]
-            if self.rand_trans is not None:
-                C = C + np.random.randint(low=-self.rand_trans, high=self.rand_trans, size=3)
 
             O = C - np.array(crop_size) / 2
             Z = O + np.array([crop_size[0] - 1, 0, 0])
@@ -125,8 +125,8 @@ class InstanceCrop(object):
                                         [-self.rand_rot[2], self.rand_rot[2]], rot_center=C, p=0.8)
             matrixs.append(matrix)
             # According to the matrixs, we can decide if the crop is foreground or background
-            bb_min = np.maximum(matrix[0] - 10, 0)
-            bb_max = bb_min + crop_size + 20
+            bb_min = np.maximum(matrix[0] - 2, 0)
+            bb_max = bb_min + crop_size + 4
             if len(all_loc) == 0:
                 tp_num = 0
             else:
@@ -151,27 +151,24 @@ class InstanceCrop(object):
         sample_indices = np.random.choice(np.arange(len(crop_centers)), size=self.sample_num, p=p, replace=False)
         
         # Crop patches
-        bb_min = np.array([0, 0, 0], dtype=np.int32)
-        bb_max = (bb_min + crop_size).astype(np.int32)
         samples = []
         for sample_i in sample_indices:
             space = np.array([1.0, 1.0, 1.0], dtype=np.float64)
             matrix = matrixs[sample_i]
             matrix = matrix[:, ::-1]  # in itk axis
             
-            if (self.rand_spacing is not None) and (random.random() < 0.5):
-                space *= np.random.uniform(self.rand_spacing[0], self.rand_spacing[1], size=3)
+            if (self.rand_spacing is not None) and (random.random() < 0.5): # only apply on z axis
+                space[1:] *= np.random.uniform(self.rand_spacing[0], self.rand_spacing[1], size=1)
+                # space *= np.random.uniform(self.rand_spacing[0], self.rand_spacing[1], size=3)
             
             image_itk_crop = reorient(image_itk, matrix, spacing=list(space), interp1=sitk.sitkLinear)
-            all_loc_crop = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in all_loc]
+            all_loc_crop = [image_itk_crop.TransformPhysicalPointToContinuousIndex(c.tolist()[::-1])[::-1] for c in
+                            all_loc]
             all_loc_crop = np.array(all_loc_crop)
-            
-            image_crop = sitk.GetArrayFromImage(image_itk_crop)
-            if self.rand_spacing is not None:
-                image_crop = image_crop[bb_min[0]:bb_max[0], bb_min[1]:bb_max[1], bb_min[2]:bb_max[2]]
             in_idx = []
             for j in range(all_loc_crop.shape[0]):
-                if (all_loc_crop[j] <= np.array(image_crop.shape)).all() and (all_loc_crop[j] >= 0).all():
+                if (all_loc_crop[j] <= np.array(image_itk_crop.GetSize()[::-1])).all() and (
+                        all_loc_crop[j] >= np.zeros([3])).all():
                     in_idx.append(True)
                 else:
                     in_idx.append(False)
@@ -181,21 +178,18 @@ class InstanceCrop(object):
             if in_idx.size > 0:
                 ctr = all_loc_crop[in_idx]
                 rad = all_rad[in_idx]
-                rad = rad / space  # convert pixel coord
-                
-                # Compute the new bounding box
-                crop_bb_min = np.maximum(ctr - rad / 2, 0)
-                crop_bb_max = np.minimum(ctr + rad / 2, np.array(image_crop.shape))
-                ctr = (crop_bb_min + crop_bb_max) / 2
-                rad = crop_bb_max - crop_bb_min
-                
                 cls = all_cls[in_idx]
             else:
                 ctr = np.array([]).reshape(-1, 3)
                 rad = np.array([])
                 cls = np.array([])
 
+            image_crop = sitk.GetArrayFromImage(image_itk_crop)
+            image_crop = image_crop[:crop_size[0], :crop_size[1], :crop_size[2]]
             CT_crop = np.expand_dims(image_crop, axis=0)
+            shape = np.array(CT_crop.shape[1:])
+            if len(rad) > 0:
+                rad = rad / space  # convert pixel coord
             sample = dict()
             sample['image'] = CT_crop
             sample['ctr'] = ctr

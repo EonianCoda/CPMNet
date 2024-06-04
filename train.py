@@ -284,11 +284,13 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: f
     rot_zy = (crop_size[0] == crop_size[1] == crop_size[2])
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
-    transform_list_train = [transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    transform_list_train = []
+    if args.use_rand_spacing:
+        transform_list_train.append(transform.Pad(output_size=crop_size, pad_value=pad_value))
+    transform_list_train.append(transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True))
     transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.5, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
-        
     transform_list_train.append(transform.CoordToAnnot())
                             
     logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
@@ -314,6 +316,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
         from dataload.crop_rand_spacing import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, rand_rot=args.rand_rot,
                                      rand_spacing=args.rand_spacing, sample_num=args.num_samples, blank_side=blank_side, instance_crop=True)
+        train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
         mmap_mode = None
         logger.info('Use itk rotate {} and random spacing {}'.format(args.rand_rot, args.rand_spacing))
     elif args.crop_partial:
