@@ -62,7 +62,7 @@ def draw_bbox_on_image(image: np.ndarray, bboxes: np.ndarray, color = (255, 0, 0
             if color == (255, 0, 0):
                 z_color = (0, 255, 0)
             else:
-                z_color = (0, 0, 255)
+                z_color = (255, 0, 0)
             bboxed_image = draw_bbox(bboxed_image, z_expanded_bbox[np.newaxis, ...], z_color)
             
             z_expanded_bbox[0] = z2
