@@ -109,7 +109,7 @@ class SplitComb():
                         sw = image_shape[2] - self.crop_size[2]
                     
                     # [N, 8]
-                    # 8-> id, prob, z_min, y_min, x_min, d, h, w 
+                    # 8-> 1, prob, z_min, y_min, x_min, d, h, w 
                     output[idx][:, 2] += sz
                     output[idx][:, 3] += sh
                     output[idx][:, 4] += sw

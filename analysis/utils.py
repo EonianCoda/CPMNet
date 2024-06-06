@@ -9,19 +9,24 @@ def str2bool(v):
 
 def pred2nodulefinding(line: str) -> NoduleFinding:
     pred = line.strip().split(',')
+    kwargs = {}
     if len(pred) == 11: # no ground truth
         series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt = pred
         gt_x = None
     elif len(pred) == 13: # has matched
-        series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, _, _ = pred
+        series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, num_matched, avg_num_matched, = pred
         gt_x = None
+        kwargs = {'num_matched': num_matched, 
+                  'avg_num_matched': avg_num_matched}
     elif len(pred) == 19: # has matched
-        series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, _, _, gt_x, gt_y, gt_z, gt_w, gt_h, gt_d = pred
+        series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, num_matched, avg_num_matched, gt_x, gt_y, gt_z, gt_w, gt_h, gt_d = pred
         gt_x = None
+        kwargs = {'num_matched': num_matched, 
+                  'avg_num_matched': avg_num_matched}
     else:
         series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, gt_x, gt_y, gt_z, gt_w, gt_h, gt_d = pred
     is_gt = str2bool(is_gt)
-    nodule = NoduleFinding(series_name, x, y, z, w, h, d, nodule_type, prob, is_gt)
+    nodule = NoduleFinding(series_name, x, y, z, w, h, d, nodule_type, prob, is_gt, **kwargs)
     if gt_x is not None:
         gt_nodule = NoduleFinding(series_name, gt_x, gt_y, gt_z, gt_w, gt_h, gt_d, nodule_type, prob, is_gt)
         nodule.set_match(match_iou, gt_nodule)

@@ -41,7 +41,7 @@ class NoduleFinding:
         self.match_nodule_finding = None 
         
         for key, value in kwargs.items():
-            setattr(self, key, value)
+            setattr(self, key, to_float(value))
         
     def set_match(self, match_iou: float, match_nodule_finding, force=False):
         # if the nodule is a ground truth nodule, TH match_iou is the iou between the nearest candidate and the ground truth
@@ -58,7 +58,6 @@ class NoduleFinding:
     #     """
     #     return [[self.ctr_z - self.d/2, self.ctr_y - self.h/2, self.ctr_x - self.w/2],
     #             [self.ctr_z + self.d/2, self.ctr_y + self.h/2, self.ctr_x + self.w/2]]
-          
     
     def get_box(self) -> List[int]:
         """
