@@ -16,20 +16,44 @@ class EarlyStoppingSave:
         self.best_model_save_paths = [os.path.join(self.save_dir, 'best_{}.pth'.format(target_metric)) for target_metric in self.target_metrics]
         self.best_txt_save_paths = [os.path.join(self.save_dir, 'best_{}.txt'.format(target_metric)) for target_metric in self.target_metrics]
     
+        # Add mixed metric
+        self.best_model_save_paths.append(os.path.join(self.save_dir, 'best_mixed.pth'))
+        self.best_txt_save_paths.append(os.path.join(self.save_dir, 'best_mixed.txt'))
+        self.best.append(0.0)
+        self.best_epoch.append(0)
+
     def step(self, metrics: Dict[str, float], epoch: int):
+        mixed_metric = 0
         for i, target_metric in enumerate(self.target_metrics):
             if metrics[target_metric] > self.best[i]:
                 self.best[i] = metrics[target_metric]
+                mixed_metric += metrics[target_metric]
                 self.best_epoch[i] = epoch
                 self._save_txt(metrics, target_metric)
                 self._save_model(target_metric)
                 logger.info('====> Best model saved at epoch: {} with {} {:.4f}'.format(epoch, target_metric, self.best[i]))
+                
+        mixed_metric /= len(self.target_metrics)
+        if mixed_metric > self.best[-1]:
+            self.best[-1] = mixed_metric
+            self.best_epoch[-1] = epoch
+            self._save_txt(metrics, 'mixed')
+            self._save_model('mixed')
+            logger.info('====> Best model saved at epoch: {} with mixed {:.4f}'.format(epoch, self.best[-1]))
 
     def _save_model(self, target_metric: str):
-        save_states(self.best_model_save_paths[self.target_metrics.index(target_metric)], self.model)
+        if target_metric == 'mixed':
+            target_idx = -1
+        else:
+            target_idx = self.target_metrics.index(target_metric)
+        
+        save_states(self.best_model_save_paths[target_idx], self.model)
     
     def _save_txt(self, metrics: Dict[str, float], target_metric: str):
-        target_idx = self.target_metrics.index(target_metric)
+        if target_metric == 'mixed':
+            target_idx = -1
+        else:
+            target_idx = self.target_metrics.index(target_metric)
         with open(self.best_txt_save_paths[target_idx], 'w') as f:
             f.write('Epoch: {}\n'.format(self.best_epoch[target_idx]))
             f.write('Metric: {}\n'.format(target_metric))
@@ -61,4 +85,18 @@ class EarlyStoppingSave:
                         raise ValueError('Target metric {} does not match with the metric in the file {}'.format(target_metric, txt_path))
                     best[target_metrics.index(target_metric)] = float(f.readline().split(':')[-1])
                 logger.info('====> Best metric {} found at epoch: {} with value: {:.4f}'.format(target_metric, best_epoch[target_metrics.index(target_metric)], best[target_metrics.index(target_metric)]))
+                
+        # Add mixed metric
+        best.append(0.0)
+        best_epoch.append(0)
+        txt_path = os.path.join(save_dir, 'best_mixed.txt')
+        if os.path.exists(txt_path):
+            with open(txt_path, 'r') as f:
+                best_epoch[-1] = int(f.readline().split(':')[-1])
+                metric = f.readline().split(':')[-1].strip()
+                if metric != 'mixed':
+                    raise ValueError('Target metric {} does not match with the metric in the file {}'.format('mixed', txt_path))
+                best[-1] = float(f.readline().split(':')[-1])
+            logger.info('====> Best metric {} found at epoch: {} with value: {:.4f}'.format('mixed', best_epoch[-1], best[-1]))
+        
         return EarlyStoppingSave(target_metrics, save_dir, model, best, best_epoch)
