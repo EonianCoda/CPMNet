@@ -105,18 +105,16 @@ class TrainDataset(Dataset):
             
             update_dict[series_name][nodule_index] = max(update_dict[series_name][nodule_index], nodule_prob)    
 
-        for i, series_name in enumerate(self.series_names):
-            if series_name in update_dict:
-                # update nodule prob
-                for nodule_index, nodule_prob in update_dict[series_name].items():
-                    self.labels[i][ALL_PROB][nodule_index] = nodule_prob
-                # penalize not appearing nodules
-                non_appear_nodule_indices = [nodule_index for nodule_index in range(self.labels[i][ALL_PROB].shape[0]) if nodule_index not in update_dict[series_name]]
-                self.labels[i][ALL_PROB][non_appear_nodule_indices] **= 2
-            else: # penalize not appearing nodules
-                self.labels[i][ALL_PROB] **= 2
-            
-            self.labels[i][ALL_PROB] = np.clip(self.labels[i][ALL_PROB], 0, 1)
+        series_names = set(series_names)
+        for series_name in series_names:
+            label_i = self.series_names.index(series_name)
+            # update nodule prob
+            for nodule_index, nodule_prob in update_dict[series_name].items():
+                self.labels[label_i][ALL_PROB][nodule_index] = nodule_prob
+            # penalize not appearing nodules
+            non_appear_nodule_indices = [nodule_index for nodule_index in range(self.labels[label_i][ALL_PROB].shape[0]) if nodule_index not in update_dict[series_name]]
+            self.labels[label_i][ALL_PROB][non_appear_nodule_indices] **= 2
+            self.labels[label_i][ALL_PROB] = np.clip(self.labels[label_i][ALL_PROB], 0, 1)
     
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]

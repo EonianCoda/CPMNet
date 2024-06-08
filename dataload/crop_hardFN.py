@@ -131,7 +131,7 @@ class InstanceCrop(object):
             else:
                 intersect_mask = (nodule_bb_min > bb_min).all(axis=1) & (nodule_bb_max < bb_max).all(axis=1)
                 tp_num = np.sum(intersect_mask)
-                tp_prob = np.max(all_prob[intersect_mask]) if tp_num > 0 else 0
+                tp_prob = np.min(all_prob[intersect_mask]) if tp_num > 0 else 0
                 
             tp_probs.append(tp_prob)
             tp_nums.append(tp_num)

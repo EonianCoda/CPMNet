@@ -345,6 +345,7 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
     transform_list_train = [transform.SemiRandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
+    transform_list_train.append(transform.RandomAugmentNodule(p=0.5, offset=1))
     transform_list_train.append(transform.SemiRandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
         
     transform_list_train.append(transform.SemiCoordToAnnot())
@@ -439,13 +440,11 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
 
     # Set pseudo labels
     original_num_unlabeled = len(updated_dataset)
-    zero_count = 0
     for series_name, label in pseu_labels.items():
         prob = label[ALL_PROB]
         if len(prob) != 0:
             valid_mask = (prob > prob_threshold)
             if len(valid_mask) == 0:
-                zero_count += 1
                 label = {ALL_LOC: np.zeros((0, 3)),
                         ALL_RAD: np.zeros((0,)),
                         ALL_CLS: np.zeros((0, 3), dtype=np.int32),
@@ -453,8 +452,6 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
             else:
                 label = {key: value[valid_mask] for key, value in label.items()}
             pseu_labels[series_name] = label
-        else:
-           zero_count += 1 
     updated_dataset.set_pseu_labels(pseu_labels)
     new_num_unlabeled = len(updated_dataset)
     logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
