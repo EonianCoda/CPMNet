@@ -401,6 +401,7 @@ if __name__ == '__main__':
                             dataloader = train_loader,
                             ema = ema, 
                             device = device,
+                            detection_postprocess = test_det_postprocess,
                             detection_loss = detection_loss)
         scheduler_warm.step()
         

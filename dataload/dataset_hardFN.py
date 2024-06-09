@@ -113,7 +113,7 @@ class TrainDataset(Dataset):
                 self.labels[label_i][ALL_PROB][nodule_index] = nodule_prob
             # penalize not appearing nodules
             non_appear_nodule_indices = [nodule_index for nodule_index in range(self.labels[label_i][ALL_PROB].shape[0]) if nodule_index not in update_dict[series_name]]
-            self.labels[label_i][ALL_PROB][non_appear_nodule_indices] **= 2
+            self.labels[label_i][ALL_PROB][non_appear_nodule_indices] *= 0.9
             self.labels[label_i][ALL_PROB] = np.clip(self.labels[label_i][ALL_PROB], 0, 1)
     
     def __getitem__(self, idx):
