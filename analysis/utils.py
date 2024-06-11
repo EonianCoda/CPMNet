@@ -20,7 +20,6 @@ def pred2nodulefinding(line: str) -> NoduleFinding:
                   'avg_num_matched': avg_num_matched}
     elif len(pred) == 19: # has matched
         series_name, x, y, z, w, h, d, prob, nodule_type, match_iou, is_gt, num_matched, avg_num_matched, gt_x, gt_y, gt_z, gt_w, gt_h, gt_d = pred
-        gt_x = None
         kwargs = {'num_matched': num_matched, 
                   'avg_num_matched': avg_num_matched}
     else:
