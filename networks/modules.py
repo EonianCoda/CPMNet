@@ -35,13 +35,13 @@ class SELayer(nn.Module):
 
 class ConvBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size=3, dilation=1, stride=1, groups=1,
-                 norm_type='none', act_type='ReLU'):
+                 norm_type='none', act_type='ReLU', inplace=True):
         super(ConvBlock, self).__init__()
 
         self.conv = nn.Conv3d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, groups=groups,
                               padding=kernel_size // 2 + dilation - 1, dilation=dilation, bias=False)
         self.norm = norm_layer3d(norm_type, out_channels)
-        self.act = act_layer(act_type)
+        self.act = act_layer(act_type, inplace=inplace)
 
     def forward(self, x):
         x = self.conv(x)
@@ -49,19 +49,19 @@ class ConvBlock(nn.Module):
         x = self.act(x)
         return x
 
-def act_layer(act='ReLU'):
+def act_layer(act='ReLU', inplace=True):
     if act == 'ReLU':
-        return nn.ReLU(inplace=True)
+        return nn.ReLU(inplace=inplace)
     elif act == 'LeakyReLU':
-        return nn.LeakyReLU(inplace=True, negative_slope=0.1)
+        return nn.LeakyReLU(inplace=inplace, negative_slope=0.1)
     elif act == 'ELU':
-        return nn.ELU(inplace=True)
+        return nn.ELU(inplace=inplace)
     elif act == 'PReLU':
-        return nn.PReLU(inplace=True)
+        return nn.PReLU(inplace=inplace)
     elif act == 'RRelu':
-        return nn.RReLU(inplace=True)
+        return nn.RReLU(inplace=inplace)
     elif act == 'Silu':
-        return nn.SiLU(inplace=True)
+        return nn.SiLU(inplace=inplace)
     else:
         return Identity()
 

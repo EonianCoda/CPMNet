@@ -24,6 +24,57 @@ def train_collate_fn(batches) -> Dict[str, torch.Tensor]:
 
     return {'image': torch.from_numpy(imgs), 'annot': torch.from_numpy(annot_padded)}
 
+def train_feat_collate_fn(batches) -> Dict[str, torch.Tensor]:
+    batch1 = []
+    batch2 = []
+    for b1, b2 in batches:
+        batch1.extend(b1)
+        batch2.extend(b2)
+    imgs1 = []
+    imgs2 = []
+    
+    annots1 = []
+    annots2 = []
+    
+    ctr_transforms1 = []
+    ctr_transforms2 = []
+    
+    feat_transforms1 = []
+    feat_transforms2 = []
+    
+    for b in batch1:
+        imgs1.append(b['image'])
+        annots1.append(b['annot'])
+        ctr_transforms1.append(b['ctr_transform'])
+        feat_transforms1.append(b['feat_transform'])
+        
+    for b in batch2:
+        imgs2.append(b['image'])
+        annots2.append(b['annot'])
+        ctr_transforms2.append(b['ctr_transform'])
+        feat_transforms2.append(b['feat_transform'])
+    
+    imgs = imgs1 + imgs2
+    annots = annots1 + annots2
+    ctr_transforms = ctr_transforms1 + ctr_transforms2
+    feat_transforms = feat_transforms1 + feat_transforms2
+    
+    imgs = np.stack(imgs)
+    max_num_annots = max(annot.shape[0] for annot in annots)
+
+    if max_num_annots > 0:
+        annot_padded = np.ones((len(annots), max_num_annots, 10), dtype='float32') * -1
+        for idx, annot in enumerate(annots):
+            if annot.shape[0] > 0:
+                annot_padded[idx, :annot.shape[0], :] = annot
+    else:
+        annot_padded = np.ones((len(annots), 1, 10), dtype='float32') * -1
+
+    return {'image': torch.from_numpy(imgs), 
+            'annot': torch.from_numpy(annot_padded),
+            'ctr_transforms': ctr_transforms,
+            'feat_transforms': feat_transforms}
+
 def train_hardFN_collate_fn(batches) -> Dict[str, torch.Tensor]:
     batch = []
     for b in batches:
