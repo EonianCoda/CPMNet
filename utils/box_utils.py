@@ -153,6 +153,64 @@ def nms_3D_matched(dets: torch.Tensor, overlap=0.5, top_k=200):
         idx = idx[1:][inds]
     return torch.from_numpy(np.array(keep)), num_matched
 
+def nms_3D_matched_indices(dets: torch.Tensor, overlap=0.5, top_k=200):
+    """
+    Args:
+        dets: 
+            (N, 7) [prob, ctr_z, ctr_y, ctr_x, d, h, w]
+        overlap: 
+            iou threshold
+        top_k: 
+            keep top_k results
+    """
+    # det {prob, ctr_z, ctr_y, ctr_x, d, h, w}
+    dd, hh, ww = dets[:, 4], dets[:, 5], dets[:, 6]
+    
+    z1 = dets[:, 1] - 0.5 * dd
+    y1 = dets[:, 2] - 0.5 * hh
+    x1 = dets[:, 3] - 0.5 * ww
+    
+    z2 = dets[:, 1] + 0.5 * dd
+    y2 = dets[:, 2] + 0.5 * hh
+    x2 = dets[:, 3] + 0.5 * ww
+    
+    scores = dets[:, 0]
+    areas = dd * hh * ww
+    
+    _, idx = scores.sort(0, descending=True)
+    keep = []
+    matched_indices = []
+    while idx.size(0) > 0:
+        i = idx[0]
+        keep.append(int(i.cpu().numpy()))
+        
+        matched_indices.append(idx[0:1])
+        if idx.size(0) == 1:
+            break
+        
+        xx1 = torch.max(x1[idx[1:]], x1[i].expand(len(idx)-1))
+        yy1 = torch.max(y1[idx[1:]], y1[i].expand(len(idx)-1))
+        zz1 = torch.max(z1[idx[1:]], z1[i].expand(len(idx)-1))
+
+        xx2 = torch.min(x2[idx[1:]], x2[i].expand(len(idx)-1))
+        yy2 = torch.min(y2[idx[1:]], y2[i].expand(len(idx)-1))
+        zz2 = torch.min(z2[idx[1:]], z2[i].expand(len(idx)-1))
+
+        w = torch.clamp(xx2 - xx1, min=0.0)
+        h = torch.clamp(yy2 - yy1, min=0.0)
+        d = torch.clamp(zz2 - zz1, min=0.0)
+
+        inter = w*h*d
+        IoU = inter / (areas[i] + areas[idx[1:]] - inter)
+        inds = IoU <= overlap
+        
+        matched_indices[-1] = torch.cat((matched_indices[-1], idx[1:][~inds]), dim=0)
+        if len(keep) == top_k:
+            break
+        
+        idx = idx[1:][inds]
+    return torch.from_numpy(np.array(keep)), matched_indices
+
 def nms_3D_matched_sum(dets: torch.Tensor, all_num_matched: np.ndarray, overlap=0.5, top_k=200):
     """
     Args:
@@ -216,11 +274,24 @@ def nms_3D_matched_sum(dets: torch.Tensor, all_num_matched: np.ndarray, overlap=
         idx = idx[1:][inds]
         all_num_matched = all_num_matched[1:][inds_np]
     avg_num_matched = num_matched / np.array(num_matched_crop)
-    valid_mask = avg_num_matched >= 5
-    keep = np.array(keep)[valid_mask]
-    avg_num_matched = avg_num_matched[valid_mask]
-    num_matched = np.array(num_matched)[valid_mask]
-    return torch.from_numpy(np.array(keep)), num_matched, avg_num_matched
+    
+    keep = torch.from_numpy(np.array(keep))
+    # d, h, w = dets[keep, 4], dets[keep, 5], dets[keep, 6]
+    # volumes = d * h * w
+    # volumes = volumes.cpu().numpy()
+    # prob_threshold = 0.65
+    # matched_threshold = np.minimum((volumes / 64) / 2, 7)
+    
+    # valid_mask = np.logical_or((avg_num_matched >= matched_threshold), (dets[keep, 0].cpu().numpy() >= prob_threshold))
+    # keep = keep[valid_mask]
+    # avg_num_matched = avg_num_matched[valid_mask]
+    # num_matched = np.array(num_matched)[valid_mask]    
+    
+    # valid_mask = avg_num_matched >= 5
+    # keep = np.array(keep)[valid_mask]
+    # avg_num_matched = avg_num_matched[valid_mask]
+    # num_matched = np.array(num_matched)[valid_mask]
+    return keep , num_matched, avg_num_matched
 
 def iou_3D(box1, box2):
     # need z_ctr, y_ctr, x_ctr, d
