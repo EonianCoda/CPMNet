@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Tuple
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-
 from utils.average_meter import AverageMeter
 from utils.utils import get_progress_bar
 from .utils import get_memory_format
@@ -40,8 +39,7 @@ def train(args,
     memory_format = get_memory_format(getattr(args, 'memory_format', None))
     if memory_format == torch.channels_last_3d:
         logger.info('Use memory format: channels_last_3d to train')
-    # train_one_step = train_one_step_wrapper(memory_format)
-    feat_loss_fn = nn.CosineEmbeddingLoss()
+    feat_loss_fn = nn.CosineEmbeddingLoss(reduction='none')
     optimizer.zero_grad()
     progress_bar = get_progress_bar('Train', (total_num_steps - 1) // iters_to_accumulate + 1)
     for iter_i, sample in enumerate(dataloader):
@@ -82,14 +80,16 @@ def train(args,
                         for trans in reversed(feat_transforms):
                             feats2[b_i, ...] = trans.backward(feats2[b_i, ...])
                 
-                # shape of feats: [bs, c, z, y, x]
-                bs, c, z, y, x = feats1.shape
-                num_target = bs * z * y * x
+                bs = len(feats1)
                 
-                f1 = feats1.view(bs, c, -1).permute(0, 2, 1).contiguous().view(-1, c)
-                f2 = feats2.view(bs, c, -1).permute(0, 2, 1).contiguous().view(-1, c)
-                feat_loss = feat_loss_fn(f1, f2, torch.ones(num_target, device=device)) 
-        
+                f1 = feats1.contiguous().view(bs, -1)
+                f2 = feats2.contiguous().view(bs, -1)
+                
+                # Get crop has nodule
+                has_nodule = torch.any(labels[: num_data // 2, :, -1] == 1, dim = 1)
+                feat_loss = feat_loss_fn(f1, f2, torch.ones(bs, device=device))
+                feat_loss[has_nodule] *= 2
+                feat_loss = feat_loss.mean()
                 loss = loss + feat_loss * args.lambda_feat
                 
                 del image, labels, output, feats, feats1, feats2, f1, f2

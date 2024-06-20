@@ -304,10 +304,11 @@ class Resnet18(nn.Module):
             feats = self.fpn([x1, x2, x3])
         
         if self.training and self.dropout is not None:
-            feats = self.dropout(feats)
+            out = self.head(self.dropout(feats))
+        else:
+            out = self.head(feats)
         
         "decode"
-        out = self.head(feats)
         if self.training and self.detection_loss != None:
             return self.detection_loss(out, labels, device=self.device)
         return out, feats
