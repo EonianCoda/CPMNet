@@ -61,9 +61,9 @@ class DetectionPostprocess(nn.Module):
                 det[:, 1] = keep_topk_score
                 det[:, 2:] = pred_bboxes[j][keep_topk_idx]
             
-                keep, all_matched_indices = nms_3D_matched_indices(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
+                keep, all_matched_indices, all_matched_ious = nms_3D_matched_indices(det[:, 1:], overlap=self.nms_threshold, top_k=self.nms_topk)
                 
-                for i, (keep_i, matched_indices) in enumerate(zip(keep, all_matched_indices)):
+                for i, (keep_i, matched_indices, matched_ious) in enumerate(zip(keep, all_matched_indices, all_matched_ious)):
                     # det_batch = det[keep_i.long()]
                     keep_det = det[keep_i.long()]
                     keep_nodule_volumes = keep_det[5] * keep_det[6] * keep_det[7]
@@ -71,18 +71,31 @@ class DetectionPostprocess(nn.Module):
                     # top_n =  max(3, int(0.2 * len(matched_indices)))
                     # if top_n > len(matched_indices):
                     #     top_n = len(matched_indices)
-                    top_n = min(3, len(matched_indices))
-                    if top_n > 1 and keep_nodule_volumes > 180:
+                    top_n = min(7, len(matched_indices))
+                    
+                    if top_n > 1:
                         matched_det = det[matched_indices.long()]
                         # Get top n matched indices, sorted by scores
-                        matched_det = matched_det[matched_det[:, 1].argsort(descending=True)]
+                        sorted_indices = matched_det[:, 1].argsort(descending=True)
+                        matched_ious = matched_ious[sorted_indices]
+                        matched_det = matched_det[sorted_indices]
                         
                         # Average the top n
-                        avg_det = matched_det[:top_n].mean(dim=0)
+                        matched_det = matched_det[:top_n]
+                        matched_ious = matched_ious[:top_n]
+                        avg_matched_iou = matched_ious[matched_ious != 1.0].mean()
+                        
+                        # min_iou = 0.5
+                        # max_iou = 0.95
+                        # prob_ratio = ((torch.clamp(avg_matched_iou, min_iou, max_iou) - min_iou) / (max_iou - min_iou) * 0.15) + 1.0
+                        
+                        # iou_threshold = 0.7
+                        # matched_det = matched_det[matched_ious > iou_threshold]
+                        avg_det = matched_det.mean(dim=0)
                         # Get top1
                         prob = matched_det[0, 1]
                         avg_det[0] = 1
-                        avg_det[1] = prob
+                        avg_det[1] = prob # * prob_ratio
                         dets[j][i] = avg_det
                     else:
                         dets[j][i] = det[matched_indices[0].long()]

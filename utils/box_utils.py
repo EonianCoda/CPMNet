@@ -180,11 +180,13 @@ def nms_3D_matched_indices(dets: torch.Tensor, overlap=0.5, top_k=200):
     _, idx = scores.sort(0, descending=True)
     keep = []
     matched_indices = []
+    matched_ious = []
     while idx.size(0) > 0:
         i = idx[0]
         keep.append(int(i.cpu().numpy()))
         
         matched_indices.append(idx[0:1])
+        matched_ious.append(torch.tensor([1.0,], device=dets.device))
         if idx.size(0) == 1:
             break
         
@@ -205,11 +207,12 @@ def nms_3D_matched_indices(dets: torch.Tensor, overlap=0.5, top_k=200):
         inds = IoU <= overlap
         
         matched_indices[-1] = torch.cat((matched_indices[-1], idx[1:][~inds]), dim=0)
+        matched_ious[-1] = torch.cat((matched_ious[-1], IoU[~inds]), dim=0)
         if len(keep) == top_k:
             break
         
         idx = idx[1:][inds]
-    return torch.from_numpy(np.array(keep)), matched_indices
+    return torch.from_numpy(np.array(keep)), matched_indices, matched_ious
 
 def nms_3D_matched_sum(dets: torch.Tensor, all_num_matched: np.ndarray, overlap=0.5, top_k=200):
     """

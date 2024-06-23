@@ -134,7 +134,7 @@ if __name__ == '__main__':
         
     # Get val function
     if args.apply_aug:
-        from logic.val_aug_matched import val
+        from logic.val_aug_matched_matched_indices import val
     else:
         from logic.val_matched_indices import val
         
@@ -180,6 +180,8 @@ if __name__ == '__main__':
         
         if args.patch_label_type != 'none':
             save_folder_name += '_PT{}'.format(args.patch_label_type)
+        
+        save_folder_name += '_match_indices'
         
         metrics = val(args = args,
                     model = model,
