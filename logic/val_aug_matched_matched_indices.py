@@ -169,8 +169,35 @@ def val(args,
                 
                 # NMS
                 if len(output) > 0:
-                    keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
-                    output = output[keep]
+                    dets = (-torch.ones((len(output), 8)))
+                    keep, all_matched_indices, all_matched_ious = nms_3D_matched_indices(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
+                    
+                    for j, (keep_i, matched_indices, matched_ious) in enumerate(zip(keep, all_matched_indices, all_matched_ious)):
+                        top_n = min(7, len(matched_indices))
+                        
+                        if top_n > 1:
+                            matched_det = output[matched_indices.long()]
+                            # Get top n matched indices, sorted by scores
+                            sorted_indices = matched_det[:, 1].argsort(descending=True)
+                            matched_ious = matched_ious[sorted_indices]
+                            matched_det = matched_det[sorted_indices]
+                            
+                            # Average the top n
+                            matched_det = matched_det[:top_n]
+                            matched_ious = matched_ious[:top_n]
+                            avg_matched_iou = matched_ious[matched_ious != 1.0].mean()
+                            
+                            avg_det = matched_det.mean(dim=0)
+                            # Get top1
+                            prob = matched_det[0, 1]
+                            avg_det[0] = 1
+                            avg_det[1] = prob # * prob_ratio
+                            dets[j] = avg_det
+                        else:
+                            dets[j] = output[matched_indices[0].long()]
+                    output = dets[dets[:, -1] != -1.0]    
+                    # keep = nms_3D(output[:, 1:], overlap=0.05, top_k=nms_keep_top_k)
+                    # output = output[keep]
                 output = output.numpy()
             
                 preds = convert_to_standard_output(output, series_names[i])  
