@@ -186,9 +186,11 @@ class DetDataset(Dataset):
         self.splitcomb = SplitComb
         transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
                     [FlipTransform(flip_depth=False, flip_height=True, flip_width=False)],
-                    [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)]]
-        
-        self.transforms_weight = [0.5] + [0.5 / len(transforms)] * len(transforms) # first one is for no augmentation
+                    [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)],
+                    [Rotate90(rot_xy = True, rot_xz = False, rot_yz = False)],
+                    [Rotate90(rot_xy = False, rot_xz = True, rot_yz = False)],
+                    [Rotate90(rot_xy = False, rot_xz = False, rot_yz = True)]]
+        self.transforms_weight = [0.3] + [0.7 / len(transforms)] * len(transforms) # first one is for no augmentation
         self.transforms_weight = np.array([w / sum(self.transforms_weight) for w in self.transforms_weight]) # normalize to 1
         self.transforms = []
         for i in range(len(transforms)):
