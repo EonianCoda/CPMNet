@@ -11,19 +11,6 @@ from .utils import get_memory_format
 
 logger = logging.getLogger(__name__)
 
-def feat_loss_wrapper(feat_loss_fn, device):
-    def feat_loss(feats1, feats2, has_nodule):
-        bs = len(feats1)
-        f1 = feats1.contiguous().view(bs, -1)
-        f2 = feats2.contiguous().view(bs, -1)
-            
-        # Get crop has nodule
-        feat_loss = feat_loss_fn(f1, f2, torch.ones(bs, device=device))
-        feat_loss[has_nodule] *= 2
-        feat_loss = feat_loss.mean()
-        del f1, f2
-        return feat_loss
-    return feat_loss
 def train(args,
           model: nn.modules,
           optimizer: torch.optim.Optimizer,
@@ -53,8 +40,6 @@ def train(args,
     if memory_format == torch.channels_last_3d:
         logger.info('Use memory format: channels_last_3d to train')
     feat_loss_fn = nn.CosineEmbeddingLoss(reduction='none')
-    feat_loss_fn = feat_loss_wrapper(feat_loss_fn, device)
-    
     optimizer.zero_grad()
     progress_bar = get_progress_bar('Train', (total_num_steps - 1) // iters_to_accumulate + 1)
     for iter_i, sample in enumerate(dataloader):
@@ -74,55 +59,63 @@ def train(args,
                 image = sample['image'].to(device, non_blocking=True, memory_format=memory_format) # z, y, x
                 labels = sample['annot'].to(device, non_blocking=True) # z, y, x, d, h, w, type[-1, 0]
 
-                output, (feats, feats_x2, feats_x3) = model(image)
+                output, feats = model(image)
                 
-                cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = detection_loss(output, labels, device = device)
+                (cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss), (target_scores, mask_ignore) = detection_loss(output, labels, device = device)
                 cls_pos_loss, cls_neg_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
                 loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
                 
                 feats1 = feats[: num_data // 2].clone()
                 feats2 = feats[num_data // 2: ].clone()
                 
-                feats_x2_1 = feats_x2[: num_data // 2].clone()
-                feats_x2_2 = feats_x2[num_data // 2: ].clone()
-                
-                feats_x3_1 = feats_x3[: num_data // 2].clone()
-                feats_x3_2 = feats_x3[num_data // 2: ].clone()
+                target_scores = target_scores[: num_data // 2]
+                mask_ignore = mask_ignore[: num_data // 2]
+                fg_feat_mask = torch.logical_or(target_scores == 1, mask_ignore == 1)
+                fg_feat_mask = fg_feat_mask.view(len(fg_feat_mask), 1, 24, 24, 24)
                 
                 for b_i in range(len(feat_transforms1)):
                     feat_transforms = feat_transforms1[b_i]
                     if len(feat_transforms) > 0:
                         for trans in reversed(feat_transforms):
                             feats1[b_i, ...] = trans.backward(feats1[b_i, ...])
-                            feats_x2_1[b_i, ...] = trans.backward(feats_x2_1[b_i, ...])
-                            feats_x3_1[b_i, ...] = trans.backward(feats_x3_1[b_i, ...])
+                            fg_feat_mask = trans.backward(fg_feat_mask)
                             
                 for b_i in range(len(feat_transforms2)):
                     feat_transforms = feat_transforms2[b_i]
                     if len(feat_transforms) > 0:
                         for trans in reversed(feat_transforms):
                             feats2[b_i, ...] = trans.backward(feats2[b_i, ...])
-                            feats_x2_2[b_i, ...] = trans.backward(feats_x2_2[b_i, ...])
-                            feats_x3_2[b_i, ...] = trans.backward(feats_x3_2[b_i, ...])
-                            
-                has_nodule = torch.any(labels[: num_data // 2, :, -1] == 1, dim = 1)
                 
-                feat_loss = feat_loss_fn(feats1, feats2, has_nodule)
-                feat_loss += feat_loss_fn(feats_x2_1, feats_x2_2, has_nodule)
-                feat_loss += feat_loss_fn(feats_x3_1, feats_x3_2, has_nodule)
+                bs = len(feats1)
+                has_nodule = torch.any(labels[: num_data // 2, :, -1] != -1, dim = 1)
                 
-                # bs = len(feats1)
-                # f1 = feats1.contiguous().view(bs, -1)
-                # f2 = feats2.contiguous().view(bs, -1)
+                # feat1's shape is (bs, 96, 24, 24, 24)
+                # feat2's shape is (bs, 96, 24, 24, 24)
+                # fg_feat_mask is (bs, 1, 24, 24, 24)
+                # compute L1 loss between feat1 and feat2 based on fg_feat_mask
+                if torch.any(fg_feat_mask == 1):
+                    feat_loss1 = torch.abs(feats1 - feats2)
+                    feat_loss1 = feat_loss1 * fg_feat_mask
+                    feat_loss1 = feat_loss1.sum() 
+                    feat_loss1 = feat_loss1 / torch.sum(fg_feat_mask)
+                else:
+                    feat_loss1 = torch.tensor(0, dtype=torch.float32, device=device)
+                    
+                # Feat loss 2
+                f1 = feats1.contiguous().view(bs, -1)
+                f2 = feats2.contiguous().view(bs, -1)
                 
-                # # Get crop has nodule
-                # feat_loss = feat_loss_fn(f1, f2, torch.ones(bs, device=device))
-                # feat_loss[has_nodule] *= 2
-                # feat_loss = feat_loss.mean()
+                feat_loss2 = feat_loss_fn(f1, f2, torch.ones(bs, device=device))
+                feat_loss2[has_nodule] *= 2
+                feat_loss2 = feat_loss2.mean()
+                
+                # Combine feat loss
+                feat_loss = feat_loss1 + feat_loss2
                 
                 loss = loss + feat_loss * args.lambda_feat
                 
-                del image, labels, output, feats, feats1, feats2, feats_x2, feats_x3, feats_x2_1, feats_x2_2, feats_x3_1, feats_x3_2
+                del image, labels, output, feats, feats1, feats2, f1, f2
+                del target_scores, mask_ignore, fg_feat_mask
             loss = loss / iters_to_accumulate
             scaler.scale(loss).backward()
         
