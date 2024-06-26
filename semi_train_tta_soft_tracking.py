@@ -136,6 +136,8 @@ def get_args():
     parser.add_argument('--select_bg_crop', type=float, default=0, help='select fg crop')
     parser.add_argument('--combine_cand', action='store_true', default=False, help='combine cand')
     
+    parser.add_argument('--semi_use_rotate90', action='store_true', default=False, help='use rotate90')
+    
     # Semi tracking
     parser.add_argument('--pseudo_update_ema_alpha', type=float, default=0.9, help='tracking interval')
     parser.add_argument('--pseudo_update_iou_threshold', type=float, default=0.05, help='iou threshold for tracking')
@@ -379,7 +381,7 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
     strong_aug = build_strong_augmentation(args, crop_size, pad_value, blank_side)
     train_dataset_u = UnLabeledDataset(series_list_path = args.unlabeled_train_set, crop_fn = crop_fn_train_u, image_spacing=IMAGE_SPACING, use_gt_crop=args.use_gt_crop,
                                        strong_aug=strong_aug, min_d=args.min_d, min_size = args.min_size, norm_method=args.data_norm_method, mmap_mode=mmap_mode, 
-                                       pseudo_remove_threshold = args.pseudo_remove_threshold, pseudo_update_ema_alpha=args.pseudo_update_ema_alpha)
+                                       pseudo_remove_threshold = args.pseudo_remove_threshold, pseudo_update_ema_alpha=args.pseudo_update_ema_alpha, use_rotate90=args.semi_use_rotate90)
     train_loader_u = DataLoader(train_dataset_u, batch_size=args.unlabeled_batch_size, shuffle=True, collate_fn=unlabeled_tta_train_tracking_collate_fn, 
                                 num_workers=min(args.unlabeled_batch_size, args.max_workers), pin_memory=pin_memory, drop_last=True)
     

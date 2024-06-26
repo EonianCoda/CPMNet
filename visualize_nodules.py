@@ -73,7 +73,12 @@ if __name__ == '__main__':
         FP_save_folder = os.path.join(args.save_folder, 'FP')
         os.makedirs(FP_save_folder, exist_ok=True)
         with get_progress_bar('Visualizing FP', len(fp_nodules)) as pbar:
-            for i, n in enumerate(fp_nodules):
+            fp_probs = [n.prob for n in fp_nodules]
+            # Sort by probability
+            sorted_indices = np.argsort(fp_probs)[::-1]
+            
+            for i, idx in enumerate(sorted_indices):
+                n = fp_nodules[idx]
                 img_path = gen_dicom_path(series_names_to_folder[n.series_name], n.series_name)
                 image = (load_image(img_path) * 255).astype(np.uint8)
                 bboxes = noduleFinding2cude([n], image.shape)

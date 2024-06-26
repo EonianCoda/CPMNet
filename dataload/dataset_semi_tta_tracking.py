@@ -1,15 +1,16 @@
 # -*- coding: utf-8 -*-
 import logging
 import copy
+import math
 import torchvision
 import numpy as np
-from typing import List
+from typing import List, Tuple
 from .utils import load_series_list, load_image, load_label, load_lobe, ALL_RAD, ALL_LOC, ALL_CLS, ALL_PROB, \
                     gen_dicom_path, gen_label_path, gen_lobe_path, normalize_processed_image, normalize_raw_image, \
                     compute_bbox3d_iou
 from torch.utils.data import Dataset
-from transform.ctr_transform import OffsetMinusCTR
-from transform.feat_transform import FlipFeatTransform
+from transform.ctr_transform import OffsetMinusCTR, RotateCTR, TransposeCTR
+from transform.feat_transform import FlipFeatTransform, Rot90FeatTransform, TransposeFeatTransform
 from utils.box_utils import nms_3D
 import torch
 
@@ -198,10 +199,86 @@ class FlipTransform():
             sample['feat_transform'].append(FlipFeatTransform(flip_axes))
         return sample
 
+class Rotate90():
+    def __init__(self, rot_xy: bool = True, rot_xz: bool = False, rot_yz: bool = False):
+        self.rot_xy = rot_xy
+        self.rot_xz = rot_xz
+        self.rot_yz = rot_yz
+    
+    def __call__(self, sample):
+        image = sample['image']
+        image_shape = image.shape[1:] # remove channel dimension
+        
+        all_rot_axes = []
+        rot_angles = []
+        if self.rot_xy:
+            all_rot_axes.append((-1, -2))
+            rot_angles.append(90)
+        
+        if self.rot_xz:
+            all_rot_axes.append((-1, -3))
+            rot_angles.append(90)
+        
+        if self.rot_yz:
+            all_rot_axes.append((-2, -3))
+            rot_angles.append(90)
+        
+        if len(all_rot_axes) > 0:
+            rot_image = sample['image']
+            for rot_axes, rot_angle in zip(all_rot_axes, rot_angles):
+                rot_image = self.rotate_3d_image(rot_image, rot_axes, rot_angle)
+                sample['ctr_transform'].append(RotateCTR(rot_angle, rot_axes, image_shape))
+                sample['feat_transform'].append(Rot90FeatTransform(rot_angle, rot_axes))
+            sample['image'] = rot_image
+        return sample
+    
+    @staticmethod
+    def rotate_3d_image(data: np.ndarray, rot_axes: Tuple[int], rot_angle: int):
+        """
+        Args:
+            data: 3D image data with shape (D, H, W).
+            rot_axes: rotation axes.
+            rot_angle: rotation angle. One of 90, 180, or 270.
+        """
+        rotated_data = data.copy()
+        rotated_data = np.rot90(rotated_data, k=rot_angle // 90, axes=rot_axes)
+        return rotated_data
+
+    @staticmethod
+    def rotate_3d_bbox(ctrs: np.ndarray, bbox_shapes: np.ndarray, image_spacing: np.ndarray, image_shape: np.ndarray, rot_axes: Tuple[int], angle: int):
+        """
+        Args:
+            ctrs: 3D bounding box centers with shape (N, 3).
+            bbox_shapes: 3D bounding box shapes with shape (N, 3).
+            image_shape: 3D image shape with shape (3,).
+            angle: rotation angle. One of 90, 180, or 270.
+            plane: rotation plane. One of 'xy', 'xz', or 'yz'.
+        """
+        new_ctr_zyx = ctrs.copy()
+        new_shape_dhw = bbox_shapes.copy()
+        new_image_spacing = image_spacing.copy()
+        
+        if len(ctrs) != 0:
+            radian = math.radians(angle)
+            cos = np.cos(radian)
+            sin = np.sin(radian)
+            img_center = np.array(image_shape) / 2
+            new_ctr_zyx = ctrs.copy()
+            new_ctr_zyx[:, rot_axes[0]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * cos - (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * sin + img_center[rot_axes[0]]
+            new_ctr_zyx[:, rot_axes[1]] = (ctrs[:, rot_axes[0]] - img_center[rot_axes[0]]) * sin + (ctrs[:, rot_axes[1]] - img_center[rot_axes[1]]) * cos + img_center[rot_axes[1]]
+        
+        if angle == 90 or angle == 270:
+            if len(bbox_shapes) != 0:
+                new_shape_dhw[:, rot_axes[0]] = bbox_shapes[:, rot_axes[1]] 
+                new_shape_dhw[:, rot_axes[1]] = bbox_shapes[:, rot_axes[0]]
+            new_image_spacing[rot_axes[0]] = image_spacing[rot_axes[1]]
+            new_image_spacing[rot_axes[1]] = image_spacing[rot_axes[0]]
+        return new_ctr_zyx, new_shape_dhw, new_image_spacing
+
 class UnLabeledDataset(Dataset):
     def __init__(self, series_list_path: str, image_spacing: List[float], strong_aug = None, crop_fn=None, use_bg=False, 
                  min_d=0, min_size: int = 0, norm_method='scale', mmap_mode=None, use_gt_crop=True, pseudo_remove_threshold=0.4,
-                 pseudo_update_ema_alpha = 0.9):
+                 pseudo_update_ema_alpha = 0.9, use_rotate90=False):
         self.series_list_path = series_list_path
         self.norm_method = norm_method
         self.image_spacing = np.array(image_spacing, dtype=np.float32) # (z, y, x)
@@ -243,13 +320,24 @@ class UnLabeledDataset(Dataset):
         self.dicom_paths = copy.deepcopy(self.all_dicom_paths)
         self.series_names = copy.deepcopy(self.all_series_names)
         
-        tta_transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
+        if not use_rotate90:
+            tta_transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
+                                [FlipTransform(flip_depth=False, flip_height=True, flip_width=False)],
+                                [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)]]
+            raw_weight = 0.5
+        else:
+            tta_transforms = [[FlipTransform(flip_depth=False, flip_height=False, flip_width=True)],
                             [FlipTransform(flip_depth=False, flip_height=True, flip_width=False)],
-                            [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)]]
+                            [FlipTransform(flip_depth=True, flip_height=False, flip_width=False)],
+                            [Rotate90(rot_xy = True, rot_xz = False, rot_yz = False)],
+                            [Rotate90(rot_xy = False, rot_xz = True, rot_yz = False)],
+                            [Rotate90(rot_xy = False, rot_xz = False, rot_yz = True)]]
+            raw_weight = 0.3
+            
         self.tta_transforms = []
         for i in range(len(tta_transforms)):
             self.tta_transforms.append(torchvision.transforms.Compose(tta_transforms[i]))
-        self.tta_trans_weight = [0.5] + [0.5 / len(tta_transforms)] * len(tta_transforms) # first one is for no augmentation
+        self.tta_trans_weight = [raw_weight] + [(1 - raw_weight) / len(tta_transforms)] * len(tta_transforms) # first one is for no augmentation
         self.tta_trans_weight = np.array([w / sum(self.tta_trans_weight) for w in self.tta_trans_weight]) # normalize to 1
         
         self.strong_aug = strong_aug
