@@ -119,7 +119,7 @@ def get_args():
     # Semi hyper-parameters
     parser.add_argument('--burn_in_epochs', type=int, default=20, help='burn in epochs')
     parser.add_argument('--semi_ema_alpha', type=float, default=0.998, help='alpha of ema')
-    parser.add_argument('--semi_increase_ratio', type=float, default=1.3)
+    parser.add_argument('--semi_increase_ratio', type=float, default=1.2)
     
     parser.add_argument('--pseudo_label_threshold', type=float, default=0.7, help='threshold of pseudo label')
     parser.add_argument('--pseudo_background_threshold', type=float, default=0.4, help='threshold of pseudo background')
@@ -506,11 +506,13 @@ if __name__ == '__main__':
         end_epoch = args.epochs
         
     for epoch in range(start_epoch, end_epoch + 1):
-        # args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
-        args.pseudo_label_threshold = original_psuedo_label_threshold
+        if args.semi_increase_ratio > 1.0:
+            args.pseudo_label_threshold = original_psuedo_label_threshold + (final_psuedo_label_threshod - original_psuedo_label_threshold) * (epoch / args.epochs)
+        else:
+            args.pseudo_label_threshold = original_psuedo_label_threshold
         logger.info('Epoch: {} pseudo label threshold: {:.4f}'.format(epoch, args.pseudo_label_threshold))
         if epoch % args.pseudo_update_interval == 0 and args.pseudo_update_interval > 0 and not (epoch == 0 and args.pseudo_pickle_path != ''):
-            # args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
+            args.pseudo_crop_threshold = original_psuedo_crop_threshold + (final_psuedo_crop_threshold - original_psuedo_crop_threshold) * (epoch / args.epochs)
             psuedo_label_save_path = os.path.join(exp_folder, 'pseu_labels', 'pseu_labels_epoch_{}.pkl'.format(epoch))
             updata_pseudo_label(args, model_t, det_loader_u, device, semi_pseudo_det_post_process, train_loader_u.dataset, psuedo_label_save_path, 
                                 prob_threshold=args.pseudo_crop_threshold)

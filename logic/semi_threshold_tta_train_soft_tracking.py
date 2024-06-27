@@ -27,8 +27,8 @@ def unsupervised_train_one_step_wrapper(memory_format, loss_fn):
         outputs = model(image)
         cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = loss_fn(outputs, labels, background_mask, soft_prob, device = device)
         cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss = cls_pos_loss.mean(), cls_neg_loss.mean(), cls_soft_loss.mean(), shape_loss.mean(), offset_loss.mean(), iou_loss.mean()
-        loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss + cls_soft_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
-        # loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        # loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss + cls_soft_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
+        loss = args.lambda_cls * (cls_pos_loss + cls_neg_loss) + args.lambda_shape * shape_loss + args.lambda_offset * offset_loss + args.lambda_iou * iou_loss
         return loss, cls_pos_loss, cls_neg_loss, cls_soft_loss, shape_loss, offset_loss, iou_loss, outputs
     return train_one_step
 
@@ -265,8 +265,7 @@ def train(args,
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 lobe = weak_lobes[i * TTA_BATCH_SIZE:end]
-                if sharpen_cls > 0:
-                    assert sharpen_cls < 1
+                if sharpen_cls > 0 and sharpen_cls < 1:
                     Cls_output = sharpen_prob(Cls_output, t=sharpen_cls)
                 outputs_t_b = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
                 
@@ -367,7 +366,9 @@ def train(args,
                 if len(new_probs_b) > 0:
                     history_ctrs[batch_i] = np.concatenate([history_ctrs[batch_i], new_ctrs_b], axis=0)
                     history_rads[batch_i] = np.concatenate([history_rads[batch_i], new_rads_b], axis=0)
-                    history_probs[batch_i] = np.concatenate([history_probs[batch_i], new_probs_b], axis=0) * args.pseudo_update_ema_alpha
+                    # history_probs[batch_i] = np.concatenate([history_probs[batch_i], new_probs_b], axis=0) * args.pseudo_update_ema_alpha
+                    new_probs_b = np.array(new_probs_b, dtype=np.float32) * args.pseudo_update_ema_alpha # penalize the new pseudo label
+                    history_probs[batch_i] = np.concatenate([history_probs[batch_i], new_probs_b], axis=0)
             
             # Generate pseudo label
             strong_ctr_transforms = strong_u_sample['ctr_transform'] # shape = (bs,)
