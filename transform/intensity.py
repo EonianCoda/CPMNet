@@ -73,6 +73,13 @@ class RandomSharpen(AbstractTransform):
                 image = cv2.addWeighted(image, alpha, blur_img, 1 - alpha, 0)
                 image = image.astype(np.float32) / 255
                 sample['image'] = image
+            elif len(sample['image'].shape) == 4:
+                image = image[0] * 255
+                image = image.astype(np.uint8)
+                blur_img = cv2.GaussianBlur(image, (3, 3), sigma)
+                image = cv2.addWeighted(image, alpha, blur_img, 1 - alpha, 0)
+                image = image.astype(np.float32) / 255
+                sample['image'][0] = image
                 
         return sample
 
