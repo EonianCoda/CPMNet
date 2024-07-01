@@ -8,6 +8,18 @@ import random
 import numpy as np
 import cv2
 
+class RandomIntensity(AbstractTransform):
+    def __init__(self, p=0.5):
+        self.random_blur = RandomBlur(sigma_range=(0.2, 0.7), p=1.0)
+        self.random_gamma = RandomGamma(gamma_range=[0.92, 1.08], p=1.0)
+        self.intensity_transforms = [self.random_blur, self.random_gamma]
+        self.p = p
+    def __call__(self, sample):
+        if random.random() < self.p:
+            aug_idx = np.random.choice(len(self.intensity_transforms), 1)[0]
+            sample = self.intensity_transforms[aug_idx](sample)
+        return sample
+
 class RandomBlur(AbstractTransform):
     """
     Randomly applies Gaussian blur to the input image.
