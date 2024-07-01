@@ -240,30 +240,25 @@ class RandomAugmentNodule(AbstractTransform):
         return sample            
 
 class RandomGamma(AbstractTransform):
-    """
-
-    """
-
-    def __init__(self, gamma_range=2, p=0.5, channel_apply=0):
+    def __init__(self, gamma_range=[0.92, 1.08], p=0.5):
         """
         gamma range: gamme will be in [1/gamma_range, gamma_range]
         """
         self.gamma_range = gamma_range
-        self.channel_apply = channel_apply
         self.p = p
 
     def __call__(self, sample):
         if random.random() < self.p:
             image = sample['image']
-            gamma = np.random.uniform(1, self.gamma_range)
-            if random.random() < 0.5:
-                gamma = 1. / gamma
-            image_t = np.power(image[self.channel_apply], gamma)
-            image[self.channel_apply] = image_t
-            sample['image'] = image
+            gamma = np.random.uniform(self.gamma_range[0], self.gamma_range[1])
+            if len(sample['image'].shape) == 3:
+                image_t = np.power(image, gamma)
+                sample['image'] = image_t
+            elif len(sample['image'].shape) == 4:
+                image_t = np.power(image[0], gamma)
+                sample['image'][0] = image_t
 
         return sample
-
 
 class RandomNoise(AbstractTransform):
     def __init__(self, p=0.5, gamma_range=(1e-4, 5e-4)):
