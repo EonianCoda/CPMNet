@@ -573,6 +573,14 @@ if __name__ == '__main__':
             logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
 
             recall, precision, tp, fp, fn = train_loader_u.dataset.get_pseudo_recall_precision()
+            pseudo_label_metrics = {}
+            pseudo_label_metrics['all_psuedo_recall'] = recall
+            pseudo_label_metrics['all_psuedo_precision'] = precision
+            pseudo_label_metrics['all_psuedo_tp'] = tp
+            pseudo_label_metrics['all_psuedo_fp'] = fp
+            pseudo_label_metrics['all_psuedo_fn'] = fn
+            write_metrics(pseudo_label_metrics, epoch, 'train', writer)
+            
             logger.info('Pseudo recall: {:.4f}, pseudo precision: {:.4f}, pseudo tp: {}, pseudo fp: {}, pseudo fn: {}'.format(recall, precision, tp, fp, fn))
         
         scheduler_warm.step()
