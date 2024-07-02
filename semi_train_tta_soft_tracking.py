@@ -571,6 +571,10 @@ if __name__ == '__main__':
                 
             new_num_unlabeled = len(train_loader_u.dataset)
             logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
+
+            recall, precision, tp, fp, fn = train_loader_u.dataset.get_pseudo_recall_precision()
+            logger.info('Pseudo recall: {:.4f}, pseudo precision: {:.4f}, pseudo tp: {}, pseudo fp: {}, pseudo fn: {}'.format(recall, precision, tp, fp, fn))
+        
         scheduler_warm.step()
         write_metrics(train_metrics, epoch, 'train', writer)
         for key, value in train_metrics.items():

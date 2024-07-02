@@ -462,6 +462,35 @@ class UnLabeledDataset(Dataset):
         self.set_pseu_labels(labels)
         # Reset the updated labels
         self.ema_updated_labels = dict()
+     
+    def get_pseudo_recall_precision(self, iou_threshold = 0.1):
+        tp, fp, fn = 0, 0, 0
+        for series_name in self.labels.keys():
+            label = self.labels[series_name]
+            gt_label = self.gt_labels[series_name]
+            if len(label[ALL_LOC]) == 0 and len(gt_label[ALL_LOC]) == 0:
+                continue
+            elif len(label[ALL_LOC]) == 0:
+                fn += len(gt_label[ALL_LOC])
+                continue
+            elif len(gt_label[ALL_LOC]) == 0:
+                fp += len(label[ALL_LOC])
+                continue
+            
+            # Compute iou
+            label_bboxes = np.stack([label[ALL_LOC] - label[ALL_RAD] / 2, label[ALL_LOC] + label[ALL_RAD] / 2], axis=1)
+            gt_bboxes = np.stack([gt_label[ALL_LOC] - gt_label[ALL_RAD] / 2, gt_label[ALL_LOC] + gt_label[ALL_RAD] / 2], axis=1)
+            ious = compute_bbox3d_iou(label_bboxes, gt_bboxes)
+            
+            matched_gt_ious = np.max(ious, axis=0)
+            matched_ious = np.max(ious, axis=1)
+            
+            tp += np.count_nonzero(matched_ious >= iou_threshold)
+            fn += np.count_nonzero(matched_gt_ious < iou_threshold)
+            fp += np.count_nonzero(matched_ious < iou_threshold)
+        recall = tp / (tp + fn + 1e-6)
+        precision = tp / (tp + fp + 1e-6)
+        return recall, precision, tp, fp, fn
         
     def __getitem__(self, idx):
         dicom_path = self.dicom_paths[idx]
