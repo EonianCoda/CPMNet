@@ -572,7 +572,7 @@ if __name__ == '__main__':
             new_num_unlabeled = len(train_loader_u.dataset)
             logger.info('After setting pseudo labels, the number of unlabeled samples is changed from {} to {}'.format(original_num_unlabeled, new_num_unlabeled))
 
-            recall, precision, tp, fp, fn = train_loader_u.dataset.get_pseudo_recall_precision()
+            recall, precision, tp, fp, fn = train_loader_u.dataset.get_pseudo_recall_precision(fg_threshold=args.pseudo_label_threshold)
             pseudo_label_metrics = {}
             pseudo_label_metrics['all_psuedo_recall'] = recall
             pseudo_label_metrics['all_psuedo_precision'] = precision

@@ -463,22 +463,27 @@ class UnLabeledDataset(Dataset):
         # Reset the updated labels
         self.ema_updated_labels = dict()
      
-    def get_pseudo_recall_precision(self, iou_threshold = 0.1):
+    def get_pseudo_recall_precision(self, iou_threshold = 0.1, fg_threshold = 0.6):
         tp, fp, fn = 0, 0, 0
         for series_name in self.labels.keys():
             label = self.labels[series_name]
             gt_label = self.gt_labels[series_name]
-            if len(label[ALL_LOC]) == 0 and len(gt_label[ALL_LOC]) == 0:
+            
+            prob = label[ALL_PROB]
+            valid_mask = prob >= fg_threshold
+            all_loc = label[ALL_LOC][valid_mask]
+            all_rad = label[ALL_RAD][valid_mask]
+            if len(all_loc) == 0 and len(gt_label[ALL_LOC]) == 0:
                 continue
-            elif len(label[ALL_LOC]) == 0:
+            elif len(all_loc) == 0:
                 fn += len(gt_label[ALL_LOC])
                 continue
             elif len(gt_label[ALL_LOC]) == 0:
-                fp += len(label[ALL_LOC])
+                fp += len(all_loc)
                 continue
             
             # Compute iou
-            label_bboxes = np.stack([label[ALL_LOC] - label[ALL_RAD] / 2, label[ALL_LOC] + label[ALL_RAD] / 2], axis=1)
+            label_bboxes = np.stack([all_loc - all_rad / 2, all_loc + all_rad / 2], axis=1)
             gt_bboxes = np.stack([gt_label[ALL_LOC] - gt_label[ALL_RAD] / 2, gt_label[ALL_LOC] + gt_label[ALL_RAD] / 2], axis=1)
             ious = compute_bbox3d_iou(label_bboxes, gt_bboxes)
             
