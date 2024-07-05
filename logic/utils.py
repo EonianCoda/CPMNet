@@ -62,7 +62,7 @@ def load_model(load_path: str):
     if 'model_structure' in checkpoint:
         model = checkpoint['model_structure']
     else:
-        from networks.ResNet_3D_CPM import Resnet18
+        from networks.ResNet_3D_CPM_noX4 import Resnet18
         model = Resnet18()
         
     # Load state dict
