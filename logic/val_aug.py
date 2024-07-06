@@ -126,7 +126,8 @@ def val(args,
                             for trans in reversed(feat_transforms[b_i][aug_i]):
                                 Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
                                 Shape_output[b_i, aug_i, ...] = trans.backward(Shape_output[b_i, aug_i, ...])
-                                # Offset_output[b_i, aug_i, ...] = trans.backward(Offset_output[b_i, aug_i, ...])
+                                if aug_i < 4:
+                                    Offset_output[b_i, aug_i, ...] = trans.backward(Offset_output[b_i, aug_i, ...])
                 transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
                 
@@ -140,9 +141,6 @@ def val(args,
                 else:
                     Cls_output_weighted_mean = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
                     Cls_output = Cls_output_weighted_mean.sigmoid()
-                # np.save('Cls_output.npy', Cls_output.data.cpu().numpy())
-                # np.save('Cls_output_std.npy', Cls_output_std.data.cpu().numpy())
-                # raise ValueError('stop')
                 
                 ignore_offset = 2
                 Cls_output[:, :, 0:ignore_offset, :, :] = 0
@@ -152,11 +150,19 @@ def val(args,
                 Cls_output[:, :, :, -ignore_offset:, :] = 0
                 Cls_output[:, :, :, :, -ignore_offset:] = 0
                 
-                # np.save('Shape_output.npy', Shape_output.data.cpu().numpy())
-                # np.save('Offset_output.npy', Offset_output.data.cpu().numpy())
-                # raise ValueError('stop')
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
+                
+                # Only use raw, flipx, flipy, flipz for offset
+                Offset_output = Offset_output[:, :4, ...] # (bs, 4, 3, 24, 24, 24)
+                transform_weight = [1/3] * 3
+                transform_weight = torch.tensor(transform_weight).to(device, non_blocking=True) # (3)
+                # Resize to (bs, 3, 1, 1, 1)
+                transform_weight = transform_weight.view(1, 3, 1, 1, 1)
+                Offset_output[:, 0, 0, ...] = torch.sum(Offset_output[:, [0, 1, 2], 0, ...] * transform_weight, 1) # z-offset, not use flipz aug
+                Offset_output[:, 0, 1, ...] = torch.sum(Offset_output[:, [0, 1, 3], 1, ...] * transform_weight, 1) # y-offset, not use flipy aug
+                Offset_output[:, 0, 2, ...] = torch.sum(Offset_output[:, [0, 2, 3], 2, ...] * transform_weight, 1) # x-offset, not use flipx aug
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
+                
                 if args.apply_lobe:
                     lobe = lobes[i * batch_size:end]
                 else:
@@ -165,7 +171,7 @@ def val(args,
                 
                 output = detection_postprocess(output, device=device, is_logits=False, lobe_mask = lobe) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
                 outputlist.append(output.data.cpu().numpy())
-                del input, Cls_output, Shape_output, Offset_output, output
+                del input, Cls_output, Shape_output, Offset_output, output, transform_weight
             del data
 
             outputs = np.concatenate(outputlist, 0)
