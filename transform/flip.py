@@ -93,8 +93,8 @@ class SemiRandomFlip(AbstractTransform):
             for axis in flip_axes:
                 ctr[:, axis] = input_shape[axis] - 1 - ctr[:, axis]
                 if 'gt_ctr' in sample:
-                    gt_ctr[:, axis] = input_shape[axis] - 1 - gt_ctr[:, axis]
-                offset[axis] = input_shape[axis] - 1
+                    gt_ctr[:, axis] = input_shape[axis] - gt_ctr[:, axis]
+                offset[axis] = input_shape[axis]
                 
             sample['ctr'] = ctr
             if 'gt_ctr' in sample:
