@@ -41,6 +41,7 @@ def val(args,
         min_d: int = 0,
         min_size: int = 0,
         nodule_size_mode: str = 'seg_size',
+        use_cls_std = False,
         val_type = 'val',) -> Dict[str, float]:
     if str(epoch).isdigit():
         save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
@@ -125,10 +126,24 @@ def val(args,
                             for trans in reversed(feat_transforms[b_i][aug_i]):
                                 Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
                                 Shape_output[b_i, aug_i, ...] = trans.backward(Shape_output[b_i, aug_i, ...])
+                                # Offset_output[b_i, aug_i, ...] = trans.backward(Offset_output[b_i, aug_i, ...])
                 transform_weight = transform_weights[i * batch_size:end] # (bs, num_aug)
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
-                Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
-                Cls_output = Cls_output.sigmoid()
+                
+                if use_cls_std:
+                    Cls_output = Cls_output.sigmoid() # (bs, num_aug, 1, 24, 24, 24)
+                    # Compute weighted standard deviation
+                    Cls_output_weighted_mean = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
+                    Cls_output_std = torch.sqrt((torch.pow(Cls_output - Cls_output_weighted_mean.unsqueeze(1), 2) * transform_weight).sum(1)) / (len(transform_weight) - 1) # (bs, 1, 24, 24, 24)
+                    Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
+                    Cls_output = Cls_output_weighted_mean - (Cls_output_std / 3)
+                else:
+                    Cls_output_weighted_mean = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
+                    Cls_output = Cls_output_weighted_mean.sigmoid()
+                # np.save('Cls_output.npy', Cls_output.data.cpu().numpy())
+                # np.save('Cls_output_std.npy', Cls_output_std.data.cpu().numpy())
+                # raise ValueError('stop')
+                
                 ignore_offset = 2
                 Cls_output[:, :, 0:ignore_offset, :, :] = 0
                 Cls_output[:, :, :, 0:ignore_offset, :] = 0
@@ -137,6 +152,9 @@ def val(args,
                 Cls_output[:, :, :, -ignore_offset:, :] = 0
                 Cls_output[:, :, :, :, -ignore_offset:] = 0
                 
+                # np.save('Shape_output.npy', Shape_output.data.cpu().numpy())
+                # np.save('Offset_output.npy', Offset_output.data.cpu().numpy())
+                # raise ValueError('stop')
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
                 if args.apply_lobe:

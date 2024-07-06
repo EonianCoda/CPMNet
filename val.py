@@ -53,6 +53,7 @@ def get_args():
     # Det technical settings
     parser.add_argument('--apply_lobe', action='store_true', default=False, help='apply lobe or not')
     parser.add_argument('--apply_aug', action='store_true', default=False, help='apply test time augmentation or not')
+    parser.add_argument('--use_cls_std', action='store_true', default=False, help='use cls std or not')
     # other
     parser.add_argument('--load_teacher_model', action='store_true', default=False, help='load teacher model or not')
     parser.add_argument('--load_ema', action='store_true', default=False, help='load ema model or not')
@@ -198,6 +199,7 @@ if __name__ == '__main__':
                     min_d=args.min_d,
                     epoch=save_folder_name,
                     min_size=args.min_size,
+                    use_cls_std=args.use_cls_std,
                     nodule_size_mode=args.nodule_size_mode)
         
         save_txt_path = os.path.join(exp_folder, 'val_metrics_{}.txt'.format(save_folder_name))
