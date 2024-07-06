@@ -185,7 +185,9 @@ if __name__ == '__main__':
         
         if args.load_teacher_model:
             save_folder_name += '_teacher'
-        
+        if args.use_cls_std:
+            save_folder_name += '_clsStd'
+            
         metrics = val(args = args,
                     model = model,
                     detection_postprocess=detection_postprocess,
