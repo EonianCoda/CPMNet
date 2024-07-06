@@ -44,8 +44,8 @@ class RandomFlip(AbstractTransform):
             ctr = sample['ctr'].copy()
             offset = np.array([0, 0, 0]) # (z, y, x)
             for axis in flip_axes:
-                ctr[:, axis] = input_shape[axis] - 1 - ctr[:, axis]
-                offset[axis] = input_shape[axis] - 1
+                ctr[:, axis] = input_shape[axis] - ctr[:, axis]
+                offset[axis] = input_shape[axis]
             sample['ctr'] = ctr
             sample['ctr_transform'].append(OffsetMinusCTR(offset))
             sample['feat_transform'].append(FlipFeatTransform(flip_axes))
