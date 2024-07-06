@@ -113,12 +113,12 @@ class TrainDataset(Dataset):
         avg_sample_num = len(self.cluster_labels) // self.n_clusters
         cluster_indices = np.arange(self.n_clusters)
         # Sample the indices
-        # If the number of samples in a cluster is less than 1/3 of the average number of samples, oversample it
+        # If the number of samples in a cluster is less than 1/2 of the average number of samples, oversample it
         new_indices = []
         for i in cluster_indices:
             num_sample_in_cluster = np.sum(self.cluster_labels == i)
             sample_indices = np.where(self.cluster_labels == i)[0].tolist()
-            if num_sample_in_cluster < (avg_sample_num // self.max_oversample_times): # Oversample
+            if num_sample_in_cluster < (avg_sample_num // 2): # Oversample
                 sample_num = min(num_sample_in_cluster * self.max_oversample_times, avg_sample_num)
                 for _ in range(sample_num // num_sample_in_cluster):
                     new_indices.extend(sample_indices)
