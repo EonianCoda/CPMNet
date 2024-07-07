@@ -71,6 +71,7 @@ def get_args():
     parser.add_argument('--rand_rot', nargs='+', type=int, default=[30, 0, 0], help='random rotate')
     parser.add_argument('--use_rand_spacing', action='store_true', default=False, help='use random spacing')
     parser.add_argument('--rand_spacing', nargs='+', type=float, default=[0.9, 1.1], help='random spacing range, [min, max]')
+    parser.add_argument('--use_rand_intensity', action='store_true', default=False, help='use random intensity')
     # Learning rate
     parser.add_argument('--lr', type=float, default=1e-3, help='the learning rate')
     parser.add_argument('--warmup_epochs', type=int, default=10, help='warmup epochs')
@@ -79,6 +80,9 @@ def get_args():
     parser.add_argument('--decay_gamma', type=float, default=0.05, help='decay gamma')
     parser.add_argument('--weight_decay', type=float, default=1e-4, help='the weight decay')
     parser.add_argument('--start_val_epoch', type=int, default=150, help='start to validate from this epoch')
+    
+    parser.add_argument('--use_head_lr', action='store_true', default=False, help='use different lr for head')
+    parser.add_argument('--head_lr', type=float, default=2e-3, help='the learning rate of head')
     # EMA
     parser.add_argument('--not_apply_ema', action='store_true', default=False, help='apply ema')
     parser.add_argument('--ema_momentum', type=float, default=0.998, help='ema decay')
@@ -176,6 +180,26 @@ def add_weight_decay(net, weight_decay):
     return [{"params": no_decay, "weight_decay": 0.0},
             {"params": decay, "weight_decay": weight_decay}]
 
+def add_weight_decay_and_set_headlr(net, weight_decay:float, head_lr:float, backbone_lr:float):
+    backbone_decay, backbone_no_decay, head_decay, head_no_decay = [], [], [], []
+    for name, param in net.named_parameters():
+        if not param.requires_grad:
+            continue
+        if 'head' in name:
+            if 'norm' in name:
+                head_no_decay.append(param)
+            else:
+                head_decay.append(param)
+        else:
+            if 'norm' in name:
+                backbone_no_decay.append(param)
+            else:
+                backbone_decay.append(param)
+    return [{"params": backbone_no_decay, "weight_decay": 0.0, "lr": backbone_lr},
+            {"params": backbone_decay, "weight_decay": weight_decay, "lr": backbone_lr},
+            {"params": head_no_decay, "weight_decay": 0.0, "lr": head_lr},
+            {"params": head_decay, "weight_decay": weight_decay, "lr": head_lr}]
+
 def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW, GradualWarmupScheduler, Any]:
     logger.info('Build model "{}"'.format(args.model_class))
     Resnet18 = build_class('{}.Resnet18'.format(args.model_class))
@@ -235,7 +259,11 @@ def prepare_training(args, device, num_training_steps) -> Tuple[int, Any, AdamW,
     model = model.to(device=device, memory_format=get_memory_format(getattr(args, 'memory_format', 'channels_first')))
         
     # build optimizer and scheduler
-    params = add_weight_decay(model, args.weight_decay)
+    if args.use_head_lr:
+        logger.info('Use different learning rate {:.4f} for head'.format(args.head_lr))
+        params = add_weight_decay_and_set_headlr(model, args.weight_decay, args.head_lr, args.lr)
+    else:
+        params = add_weight_decay(model, args.weight_decay)
     optimizer = AdamW(params=params, lr=args.lr, weight_decay=args.weight_decay)
     
     T_max = args.epochs // args.decay_cycle
@@ -289,11 +317,14 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: f
         transform_list_train.append(transform.Pad(output_size=crop_size, pad_value=pad_value))
     transform_list_train.append(transform.RandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True))
     transform_list_train.append(transform.RandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
+    
+    if args.use_rand_intensity:
+        transform_list_train.append(transform.RandomIntensity(p=0.3))
     if args.use_crop:
         transform_list_train.append(transform.RandomCrop(p=0.5, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
     transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}'.format([True, rot_zy, rot_zx], args.use_crop))
+    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}, random intensity'.format([True, rot_zy, rot_zx], args.use_crop, args.use_rand_intensity))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -331,13 +362,6 @@ def get_train_dataloder(args, blank_side=0) -> DataLoader:
                                     sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
         mmap_mode = None
         logger.info('Use my rotate')
-    elif args.crop_designed:
-        from dataload.crop_fast_designed import InstanceCrop
-        crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
-                                    sample_num=args.num_samples, blank_side=blank_side, instance_crop=True, tp_iou=args.crop_tp_iou)
-        train_transform = build_train_augmentation(args, crop_size, pad_value, blank_side)
-        mmap_mode = None
-        logger.info('Use crop designed')
     else:
         from dataload.crop_fast import InstanceCrop
         crop_fn_train = InstanceCrop(crop_size=crop_size, overlap_ratio=args.overlap_ratio, tp_ratio=args.tp_ratio, rand_trans=rand_trans, 
@@ -428,12 +452,6 @@ if __name__ == '__main__':
         end_epoch = args.epochs
         
     for epoch in range(start_epoch, end_epoch + 1):
-        # if args.pretrained_model_path != '' and epoch == 0:
-        #     logger.info('Freeze the first 3 layers')
-        #     model = freeze_model(model)
-        # elif args.resume_folder != '' and epoch == args.warmup_epochs:
-        #     logger.info('Unfreeze the first 3 layers')
-        #     model = unfreeze_model(model)
         if getattr(train_loader.dataset, 'shuffle_group', None) is not None:
             train_loader.dataset.shuffle_group()
         train_metrics = train(args = args,

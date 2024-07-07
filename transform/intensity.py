@@ -10,7 +10,7 @@ import cv2
 
 class RandomIntensity(AbstractTransform):
     def __init__(self, p=0.5):
-        self.random_blur = RandomBlur(sigma_range=(0.2, 0.7), p=1.0)
+        self.random_blur = RandomBlur(sigma_range=(0.2, 0.6), p=1.0)
         self.random_gamma = RandomGamma(gamma_range=[0.92, 1.08], p=1.0)
         self.intensity_transforms = [self.random_blur, self.random_gamma]
         self.p = p
