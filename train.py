@@ -64,6 +64,9 @@ def get_args():
     parser.add_argument('--pad_water', action='store_true', default=False, help='pad water or not')
     # Data Augmentation
     parser.add_argument('--tp_ratio', type=float, default=0.75, help='positive ratio in instance crop')
+    parser.add_argument('--use_dynamic_tp_ratio', action='store_true', default=False, help='use dynamic positive ratio in instance crop')
+    parser.add_argument('--final_tp_ratio', type=float, default=0.75, help='final positive ratio in instance crop')
+    
     parser.add_argument('--use_crop', action='store_true', default=False, help='use crop augmentation')
     parser.add_argument('--use_itk_rotate', action='store_true', default=False, help='use itk rotate')
     parser.add_argument('--my_rot', action='store_true', default=False, help='use our rotate')
@@ -324,7 +327,7 @@ def build_train_augmentation(args, crop_size: Tuple[int, int, int], pad_value: f
         transform_list_train.append(transform.RandomCrop(p=0.5, crop_ratio=0.95, ctr_margin=10, pad_value=pad_value))
     transform_list_train.append(transform.CoordToAnnot())
                             
-    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}, random intensity'.format([True, rot_zy, rot_zx], args.use_crop, args.use_rand_intensity))
+    logger.info('Augmentation: random flip: True, random roation90: {}, random crop: {}, random intensity {}'.format([True, rot_zy, rot_zx], args.use_crop, args.use_rand_intensity))
     train_transform = torchvision.transforms.Compose(transform_list_train)
     return train_transform
 
@@ -454,6 +457,10 @@ if __name__ == '__main__':
     for epoch in range(start_epoch, end_epoch + 1):
         if getattr(train_loader.dataset, 'shuffle_group', None) is not None:
             train_loader.dataset.shuffle_group()
+        if args.use_dynamic_tp_ratio:
+            cur_tp_ratio = args.tp_ratio + (args.final_tp_ratio - args.tp_ratio) * epoch / args.epochs
+            logger.info('Dynamic positive ratio: {:.3f} for training set'.format(cur_tp_ratio))
+            train_loader.dataset.crop_fn.tp_ratio = cur_tp_ratio
         train_metrics = train(args = args,
                             model = model,
                             optimizer = optimizer,
