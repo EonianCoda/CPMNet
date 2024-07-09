@@ -347,7 +347,7 @@ def build_strong_augmentation(args, crop_size: Tuple[int, int, int], pad_value: 
     rot_zx = (crop_size[0] == crop_size[1] == crop_size[2])
         
     transform_list_train = [transform.SemiRandomFlip(p=0.5, flip_depth=True, flip_height=True, flip_width=True)]
-    transform_list_train.append(transform.RandomBlurNodule(p=0.5, offset=2))
+    transform_list_train.append(transform.RandomIntensity(p=0.5))
     transform_list_train.append(transform.SemiRandomRotate90(p=0.5, rot_xy=True, rot_xz=rot_zx, rot_yz=rot_zy))
         
     transform_list_train.append(transform.SemiCoordToAnnot())

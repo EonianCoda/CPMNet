@@ -257,16 +257,38 @@ def train(args,
                             for trans in reversed(feat_transforms[b_i][aug_i]):
                                 Cls_output[b_i, aug_i, ...] = trans.backward(Cls_output[b_i, aug_i, ...])
                                 Shape_output[b_i, aug_i, ...] = trans.backward(Shape_output[b_i, aug_i, ...])
+                                if aug_i < 4:
+                                    Offset_output[b_i, aug_i, ...] = trans.backward(Offset_output[b_i, aug_i, ...])
+                
                 transform_weight = weak_transform_weights[i * TTA_BATCH_SIZE:end] # (bs, num_aug)
                 transform_weight = transform_weight.unsqueeze(2).unsqueeze(3).unsqueeze(4).unsqueeze(5) # (bs, num_aug, 1, 1, 1, 1)
+                
+                Cls_output = Cls_output.sigmoid() # (bs, num_aug, 1, 24, 24, 24)
+                # Compute weighted standard deviation
+                Cls_output_weighted_mean = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
+                Cls_output_std = torch.sqrt((torch.pow(Cls_output - Cls_output_weighted_mean.unsqueeze(1), 2) * transform_weight).sum(1)) / (len(transform_weight) - 1) # (bs, 1, 24, 24, 24)
                 Cls_output = (Cls_output * transform_weight).sum(1) # (bs, 1, 24, 24, 24)
-                Cls_output = Cls_output.sigmoid()
+                Cls_output = Cls_output_weighted_mean - (Cls_output_std / 3)
                 
                 Shape_output = (Shape_output * transform_weight).sum(1) # (bs, 3, 24, 24, 24)
+                
+                # Only use raw, flipx, flipy, flipz for offset
+                Offset_output = Offset_output[:, :4, ...] # (bs, 4, 3, 24, 24, 24)
+                transform_weight = [1/3] * 3
+                transform_weight = torch.tensor(transform_weight).to(device, non_blocking=True) # (3)
+                # Resize to (bs, 3, 1, 1, 1)
+                transform_weight = transform_weight.view(1, 3, 1, 1, 1)
+                Offset_output[:, 0, 0, ...] = torch.sum(Offset_output[:, [0, 1, 2], 0, ...] * transform_weight, 1) # z-offset, not use flipz aug
+                Offset_output[:, 0, 1, ...] = torch.sum(Offset_output[:, [0, 1, 3], 1, ...] * transform_weight, 1) # y-offset, not use flipy aug
+                Offset_output[:, 0, 2, ...] = torch.sum(Offset_output[:, [0, 2, 3], 2, ...] * transform_weight, 1) # x-offset, not use flipx aug
                 Offset_output = Offset_output[:, 0, ...] # (bs, 3, 24, 24, 24)
+                
+                feat_transforms = weak_feat_transforms[i * TTA_BATCH_SIZE:end] # (bs, num_aug)
+                
                 lobe = weak_lobes[i * TTA_BATCH_SIZE:end]
-                if sharpen_cls > 0 and sharpen_cls < 1:
-                    Cls_output = sharpen_prob(Cls_output, t=sharpen_cls)
+                # if sharpen_cls > 0:
+                #     assert sharpen_cls < 1
+                #     Cls_output = sharpen_prob(Cls_output, t=sharpen_cls)
                 outputs_t_b = {'Cls': Cls_output, 'Shape': Shape_output, 'Offset': Offset_output}
                 
                 outputs_t_b = detection_postprocess(outputs_t_b, device=device, is_logits=False, lobe_mask = lobe, threshold = args.pseudo_crop_threshold, nms_topk=args.pseudo_nms_topk) #1, prob, ctr_z, ctr_y, ctr_x, d, h, w
@@ -322,7 +344,7 @@ def train(args,
                 elif len(outputs_t_b) == 0: # No any pseudo label in this batch
                     history_bboxes = np.stack([history_ctrs_b - history_rads_b / 2, history_ctrs_b + history_rads_b / 2], axis=1)
                     history_valid_ious = compute_bbox3d_iou(history_bboxes, crop_bboxes)
-                    history_valid_mask = (history_valid_ious.max(axis=1) >= 0.5)
+                    history_valid_mask = (history_valid_ious.max(axis=1) >= 0.3)
                     if np.count_nonzero(history_valid_mask) != 0:
                         history_probs[batch_i][history_valid_mask] *= args.pseudo_update_ema_alpha
                     continue
@@ -337,7 +359,7 @@ def train(args,
                 history_bboxes = np.stack([history_ctrs_b - history_rads_b / 2, history_ctrs_b + history_rads_b / 2], axis=1)
                 
                 history_valid_ious = compute_bbox3d_iou(history_bboxes, crop_bboxes)
-                history_valid_mask = (history_valid_ious.max(axis=1) >= 0.5)
+                history_valid_mask = (history_valid_ious.max(axis=1) >= 0.3)
                 
                 ious = compute_bbox3d_iou(history_bboxes, new_bboxes)
                 # According to the iou, update the pseudo label in dataset
@@ -367,7 +389,7 @@ def train(args,
                     history_ctrs[batch_i] = np.concatenate([history_ctrs[batch_i], new_ctrs_b], axis=0)
                     history_rads[batch_i] = np.concatenate([history_rads[batch_i], new_rads_b], axis=0)
                     # history_probs[batch_i] = np.concatenate([history_probs[batch_i], new_probs_b], axis=0) * args.pseudo_update_ema_alpha
-                    new_probs_b = np.array(new_probs_b, dtype=np.float32) * args.pseudo_update_ema_alpha # penalize the new pseudo label
+                    new_probs_b = np.array(new_probs_b, dtype=np.float32) * 0.9 # penalize the new pseudo label
                     history_probs[batch_i] = np.concatenate([history_probs[batch_i], new_probs_b], axis=0)
             
             # Generate pseudo label
