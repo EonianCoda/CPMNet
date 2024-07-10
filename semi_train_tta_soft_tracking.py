@@ -429,6 +429,7 @@ def updata_pseudo_label(args, model, det_dataloader, device, detection_postproce
                                     dataloader = det_dataloader,
                                     device = device,
                                     detection_postprocess = detection_postprocess,
+                                    batch_size=1,
                                     mixed_precision = args.val_mixed_precision,
                                     memory_format = args.memory_format)
     else:

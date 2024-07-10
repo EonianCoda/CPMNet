@@ -41,7 +41,7 @@ def val(args,
         min_d: int = 0,
         min_size: int = 0,
         nodule_size_mode: str = 'seg_size',
-        val_type = 'val',) -> Dict[str, float]:
+        val_type = 'val',**kwargs) -> Dict[str, float]:
     if str(epoch).isdigit():
         save_dir = os.path.join(exp_folder, 'annotation', f'epoch_{epoch}')
     else:
