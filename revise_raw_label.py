@@ -77,8 +77,8 @@ if __name__ == '__main__':
         nodule_sizes = nodule_sizes[sorted_indices]
         true_nodule_types = [true_nodule_types[i] for i in sorted_indices]
         # Reshape bboxes to (n, 2, 3)
-        nodule_start_slice_ids = bboxes[:, 0]
         bboxes = np.reshape(bboxes, (-1, 2, 3))
+        nodule_start_slice_ids = bboxes[:, 0, 2] # z1
         
         nodule_count = {LAST_MODIFIED_TIME: cur_time, 
                         NODULE_SIZE: nodule_sizes.tolist(),
