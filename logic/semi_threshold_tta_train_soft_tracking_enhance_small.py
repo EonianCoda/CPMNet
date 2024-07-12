@@ -415,7 +415,7 @@ def train(args,
             for batch_i in range(bs):
                 # According prob to generate pseudo label
                 probs_b = history_probs[batch_i]
-                prob_thresholds = get_prob_threshold(history_rads[batch_i], base_threshold=args.pseudo_label_threshold, small_size_threshold=args.pseudo_small_size_threshold)
+                prob_thresholds = get_prob_threshold(history_rads[batch_i], base_threshold=args.pseudo_label_threshold, small_size_threshold=args.small_size_threshold)
                 valid_mask = (probs_b > prob_thresholds)
                 if np.count_nonzero(valid_mask) == 0:
                     transformed_annots.append(np.zeros((0, 10), dtype='float32'))
