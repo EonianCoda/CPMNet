@@ -484,7 +484,7 @@ class UnLabeledDataset(Dataset):
             gt_label = self.gt_labels[series_name]
             
             prob = label[ALL_PROB]
-            valid_mask = prob >= fg_threshold
+            valid_mask = prob >= get_prob_threshold(label[ALL_RAD], fg_threshold)
             all_loc = label[ALL_LOC][valid_mask]
             all_rad = label[ALL_RAD][valid_mask]
             if len(all_loc) == 0 and len(gt_label[ALL_LOC]) == 0:
