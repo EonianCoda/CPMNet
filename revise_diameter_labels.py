@@ -5,7 +5,7 @@ import cc3d
 import os
 from multiprocessing import Pool
 import pickle
-
+import json
 def load_gt_mask_maps(mask_maps_path: str):
     gt_mask_maps = np.load(mask_maps_path)
     # npz
@@ -84,20 +84,27 @@ def get_label(mask_path: str):
     return label
 
 if __name__ == '__main__':
-    # IMAGE_SPACING = [1.0, 0.8, 0.8]
+    new_save_folder = './data/new_diamters_labels'
     series_infos = load_series_list('./data/all_old.txt')
     
     mask_paths = []
+    label_paths = []
     for info in series_infos:
         mask_paths.append(os.path.join(info[0], 'mask', '{}_crop.npz'.format(info[1])))
-    
-    with Pool(os.cpu_count() // 3) as p:
-        labels = p.map(get_label, mask_paths)
-    
-    new_labels = dict()
-    for label in labels:
-        series_name = label['series_name']
-        new_labels[series_name] = label
-    
-    with open('max_diameters_label.pkl', 'wb') as f:
-        pickle.dump(new_labels, f)
+        label_paths.append(gen_label_path(info[0], info[1]))
+        
+    with open('max_diameters_label.pkl', 'rb') as f:
+        new_labels = pickle.load(f)
+        
+    os.makedirs(new_save_folder, exist_ok=True)
+    for mask_path, label_path, (_, series_name) in zip(mask_paths, label_paths, series_infos):
+        last_modified_time = os.path.getmtime(mask_path)
+        
+        with open(label_path, 'r') as f:
+            label = json.load(f)     
+        label['diameters'] = new_labels[series_name]['diameters']
+        
+        save_name = os.path.basename(label_path)
+        save_path = os.path.join(new_save_folder, save_name)
+        with open(save_path, 'w') as f:
+            json.dump(label, f)

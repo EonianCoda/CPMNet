@@ -20,7 +20,8 @@ class DetectionLoss(nn.Module):
                  cls_hard_fp_thrs2 = 0.7,
                  cls_hard_fp_w1 = 1.5,
                  cls_hard_fp_w2 = 2.0,
-                 cls_focal_alpha = 0.75):
+                 cls_focal_alpha = 0.75,
+                 cls_focal_gamma = 2.0):
         super(DetectionLoss, self).__init__()
         self.crop_size = crop_size
         self.pos_target_topk = pos_target_topk
@@ -39,6 +40,7 @@ class DetectionLoss(nn.Module):
         self.cls_hard_fp_w2 = cls_hard_fp_w2
         
         self.cls_focal_alpha = cls_focal_alpha
+        self.cls_focal_gamma = cls_focal_gamma
         
     @staticmethod  
     def cls_loss(pred: torch.Tensor, target, mask_ignore, alpha = 0.75 , gamma = 2.0, num_neg = 10000, num_hard = 100, neg_pos_ratio = 100, fn_weight = 4.0, fn_threshold = 0.8, 
@@ -148,6 +150,7 @@ class DetectionLoss(nn.Module):
     def target_proprocess(annotations: torch.Tensor, 
                           device, 
                           input_size: List[int],
+                          stride: List[int],
                           mask_ignore: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """Preprocess the annotations to generate the targets for the network.
         In this function, we remove some annotations that the area of nodule is too small in the crop box. (Probably cropped by the edge of the image)
@@ -199,14 +202,21 @@ class DetectionLoss(nn.Module):
                     bbox = torch.from_numpy(np.array([float(z1 + 0.5 * nd), float(y1 + 0.5 * nh), float(x1 + 0.5 * nw), float(nd), float(nh), float(nw), float(spacing_z), float(spacing_y), float(spacing_x), 0])).to(device)
                     bbox_annotation_target.append(bbox.view(1, 10))
                 else:
-                    mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
+                    z1 = int(torch.floor(z1 / stride[0]))
+                    z2 = min(int(torch.ceil(z2 / stride[0])), mask_ignore.size(2))
+                    y1 = int(torch.floor(y1 / stride[1]))
+                    y2 = min(int(torch.ceil(y2 / stride[1])), mask_ignore.size(3))
+                    x1 = int(torch.floor(x1 / stride[2]))
+                    x2 = min(int(torch.ceil(x2 / stride[2])), mask_ignore.size(4))
+                    mask_ignore[sample_i, 0, z1 : z2, y1 : y2, x1 : x2] = -1
+                    # mask_ignore[sample_i, 0, int(z1) : int(torch.ceil(z2)), int(y1) : int(torch.ceil(y2)), int(x1) : int(torch.ceil(x2))] = -1
             if len(bbox_annotation_target) > 0:
                 bbox_annotation_target = torch.cat(bbox_annotation_target, 0)
                 annotations_new[sample_i, :len(bbox_annotation_target)] = bbox_annotation_target
         return annotations_new, mask_ignore
     
     @staticmethod
-    def bbox_iou(box1, box2, DIoU=True, eps = 1e-7):
+    def bbox_iou(box1, box2, eps = 1e-7):
         box1 = zyxdhw2zyxzyx(box1)
         box2 = zyxdhw2zyxzyx(box2)
         # Get the coordinates of bounding boxes
@@ -225,15 +235,6 @@ class DetectionLoss(nn.Module):
 
         # IoU
         iou = inter / union
-        # if DIoU:
-        #     cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
-        #     ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
-        #     cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
-        #     c2 = cw ** 2 + ch ** 2 + cd ** 2 + eps  # convex diagonal squared
-        #     rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + 
-        #     + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
-        #     return iou - rho2 / c2  # DIoU
-        
         cw = b1_x2.maximum(b2_x2) - b1_x1.minimum(b2_x1)  # convex (smallest enclosing box) width
         ch = b1_y2.maximum(b2_y2) - b1_y1.minimum(b2_y1)  # convex height
         cd = b1_z2.maximum(b2_z2) - b1_z1.minimum(b2_z1)  # convex depth
@@ -241,7 +242,6 @@ class DetectionLoss(nn.Module):
         rho2 = ((b2_x1 + b2_x2 - b1_x1 - b1_x2) ** 2 + (b2_y1 + b2_y2 - b1_y1 - b1_y2) ** 2 + (b2_z1 + b2_z2 - b1_z1 - b1_z2) ** 2) / 4  # center dist ** 2 
         
         diou = iou - rho2 / c2 
-        
         # aspect ratio
         loss_asp = ((w1 - w2) ** 2) / (cw ** 2 + eps) + ((h1 - h2) ** 2) / (ch ** 2 + eps) + ((d1 - d2) ** 2) / (cd ** 2 + eps)
         eiou = diou - loss_asp
@@ -339,7 +339,8 @@ class DetectionLoss(nn.Module):
         pred_offsets = pred_offsets.permute(0, 2, 1).contiguous()
         
         # process annotations
-        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, target_mask_ignore)
+        stride_list = [self.crop_size[0] / Cls.size()[2], self.crop_size[1] / Cls.size()[3], self.crop_size[2] / Cls.size()[4]]
+        process_annotations, target_mask_ignore = self.target_proprocess(annotations, device, self.crop_size, stride_list, target_mask_ignore)
         target_mask_ignore = target_mask_ignore.view(batch_size, 1,  -1)
         target_mask_ignore = target_mask_ignore.permute(0, 2, 1).contiguous()
         # generate center points. Only support single scale feature
@@ -367,9 +368,10 @@ class DetectionLoss(nn.Module):
                                                    hard_fp_thrs2=self.cls_hard_fp_thrs2,
                                                     hard_fp_w1=self.cls_hard_fp_w1,
                                                     hard_fp_w2=self.cls_hard_fp_w2,
-                                                    alpha=self.cls_focal_alpha)
+                                                    alpha=self.cls_focal_alpha,
+                                                    gamma=self.cls_focal_gamma)
         
-        # Only calculate the loss of positive samples                                 
+        # Only calculate the loss of positive samples                               
         fg_mask = target_scores.squeeze(-1).bool()
         if fg_mask.sum() == 0:
             reg_loss = torch.tensor(0.0, device=device)
