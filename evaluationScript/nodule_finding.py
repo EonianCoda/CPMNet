@@ -52,18 +52,11 @@ class NoduleFinding:
             if match_nodule_finding is not None:
                 self.match_nodule_finding = copy.deepcopy(match_nodule_finding)
                 
-    # def get_box(self) -> List[int]:
-    #     """
-    #     Returns the bounding box of the nodule in the format [[z1, y1, x1], [z2, y2, x2]]
-    #     """
-    #     return [[self.ctr_z - self.d/2, self.ctr_y - self.h/2, self.ctr_x - self.w/2],
-    #             [self.ctr_z + self.d/2, self.ctr_y + self.h/2, self.ctr_x + self.w/2]]
-    
     def get_box(self) -> List[int]:
         """
         Returns the bounding box of the nodule in the format [[z1, y1, x1], [z2, y2, x2]]
         """
-        return [[round(self.ctr_z - self.d/2), round(self.ctr_y - self.h/2), round(self.ctr_x - self.w/2)],
+        return [[max(round(self.ctr_z - self.d/2), 0), max(round(self.ctr_y - self.h/2), 0), max(round(self.ctr_x - self.w/2), 0)],
                 [math.ceil(self.ctr_z + self.d/2), math.ceil(self.ctr_y + self.h/2), math.ceil(self.ctr_x + self.w/2)]]
     
     def __str__(self):

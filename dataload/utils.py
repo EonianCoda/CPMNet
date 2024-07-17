@@ -202,6 +202,7 @@ def load_patch_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_
         label = {ALL_LOC: np.zeros((0, 3), dtype=np.float64),
                 ALL_CLS: np.zeros((0, 3), dtype=np.float64),
                 ALL_RAD: np.zeros((0,), dtype=np.int32),
+                DIAMETERS: np.zeros((0,), dtype=np.float64),
                 NODULE_SIZE: np.zeros((0,), dtype=np.int32)}
     else:
         bboxes[:, 0, :] = np.maximum(bboxes[:, 0, :], 0) # clip to 0
@@ -220,23 +221,25 @@ def load_patch_label(label_path: str, image_spacing: np.ndarray, min_d = 0, min_
         
         all_rad = all_rad * image_spacing # (z, y, x)
         all_cls = np.zeros((all_loc.shape[0],), dtype=np.int32)
-
+        diameters = np.array(info[DIAMETERS], dtype=np.float64)
         if np.sum(valid_mask) == 0:
             label = {ALL_LOC: np.zeros((0, 3), dtype=np.float64),
                     ALL_CLS: np.zeros((0, 3), dtype=np.float64),
                     ALL_RAD: np.zeros((0,), dtype=np.int32),
+                    DIAMETERS: np.zeros((0,), dtype=np.float64),
                     NODULE_SIZE: np.zeros((0,), dtype=np.int32)}
         else:
             all_loc = all_loc[valid_mask]
             all_rad = all_rad[valid_mask]
             all_cls = all_cls[valid_mask]
-            
+            diameters = diameters[valid_mask]
             nodule_cls = np.array(nodule_cls, dtype=np.int32)[valid_mask]
             
             nodule_sizes = nodule_sizes[valid_mask]
             label = {ALL_LOC: all_loc, 
                     ALL_RAD: all_rad,
                     ALL_CLS: nodule_cls,
+                    DIAMETERS: diameters,
                     NODULE_SIZE: nodule_sizes}
     return label
 
